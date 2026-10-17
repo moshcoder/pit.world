@@ -2,6 +2,8 @@
 
 **Private search, and the front door to the Moshpit network.**
 
+**An MCP server for private web search.** `pit mcp` is a stdio Model Context Protocol server that gives any agent (Claude, Cursor, any MCP client) web search with no API key and no logging, plus Moshpit name lookups. It is in the official MCP Registry as `world.pit/pit`.
+
 [pit.world](https://pit.world) is a search engine that keeps nothing about you: no query logs, no cookies, no profile, no trackers, no JavaScript required. It is also where the [Moshpit network](https://pit.moshcode.sh) lives in public: type a Moshpit name like `chovy.hacker` and it resolves through the registry, next to your web results.
 
 ```bash
@@ -17,6 +19,24 @@ pit                      # interactive
 # your agent
 claude mcp add pit -- pit mcp
 ```
+
+## MCP server
+
+```bash
+claude mcp add pit -- bunx pitworld mcp
+```
+
+```json
+{ "mcpServers": { "pit": { "command": "bunx", "args": ["pitworld", "mcp"] } } }
+```
+
+Tools:
+
+- `search`: private web search (Google and Bing indexes, merged), returns titles, URLs and snippets.
+- `moshpit_resolve`: resolve a Moshpit name such as `chovy.hacker` to where it points.
+- `moshpit_network`: live numbers for the Moshpit network.
+
+No key is needed. `PIT_URL` points it at another pit.world instance (default `https://pit.world`).
 
 ## What it does
 
