@@ -1,0 +1,6 @@
+[Unit]
+Description=pit.world boards: follow tsbb releases
+After=docker.service
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/pit-bbs-update

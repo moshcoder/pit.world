@@ -1,21 +1,27 @@
 #!/bin/sh
-# Make (or keep) the Let's Encrypt certificate for one <name>.pit.world relay host.
-# Installed as /usr/local/bin/pit-proxy-cert; pit.world's src/proxy.ts runs it on a
-# name's first plain-http visit, and it is safe to run by hand:
+# Make (or keep) the Let's Encrypt certificate for one Moshpit name on pit.world.
+# Installed as /usr/local/bin/pit-proxy-cert; pit.world runs it on a host's first
+# plain-http visit (src/proxy.ts, src/services.ts), and it is safe to run by hand:
 #   pit-proxy-cert family.ancestry.pit.world
+#   pit-proxy-cert bbs.family.ancestry.pit.world     (same certificate)
+#
+# One certificate per name covers all three of its hosts:
+#   <name>.pit.world  social.<name>.pit.world  bbs.<name>.pit.world
+# so a name costs one of Let's Encrypt's 50 certificates a week for pit.world, not three.
 set -eu
 
 # nginx workers (www-data) read these at handshake time; /etc/letsencrypt/live is root only.
+# $1 is the certificate's lineage directory, $2 the host nginx looks it up by.
 install_for_nginx() {
   install -d -m 0750 -g www-data /etc/nginx/pit-proxy-certs
-  install -m 0644 "/etc/letsencrypt/live/$1/fullchain.pem" "/etc/nginx/pit-proxy-certs/$1.crt"
-  install -m 0640 -g www-data "/etc/letsencrypt/live/$1/privkey.pem" "/etc/nginx/pit-proxy-certs/$1.key"
+  install -m 0644 "$1/fullchain.pem" "/etc/nginx/pit-proxy-certs/$2.crt"
+  install -m 0640 -g www-data "$1/privkey.pem" "/etc/nginx/pit-proxy-certs/$2.key"
 }
 
-# As the certbot deploy hook: copy whatever was just renewed.
+# As the certbot deploy hook: copy whatever was just renewed, under every host it covers.
 if [ "${1:-}" = "--renewed" ]; then
   for d in ${RENEWED_DOMAINS:-}; do
-    case "$d" in *.*.pit.world) install_for_nginx "$d" ;; esac
+    case "$d" in *.*.pit.world) install_for_nginx "${RENEWED_LINEAGE:-/etc/letsencrypt/live/$d}" "$d" ;; esac
   done
   exit 0
 fi
@@ -27,13 +33,22 @@ case "$host" in
 esac
 printf '%s' "$host" | grep -Eq '^[a-z0-9.-]+$' || { echo "bad host: $host" >&2; exit 2; }
 
+# social.<name>.pit.world and bbs.<name>.pit.world share <name>.pit.world's certificate.
+base="$host"
+case "$host" in
+  social.*.*.pit.world) base="${host#social.}" ;;
+  bbs.*.*.pit.world) base="${host#bbs.}" ;;
+esac
+
 # This box's root umask is 007; nginx (www-data) must read the challenge files.
 umask 022
 mkdir -p /var/www/pit-acme/.well-known/acme-challenge
 chmod -R a+rX /var/www/pit-acme
 exec 9>/run/lock/pit-proxy-cert.lock
 flock 9
-certbot certonly --webroot -w /var/www/pit-acme -d "$host" --cert-name "$host" \
-  --non-interactive --agree-tos --keep-until-expiring --quiet
-install_for_nginx "$host"
+certbot certonly --webroot -w /var/www/pit-acme -d "$base" -d "social.$base" -d "bbs.$base" --cert-name "$base" \
+  --non-interactive --agree-tos --keep-until-expiring --expand --quiet
+for h in "$base" "social.$base" "bbs.$base"; do
+  install_for_nginx "/etc/letsencrypt/live/$base" "$h"
+done
 nginx -t -q && systemctl reload nginx

@@ -1,0 +1,28 @@
+#!/bin/bash
+# Build pit-bbs:latest from the newest tsbb release and move every board to it.
+# Installed as /usr/local/bin/pit-bbs-update; run daily by pit-bbs-update.timer.
+#   pit-bbs-update              build if there is a new release, then recreate boards
+#   pit-bbs-update --build-only build the image (first board ever), touch no board
+set -euo pipefail
+src=/opt/pit-bbs/tsbb
+exec 8>/run/lock/pit-bbs-update.lock
+flock 8
+[ -d "$src/.git" ] || git clone -q https://github.com/profullstack/tsbb "$src"
+git -C "$src" fetch -q --tags origin
+tag="$(git -C "$src" tag -l 'v*' --sort=-v:refname | head -1)"
+[ -n "$tag" ] || tag=origin/main
+current="$(docker image inspect pit-bbs:latest --format '{{ index .Config.Labels "pit-bbs.tsbb" }}' 2>/dev/null || true)"
+if [ "$current" != "$tag" ]; then
+  git -C "$src" -c advice.detachedHead=false checkout -q "$tag"
+  docker build -q --label pit-bbs.tsbb="$tag" -t pit-bbs:latest "$src" >/dev/null
+  logger -t pit-bbs "image pit-bbs:latest is tsbb $tag"
+  echo "[pit-bbs] image is tsbb $tag"
+fi
+[ "${1:-}" = "--build-only" ] && exit 0
+[ "$current" = "$tag" ] && exit 0
+# Recreate each board on the new image; its data and settings stay where they are.
+for c in $(docker ps -a --filter label=pit-bbs.name --format '{{.Names}}'); do
+  name="${c#pit-bbs-}"
+  docker rm -f "$c" >/dev/null
+  /usr/local/bin/pit-bbs-provision "$name" "$(sed -n 's/^PIT_BBS_PORT=//p' "/etc/pit-bbs/$name.env")" >/dev/null
+done
