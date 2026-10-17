@@ -19,7 +19,10 @@ import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
-import { COOKIE_PATHS, mountAccounts, type AccountDeps } from './accounts-routes.js'
+import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
+import { SESSION_COOKIE } from './accounts.js'
+import { Promotion } from './promotion.js'
+import { mountPromotion } from './promotion-routes.js'
 import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
@@ -42,6 +45,10 @@ export type Deps = {
   ringSync?: RingSync
   /** pit.world accounts (sign in with CoinPay, sign-in for *.pit.world sites); unset means off. */
   accounts?: AccountDeps
+  /** Promotion campaigns over the listings (needs listings); unset means off. */
+  promotion?: Promotion
+  /** Addresses whose visits are ours, excluded from promotion measurement. */
+  internalIps?: string[]
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -273,7 +280,21 @@ export function createApp(deps: Deps) {
   )
 
   if (deps.accounts) mountAccounts(app, deps.accounts)
-  if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName, { ringChanged: () => deps.ringSync?.soon(ringSites) })
+  const promoHooks =
+    deps.listings && deps.promotion
+      ? mountPromotion(app, {
+          promo: deps.promotion,
+          listings: deps.listings,
+          ...(deps.adminToken ? { adminToken: deps.adminToken } : {}),
+          ...(deps.internalIps ? { internalIps: deps.internalIps } : {}),
+          isAdmin: (c) => {
+            const a = deps.accounts
+            const me = a ? a.accounts.sessionAccount(parseCookies(c.req.header('cookie'))[SESSION_COOKIE]) : null
+            return Boolean(me && (a!.admins ?? []).includes(me.sub))
+          },
+        })
+      : null
+  if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName, { ringChanged: () => deps.ringSync?.soon(ringSites), ...(promoHooks ?? {}) })
 
   app.notFound((c) =>
     c.req.path.startsWith('/api/')
@@ -318,7 +339,17 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     extraClients: (env.PIT_BRIDGE_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
     admins: (env.PIT_ADMIN_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   }
-  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const promotion = new Promotion(listings, site)
+  const internalIps = (env.PIT_INTERNAL_IPS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
+  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, promotion, internalIps, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
+  const hourly = () => {
+    try {
+      promotion.tick()
+    } catch {}
+  }
+  setTimeout(hourly, 90_000).unref()
+  setInterval(hourly, 3600 * 1000).unref()
   // Once a day: re-read every claimed site (its feed, whether it has an ICANN address), then mirror the ring.
   const daily = async () => {
     await listings.checkSites().catch(() => 0)

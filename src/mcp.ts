@@ -13,7 +13,7 @@ import { CATEGORIES, PRICES } from './pros.js'
 export function createMcpServer(client = new PitClient()): McpServer {
   // Typed loosely: the SDK's generic tool() signature recurses past TypeScript's
   // instantiation depth with zod shapes. The shapes are still validated at runtime.
-  const server: any = new McpServer({ name: 'pit.world', version: '0.4.0' })
+  const server: any = new McpServer({ name: 'pit.world', version: '0.5.0' })
 
   server.tool(
     'search',
@@ -93,7 +93,55 @@ export function createMcpServer(client = new PitClient()): McpServer {
     content: [{ type: 'text', text: JSON.stringify(await client.network(), null, 2) }],
   }))
 
+  // Promotion campaigns, for operators: the same API (and so the same timing rules, budgets and
+  // recipient checks) as the CLI and the dashboard. Only offered when PIT_ADMIN_TOKEN is in the environment.
+  if (process.env.PIT_ADMIN_TOKEN) registerPromoTools(server, client)
   return server
+}
+
+function registerPromoTools(server: any, client: PitClient): void {
+  const promo = (method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown, headers?: Record<string, string>) =>
+    client.promo(method, path, body, headers).then((r) => ({ content: [{ type: 'text', text: typeof r === 'string' ? r : JSON.stringify(r, null, 2) }] }))
+  const e = encodeURIComponent
+  const cid = { campaign: z.string().min(3).max(80).describe('promotion campaign id (pcm_...) or its OutreachGraph campaign id') }
+  const member = { ...cid, domain: z.string().min(3).max(253) }
+  server.tool('promo_campaigns', 'Promotion campaigns (operators): list them.', {}, () => promo('GET', '/campaigns'))
+  server.tool('promo_overview', 'A promotion campaign at a glance: members by state, outreach holds, placements by state, measurement windows, reports, drafts, spend.', cid, ({ campaign }: any) => promo('GET', `/campaigns/${e(campaign)}`))
+  server.tool('promo_roster', 'The campaign roster: every business, its source lead ids, website, listing URL, verification status and planned action, plus unresolved leads. Private (contains lead ids).', { ...cid, limit: z.number().int().min(1).max(500).optional(), offset: z.number().int().min(0).optional() }, ({ campaign, limit, offset }: any) =>
+    promo('GET', `/campaigns/${e(campaign)}/businesses?limit=${limit ?? 500}&offset=${offset ?? 0}`),
+  )
+  server.tool('promo_import', 'Import a complete or partial campaign snapshot (the JSON scripts/outreachgraph-campaign-export.sh writes). dryRun shows every row disposition without writing. Re-importing the same snapshot changes nothing.', { ...cid, snapshot: z.any(), dryRun: z.boolean().optional() }, ({ campaign, snapshot, dryRun }: any) =>
+    promo('POST', `/campaigns/${e(campaign)}/imports${dryRun ? '?dryRun=1' : ''}`, { snapshot }, dryRun ? {} : { 'idempotency-key': `import-${snapshot?.snapshotAt ?? Date.now()}` }),
+  )
+  server.tool('promo_member', 'One campaign business: leads, outreach hold, verification, windows.', member, ({ campaign, domain }: any) => promo('GET', `/campaign-businesses/${e(`${campaign}:${domain}`)}`))
+  server.tool(
+    'promo_update_member',
+    'Resolve a campaign business: displayOrder (campaign order, null to clear), priority (false removes its directory priority without touching the listing), priorContact (a documented earlier contact, which makes the draft a follow-up), holdAttestation (an operator attests upstream outreach is held).',
+    { ...member, displayOrder: z.number().int().nullable().optional(), priority: z.boolean().optional(), priorContact: z.string().max(500).optional(), holdAttestation: z.string().max(500).optional() },
+    ({ campaign, domain, ...changes }: any) => promo('PATCH', `/campaign-businesses/${e(`${campaign}:${domain}`)}`, changes),
+  )
+  server.tool('promo_exclude', 'Exclude a business (domain) or a lead (lead id) from the campaign, with a reason.', { ...cid, subject: z.string().min(3), reason: z.string().min(3) }, ({ campaign, subject, reason }: any) => promo('POST', `/campaigns/${e(campaign)}/exclusions`, { subject, reason }))
+  server.tool('promo_preview', 'Preview a launch: which businesses launch, which are blocked and why, every planned post with its text and time, and the version launch needs.', cid, ({ campaign }: any) => promo('POST', `/campaigns/${e(campaign)}/preview`, {}))
+  server.tool('promo_launch', 'Launch with the version from promo_preview: publishes the roundup and creates the posting calendar. Refuses a stale preview.', { ...cid, version: z.string().min(8) }, ({ campaign, version }: any) =>
+    promo('POST', `/campaigns/${e(campaign)}/launch`, { version }, { 'idempotency-key': `launch-${version}` }),
+  )
+  server.tool('promo_pause', 'Pause (no new posts or sends; reports and listings stay), resume (active) or stop a campaign.', { ...cid, state: z.enum(['paused', 'active', 'stopped']) }, ({ campaign, state }: any) => promo('POST', `/campaigns/${e(campaign)}/pause`, { state }))
+  server.tool('promo_placements', 'Posts and pages of a campaign with state (scheduled, published, verified, failed, uncertain...), public URL, evidence and error.', { ...cid, state: z.string().optional(), domain: z.string().optional() }, ({ campaign, state, domain }: any) => {
+    const q = new URLSearchParams({ limit: '500' })
+    if (state) q.set('state', state)
+    if (domain) q.set('domain', domain)
+    return promo('GET', `/campaigns/${e(campaign)}/placements?${q}`)
+  })
+  server.tool('promo_retry_placement', 'Put a failed placement back in line (at most three attempts).', { placement: z.string().min(6) }, ({ placement }: any) => promo('POST', `/placements/${e(placement)}/retry`, {}))
+  server.tool('promo_results', 'One business: its measurement windows and the numbers so far (views, website clicks, phone taps, views from campaign links), with the latest report.', member, ({ campaign, domain }: any) => promo('GET', `/campaign-businesses/${e(`${campaign}:${domain}`)}/results`))
+  server.tool('promo_reports', 'Reports of a campaign; generate=true first runs the hourly pass and writes reports for every window that has ended.', { ...cid, generate: z.boolean().optional() }, async ({ campaign, generate }: any) => {
+    if (generate) await client.promo('POST', `/campaigns/${e(campaign)}/reports`, {})
+    return promo('GET', `/campaigns/${e(campaign)}/reports`)
+  })
+  server.tool('promo_report', 'One report (frozen snapshot, versioned) as JSON or Markdown.', { report: z.string().min(6), format: z.enum(['json', 'md']).optional() }, ({ report, format }: any) => promo('GET', `/reports/${e(report)}${format === 'md' ? '.md' : ''}`))
+  server.tool('promo_drafts', 'Outreach drafts of a campaign (written from reports after windows end; never sent unless sending is authorized).', cid, ({ campaign }: any) => promo('GET', `/campaigns/${e(campaign)}/drafts`))
+  server.tool('promo_create_draft', 'Write the outreach draft for a report (one per report version).', { report: z.string().min(6) }, ({ report }: any) => promo('POST', `/reports/${e(report)}/outreach-draft`, {}))
+  server.tool('promo_deliver', 'Send one draft. Refused unless the campaign authorizes sending, the window has ended, the report is current and the recipient is not suppressed upstream.', { draft: z.string().min(6) }, ({ draft }: any) => promo('POST', `/drafts/${e(draft)}/deliver`, {}))
 }
 
 export async function runMcp(): Promise<void> {

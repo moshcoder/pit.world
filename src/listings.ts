@@ -14,6 +14,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { dnsMx, normalizeEmail, type Mailer, type MxLookup } from './newsletter.js'
 import { PRICES, categoryOf, cleanServices, normalizeOperator, normalizeWebUrl } from './pros.js'
+import { ensurePromotionSchema } from './promotion-schema.js'
 
 export type Listing = {
   domain: string
@@ -316,7 +317,8 @@ const escHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) 
 const words = (value: unknown) => clean(value, 120).toLowerCase().split(/\s+/).filter(Boolean)
 
 export class Listings {
-  private db: Database
+  /** Shared with the promotion store (src/promotion.ts), whose membership the directory orders by. */
+  readonly db: Database
   private mailer: Mailer | null
   private mx: MxLookup
   private site: string
@@ -346,6 +348,7 @@ export class Listings {
     // Quote requests are counted, never kept: a domain and a time, so the per-listing limit survives a restart.
     this.db.run('CREATE TABLE IF NOT EXISTS quote_log (domain TEXT NOT NULL, at INTEGER NOT NULL)')
     this.db.run('CREATE INDEX IF NOT EXISTS quote_log_domain_at ON quote_log (domain, at)')
+    ensurePromotionSchema(this.db)
   }
 
   /** Quote requests need somewhere to send from. */
@@ -409,6 +412,13 @@ export class Listings {
       }
     }
     return this.toListing(row, domain)
+  }
+
+  /** A listing that is in the directory, without touching the network; null otherwise. */
+  toPublic(input: unknown): Listing | null {
+    const domain = normalizeDomain(input)
+    const row = domain ? this.row(domain) : null
+    return row && (row.claimed_at || row.seeded_at) && !row.directory_opt_out ? this.toListing(row, domain!) : null
   }
 
   /** Claimed listings only, without touching the network: the search results card. */
@@ -613,13 +623,18 @@ export class Listings {
     const category = categoryOf(query.category)?.slug ?? ''
     const near = words(query.near)
     const terms = words(query.q)
-    // Featured first (an editorial pick, never paid), then owner-verified listings by latest edit, then the
-    // ones pit.world listed itself. claimedOnly leaves those out (the feed of claims).
+    // Businesses a running promotion campaign features come first (in the campaign's order, then featured,
+    // then by name); then featured (an editorial pick, never paid), owner-verified listings by latest edit,
+    // and the ones pit.world listed itself. Filters below keep this order and pagination slices after them,
+    // so every page, the API and the mobile view agree. claimedOnly leaves seeded ones out (the feed of claims).
     const rows = this.db
       .query(
         query.claimedOnly
           ? 'SELECT * FROM listings WHERE claimed_at IS NOT NULL ORDER BY updated_at DESC'
-          : 'SELECT * FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0 ORDER BY featured DESC, claimed_at IS NULL, updated_at DESC, domain',
+          : `SELECT *, (SELECT MIN(COALESCE(m.display_order, 1000000)) FROM promo_members m JOIN promo_campaigns pc ON pc.id = m.campaign_id
+                       WHERE m.domain = listings.domain AND m.priority = 1 AND m.state = 'verified' AND pc.state IN ('active', 'paused')) AS promo_rank
+             FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0
+             ORDER BY promo_rank IS NULL, promo_rank, featured DESC, CASE WHEN promo_rank IS NULL THEN '' ELSE lower(name) END, claimed_at IS NULL, updated_at DESC, domain`,
       )
       .all() as any[]
     const matched = rows

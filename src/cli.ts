@@ -45,6 +45,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit social NAME | pit bbs NAME   the social feed or board of a Moshpit name
   pit subscribe EMAIL          get the pit.world newsletter (double opt-in)
   pit open WORDS               open the results page in your browser
+  pit promo ...                promotion campaigns, for operators (pit promo help)
   pit mcp                      MCP server on stdio: claude mcp add pit -- pit mcp
   pit serve [--port N]         run your own instance (SERPER_API_KEY etc.)
 
@@ -263,6 +264,16 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         const argv = process.platform === 'darwin' ? ['open', url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '""', url] : ['xdg-open', url]
         if (!json) spawn(argv[0]!, argv.slice(1), { detached: true, stdio: 'ignore' }).on('error', () => {}).unref()
         return 0
+      }
+      case 'promo': {
+        const { promoMain } = await import('./promotion-cli.js')
+        return await promoMain(rest.slice(1), out, client, json).catch((error) => {
+          if (error?.usage) {
+            out.error(error.message)
+            return 64
+          }
+          throw error
+        })
       }
       case 'mcp':
         await (await import('./mcp.js')).runMcp()

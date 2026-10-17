@@ -1,7 +1,7 @@
 /** Routes for business listings (/b, /pros, /api/listing, /api/pros). Mounted by createApp when a Listings store is given. */
 import type { Context, Hono } from 'hono'
 import {
-  claimPage, contactConfirmedPage, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, verifiedPage, verifyFailedPage, type QuoteState,
+  claimPage, contactConfirmedPage, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, siteUrl, verifiedPage, verifyFailedPage, type QuoteState,
 } from './listings-html.js'
 import { EDIT_FIELDS, normalizeDomain, type ClaimStart, type ContactResult, type ListingEdit, type Listings } from './listings.js'
 import { CATEGORIES, categoryOf, PRICES } from './pros.js'
@@ -12,6 +12,18 @@ type Env = { Bindings: { ip?: string } }
 export type ListingHooks = {
   /** Something about ring membership may have changed (a claim, an edit). */
   ringChanged?: () => void
+  /** A listing page was served (promotion measurement; src/promotion-routes.ts decides what counts). */
+  viewed?: (c: Context<Env>, domain: string) => void
+  /** A quote request went to the owner. */
+  quoted?: (c: Context<Env>, domain: string) => void
+  /** Someone followed a listing's website link. */
+  clicked?: (c: Context<Env>, domain: string) => void
+}
+
+/** A campaign's tracking id (?via=plc_...) carried from the page to its website link and phone beacon. */
+const viaOf = (c: Context<Env>) => {
+  const via = c.req.query('via') ?? ''
+  return /^plc_[A-Za-z0-9_-]{6,20}$/.test(via) ? via : ''
 }
 
 function rebuild(listings: Listings, claimId: string): ClaimStart | null {
@@ -93,7 +105,19 @@ export function mountListings(
     if (!listing) return c.notFound()
     if (listing.domain !== c.req.param('domain')) return c.redirect(`/b/${encodeURIComponent(listing.domain)}`, 301)
     if (c.req.method === 'GET' && isPerson(c.req.header('user-agent'))) listings.view(listing.domain)
-    return c.html(listingPage(listing))
+    if (c.req.method === 'GET') hooks.viewed?.(c, listing.domain)
+    return c.html(listingPage(listing, { via: viaOf(c) }))
+  })
+
+  // A directory listing's website link. The destination is the listing's own site, never a parameter,
+  // so this cannot be used as an open redirect.
+  app.get('/b/:domain/go', (c) => {
+    const listing = listings.toPublic(c.req.param('domain'))
+    if (!listing) return c.notFound()
+    hooks.clicked?.(c, listing.domain)
+    c.header('cache-control', 'no-store')
+    c.header('x-robots-tag', 'noindex, nofollow')
+    return c.redirect(siteUrl(listing), 302)
   })
 
   app.post('/b/:domain/claim', (c) => {
@@ -155,6 +179,7 @@ export function mountListings(
     // The honeypot: a field people never see. A bot that fills it is told it worked, and nothing is sent.
     if (typeof form.website === 'string' && form.website !== '') return show('sent')
     const result = await listings.requestQuote(listing.domain, form)
+    if (result === 'sent') hooks.quoted?.(c, listing.domain)
     return show(result, result === 'sent' ? 200 : result === 'limited' ? 429 : result === 'failed' ? 503 : 400)
   })
 
@@ -216,6 +241,7 @@ export function mountListings(
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
     if (typeof body.website === 'string' && body.website !== '') return c.json({ ok: true, status: 'sent' })
     const result = await listings.requestQuote(body.domain, body)
+    if (result === 'sent' && typeof body.domain === 'string') hooks.quoted?.(c, normalizeDomain(body.domain) ?? body.domain)
     const status = { sent: 200, invalid: 400, undeliverable: 400, unavailable: 404, limited: 429, failed: 503 }[result] as 200 | 400 | 404 | 429 | 503
     return c.json({ ok: result === 'sent', status: result }, status)
   })

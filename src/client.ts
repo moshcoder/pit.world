@@ -118,6 +118,30 @@ export class PitClient {
     return { ok: Boolean(data?.ok), status: String(data?.status ?? `HTTP ${response.status}`) }
   }
 
+  /**
+   * The promotion API (/api/v1/promotion), for operators: PIT_ADMIN_TOKEN is the bearer. Text responses
+   * (CSV, Markdown) come back as strings.
+   */
+  async promo<T = any>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown, headers: Record<string, string> = {}): Promise<T> {
+    const token = process.env.PIT_ADMIN_TOKEN
+    if (!token) throw new Error('set PIT_ADMIN_TOKEN (the pit.world admin token) for promotion commands')
+    const response = await this.fetchImpl(`${this.base}/api/v1/promotion${path}`, {
+      method,
+      headers: { accept: 'application/json', authorization: `Bearer ${token}`, 'x-pit-actor': process.env.PIT_ACTOR ?? 'cli', ...(body !== undefined ? { 'content-type': 'application/json' } : {}), ...headers },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      signal: AbortSignal.timeout(60_000),
+    })
+    const type = response.headers.get('content-type') ?? ''
+    if (!type.includes('json')) {
+      const text = await response.text()
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      return text as T
+    }
+    const data = (await response.json().catch(() => ({}))) as any
+    if (!response.ok) throw new Error(`${data?.error ?? `HTTP ${response.status}`}${data?.code ? ` (${data.code})` : ''}`)
+    return data as T
+  }
+
   /** Start a newsletter signup; the address only joins after the emailed link is clicked. */
   async subscribe(email: string): Promise<{ ok: boolean; status: string }> {
     const response = await this.fetchImpl(`${this.base}/api/subscribe`, {
