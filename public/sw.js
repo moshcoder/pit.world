@@ -24,6 +24,7 @@ self.addEventListener('fetch', (event) => {
 
   // Pages: always the network. Offline, the offline page, never a stored copy of a search.
   if (request.mode === 'navigate') {
+    // threatcrush-disable-next-line js-ssrf-outbound-request  runs in the visitor's browser, same-origin only (checked above)
     event.respondWith(fetch(request).catch(() => caches.match('/offline')))
     return
   }
@@ -33,6 +34,7 @@ self.addEventListener('fetch', (event) => {
     event.respondWith(
       caches.open(CACHE).then(async (cache) => {
         const cached = await cache.match(request)
+        // threatcrush-disable-next-line js-ssrf-outbound-request  browser-side, a fixed list of same-origin shell files
         const fresh = fetch(request)
           .then((response) => {
             if (response.ok) cache.put(request, response.clone())
