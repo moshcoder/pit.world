@@ -6,11 +6,13 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, buildPage, connectPage, errorPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
+import { Promoted } from './promoted.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
+import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 
 export type Deps = {
   keys: Keys
@@ -22,6 +24,8 @@ export type Deps = {
   newsletter?: Newsletter
   /** Bearer token for /api/admin/*; unset means the admin API is off. */
   adminToken?: string
+  /** PairUX + nixamp listings for the Videos, Music and Live tabs. */
+  promoted?: Promoted
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -41,6 +45,7 @@ export function createApp(deps: Deps) {
   const registry = deps.registry ?? new Registry(undefined, deps.fetch)
   const cache = deps.cache ?? new Cache()
   const limiter = deps.limiter ?? new RateLimiter()
+  const promoted = deps.promoted ?? new Promoted(deps.fetch)
   const app = new Hono<Env>()
 
   app.use('*', async (c, next) => {
@@ -60,6 +65,16 @@ export function createApp(deps: Deps) {
       return { result: null, error: error instanceof SearchUnavailable ? 'Web results are unavailable for a moment. Try again shortly, or use a bang like !ddg.' : 'Something went wrong fetching results.' }
     }
   }
+
+  async function runMedia(vertical: Exclude<Vertical, 'web'>, query: string, limit?: number): Promise<{ result: MediaResult | null; error: string | null }> {
+    try {
+      return { result: await searchMedia(vertical, query, deps.keys, { cache, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) }), error: null }
+    } catch (error) {
+      // No query in the message, and nothing logged.
+      return { result: null, error: error instanceof SearchUnavailable ? 'These results are unavailable for a moment. Try again shortly.' : 'Something went wrong fetching results.' }
+    }
+  }
+
 
   const newsletter = deps.newsletter
   app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false })))
@@ -133,8 +148,13 @@ export function createApp(deps: Deps) {
       c.header('retry-after', '30')
       return c.html(resultsPage({ query, result: null, resolution: null, error: 'Too many searches from your connection just now. Give it half a minute.' }), 429)
     }
-    const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const vertical = parseVertical(c.req.query('t'))
     c.header('cache-control', 'no-store')
+    if (vertical !== 'web') {
+      const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query), promoted.for(query, vertical)])
+      return c.html(mediaPage({ query, vertical, result, promos, error }), result || promos.length ? 200 : 503)
+    }
+    const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     return c.html(resultsPage({ query, result, resolution, error }), result || resolution ? 200 : 503)
   })
 
@@ -154,6 +174,12 @@ export function createApp(deps: Deps) {
     }
     const raw = Math.trunc(Number(c.req.query('n') ?? 10))
     const n = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 20) : 10
+    const vertical = parseVertical(c.req.query('t'))
+    if (vertical !== 'web') {
+      const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, n), promoted.for(query, vertical)])
+      if (!result) return c.json({ query, type: vertical, error, promoted: promos }, 503)
+      return c.json({ query, type: vertical, provider: result.provider, results: result.hits, promoted: promos })
+    }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     if (!result) return c.json({ query, error, moshpit: resolution }, 503)
     return c.json({ query, provider: result.provider, results: result.hits, moshpit: resolution })
@@ -172,6 +198,24 @@ export function createApp(deps: Deps) {
   })
 
   app.get('/api/bangs', (c) => c.json(BANGS.map((b) => ({ name: b.name, bangs: b.aliases, url: b.url }))))
+
+  // Thumbnails for the Images/Videos/Live tabs, fetched by us so the visitor's
+  // browser never talks to Google or YouTube. Only the hosts in thumbAllowed().
+  app.get('/img', async (c) => {
+    const url = thumbAllowed(c.req.query('u') ?? '')
+    if (!url) return c.body(null, 400)
+    try {
+      // threatcrush-disable-next-line js-ssrf-outbound-request  fixed allowlist of public thumbnail hosts (thumbAllowed), https only
+      const upstream = await (deps.fetch ?? fetch)(url.href, { redirect: 'error', signal: AbortSignal.timeout(6_000) })
+      const type = upstream.headers.get('content-type') ?? ''
+      if (!upstream.ok || !/^image\/(jpeg|png|gif|webp|avif)/.test(type)) return c.body(null, 502)
+      const body = await upstream.arrayBuffer()
+      if (body.byteLength > 2_000_000) return c.body(null, 502)
+      return c.body(body, 200, { 'content-type': type, 'cache-control': 'public, max-age=86400' })
+    } catch {
+      return c.body(null, 502)
+    }
+  })
 
   // --- static -------------------------------------------------------------------
   const dir = deps.publicDir ?? new URL('../public/', import.meta.url).pathname
