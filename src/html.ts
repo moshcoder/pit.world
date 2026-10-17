@@ -73,6 +73,7 @@ ${ringBar('pit.world', false)}
 ${options.body}
 <footer class="foot">
   <nav>
+    <a href="/account">Account</a>
     <a href="/privacy">Privacy</a>
     <a href="/connect">Connect to Moshpit</a>
     <a href="/build">Build an app</a>
@@ -86,7 +87,7 @@ ${options.body}
     <a href="${LINKS.registry}">Moshpit registry</a>
     <a href="${LINKS.moshcode}">moshcode</a>
   </nav>
-  <p>No logs. No cookies. No profile. Part of the <a href="/#moshpit">Moshpit network</a>.</p>
+  <p>No logs. No profile. No cookies unless you <a href="/account">sign in</a>. Part of the <a href="/#moshpit">Moshpit network</a>.</p>
 </footer>
 </body>
 </html>`
@@ -161,7 +162,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     ${searchForm('', true)}
     <ul class="promises">
       <li><b>No logs</b> of what you search</li>
-      <li><b>No cookies</b>, none, ever</li>
+      <li><b>No cookies</b> to search, ever</li>
       <li><b>No profile</b> to sell</li>
       <li><b>No JavaScript</b> required</li>
     </ul>
@@ -307,7 +308,7 @@ export function privacyPage(): string {
 <ul>
 <li><b>Your searches.</b> The web server does not write access logs for pit.world, and the application logs no queries.</li>
 <li><b>Your IP address.</b> It is not stored anywhere. Rate limiting uses a keyed hash of it, held in memory, under a random key that is thrown away every hour, so the counters cannot be turned back into addresses or linked across hours.</li>
-<li><b>Cookies.</b> pit.world sets none. Your settings, when there are any, stay in your browser.</li>
+<li><b>Cookies, to search.</b> Searching sets none and reads none. The only cookie pit.world ever sets is the sign-in one, and only after you press Sign in (below).</li>
 <li><b>Trackers, analytics, ads, third-party scripts or fonts.</b> None. Every byte comes from pit.world.</li>
 </ul>
 <h2>What happens to a search</h2>
@@ -323,6 +324,8 @@ export function privacyPage(): string {
 <p><code>!gh hqtui</code> sends you to GitHub's own search. From that moment you are on their site, under their privacy policy; pit.world only redirects you there without a referrer.</p>
 <h2 id="newsletter">The newsletter, only if you ask</h2>
 <p>The newsletter is the one thing pit.world keeps, and only after you ask twice. When you sign up, pit.world stores your address beside a fingerprint of a one-time link and emails you that link. Nothing else about you: no IP address, no browser, no referrer. Click it and your address joins the list; don't, and both are deleted within 48 hours. Issues are sent by our newsletter tool through our email provider, and every one has a one-click unsubscribe that takes you off for good.</p>
+<h2 id="accounts">Your account, only if you sign in</h2>
+<p>One pit.world account signs you in on every <code>social.&lt;name&gt;.pit.world</code> feed and <code>bbs.&lt;name&gt;.pit.world</code> board, so you never make an account per site. You sign in with CoinPay (OAuth 2.1). We keep your CoinPay id, the name and email CoinPay gives us, a session cookie for <code>pit.world</code> only, and the list of pit.world sites you signed in to, which you can see and clear on <a href="/account">your account page</a>. A site gets your CoinPay id and name, nothing else. Search never reads the cookie. Delete the account from the same page and it is gone; what you posted on a board or feed stays there until you delete it on that site.</p>
 <h2>Source</h2>
 <p>The code that does all of this is public: <a href="https://github.com/moshcoder/pit.world">github.com/moshcoder/pit.world</a>.</p>
 </main>`,

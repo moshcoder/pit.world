@@ -57,10 +57,25 @@ No key is needed. `PIT_URL` points it at another pit.world instance (default `ht
 - **The pit.world ring (`/ring`).** The core sites (pit.world, seo.rank, family.ancestry) and then every claimed listing, in the order they joined: **claiming is joining**, and owners can leave from the edit page. Hops: `/ring/next|prev|random?from=<site>` (also `?host=`, `?url=`, `?via=`, or the Referer), `302` with `no-store`; `/api/ring` for members that draw the bar themselves; `/ring/opml` for every member's feed. The verified and edit pages show the links to paste.
 - **Mirrored to rssamplifier.com.** pit.world reads each claimed site's homepage for `<link rel="alternate">` RSS/Atom on claim and daily, and keeps the ring `pit-world` on [rssamplifier.com/ring/pit-world](https://rssamplifier.com/ring/pit-world) in step: submit new feeds, add members, remove ones that left. The sync is a diff (idempotent), runs a few seconds after a claim or edit and once a day, and needs `RSSAMPLIFIER_API_KEY` (an rssamplifier API key of the account that owns the ring; off without it). Moshpit-only names are not mirrored, since rssamplifier cannot reach them. New claims are also a feed: `/b/feed.xml`.
 
+## One account for every pit.world site: social.<name> and bbs.<name>
+
+Every Moshpit name gets two more addresses, with nothing to set up:
+
+- **`social.<name>.pit.world`**: the name's social feed. Posts from the AT Protocol network tagged with the name's niche (`family.ancestry` follows #genealogy, #familyhistory, #ancestry, ...), read from every relay we can reach at once (Bluesky's and the independent ones: atproto.africa, relay.fire.hose.cam, relay.upcloud.world, relay.waow.tech), plus posts by members. Each is also an AT Protocol feed generator (`did:web:social.<name>.pit.world`). It is the [pit-social](https://github.com/moshcoder/pit-social) service; pit.world forwards the host to it.
+- **`bbs.<name>.pit.world`**: the name's bulletin board, a [tsbb](https://github.com/profullstack/tsbb) board made on its first visit (`deploy/pit-bbs-provision`), its own database, forums seeded, the pit.world admins as its administrators.
+
+Both sign people in with their **pit.world account**: sign in once at [pit.world/signin](https://pit.world/signin) with **CoinPay** (OAuth 2.1, code + PKCE) and every board and feed signs you in through pit.world (`/bridge/authorize`, `/bridge/token`, [@profullstack/bridges](https://github.com/profullstack/bridges)), silently when you are already signed in. Nobody makes an account per site. `/account` shows the sites you use, your CLI tokens, sign out and delete.
+
+- A site's client id is its host; its secret is `base64url(HMAC-SHA256(PIT_BRIDGE_KEY, host))`, so a new name works the moment it exists and no site is registered by hand. `PIT_BRIDGE_CLIENTS` adds exact extra hosts (our own apps on the relay).
+- Accounts link by CoinPay `sub` (the person's CoinPay DID) only, never by email (CoinPay reports every email unverified).
+- **CLI:** `pit login` (OAuth 2.1, public client, loopback redirect, PKCE S256, RFC 8252), `pit whoami`, `pit logout`, `pit social <name>`, `pit bbs <name>`. API: `GET /api/v1/me` with `Authorization: Bearer pw_…`.
+- **Certificates:** one Let's Encrypt certificate per name covers `<name>`, `social.<name>` and `bbs.<name>` (`deploy/pit-proxy-cert`).
+- Settings: `PIT_COINPAY_CLIENT_ID`, `PIT_COINPAY_CLIENT_SECRET` (CoinPay client with callback `https://pit.world/api/v1/coinpay/oauth/callback`), `PIT_BRIDGE_KEY`, `PIT_ADMIN_SUBS`, `PIT_SOCIAL_URL` (default `http://127.0.0.1:8794`, `off`), `PIT_BBS` (`off`), `PIT_BBS_MAX` (default 100).
+
 ## Privacy, by construction
 
 - nginx writes **no access log** for the site (`ACCESS_LOG=off` in `bin/install.conf`), and the app logs nothing per request.
-- **No cookies.** The server strips `Set-Cookie` from every response.
+- **No cookies to search.** The server strips `Set-Cookie` from every response except the sign-in and account routes, which set one only after you press Sign in.
 - Rate limiting keys on an **HMAC of the IP under a secret regenerated every hour**, in memory only.
 - Identical searches are cached **in memory for ten minutes** to avoid paying twice; the cache holds words and results, nothing about who asked, and never touches disk.
 - Strict CSP (`default-src 'none'`, same-origin scripts and styles only), `Referrer-Policy: no-referrer`, results link straight to the site.

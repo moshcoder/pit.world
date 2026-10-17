@@ -1,0 +1,90 @@
+#!/bin/bash
+# bbs.<name>.pit.world: make (or start) the tsbb board for one Moshpit name.
+# Installed as /usr/local/bin/pit-bbs-provision. pit.world (src/services.ts) runs it
+# on the first visit to a name's board, with the loopback port it picked:
+#   pit-bbs-provision family.ancestry 9100
+# Idempotent: an existing board keeps its database and secrets and is only started.
+#
+# Every board is a container from one image (pit-bbs:latest, built from tsbb by
+# pit-bbs-update), its database in /var/lib/pit-bbs/<name>, its settings in
+# /etc/pit-bbs/<name>.env. People sign in with their pit.world account (the bridge);
+# the board's secret is HMAC-SHA256(PIT_BRIDGE_KEY, host), the same as pit.world
+# computes. The pit.world admins (PIT_ADMIN_SUBS) are seeded as the board's
+# administrators before anyone else can sign in, so no stranger is ever "first".
+set -euo pipefail
+name="${1:-}" port="${2:-}"
+[[ "$name" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$ ]] || { echo "pit-bbs-provision: bad name: $name" >&2; exit 2; }
+[[ "$port" =~ ^9[0-9]{3}$ ]] || { echo "pit-bbs-provision: port must be 9000-9999" >&2; exit 2; }
+
+exec 9>/run/lock/pit-bbs-provision.lock
+flock 9
+umask 077
+log() { logger -t pit-bbs "$name: $*"; printf '[pit-bbs] %s: %s\n' "$name" "$*"; }
+
+# PIT_BRIDGE_KEY, RESEND_API_KEY, PIT_ADMIN_SUBS
+set -a; . /root/.local/share/pit-world/app.env; set +a
+: "${PIT_BRIDGE_KEY:?PIT_BRIDGE_KEY missing from pit.world app.env}"
+
+host="bbs.$name.pit.world"
+container="pit-bbs-$name"
+data="/var/lib/pit-bbs/$name"
+envfile="/etc/pit-bbs/$name.env"
+image="pit-bbs:latest"
+
+docker image inspect "$image" >/dev/null 2>&1 || /usr/local/bin/pit-bbs-update --build-only
+
+install -d -m 0700 /etc/pit-bbs "$data"
+if [ ! -f "$envfile" ]; then
+  secret="$(printf '%s' "$host" | openssl dgst -sha256 -hmac "$PIT_BRIDGE_KEY" -binary | base64 | tr '+/' '-_' | tr -d '=\n')"
+  cat > "$envfile" <<ENV
+# bbs.$name.pit.world, made by pit-bbs-provision $(date -u +%FT%TZ). Port $port.
+PIT_BBS_PORT=$port
+TSBB_BASE_URL=https://$host
+TSBB_DATABASE_URL=file:/app/data/tsbb.db
+TSBB_SESSION_SECRET=$(openssl rand -hex 32)
+TSBB_IP_HASH_SALT=$(openssl rand -hex 16)
+TSBB_UPDATES=off
+TSBB_MAIL_TRANSPORT=resend
+TSBB_MAIL_FROM=$name board <bbs@pit.world>
+RESEND_API_KEY=${RESEND_API_KEY:-}
+TSBB_BRIDGE_NAME=pit.world
+TSBB_BRIDGE_AUTHORIZE_URL=https://pit.world/bridge/authorize
+TSBB_BRIDGE_TOKEN_URL=https://pit.world/bridge/token
+TSBB_BRIDGE_CLIENT_ID=$host
+TSBB_BRIDGE_SECRET=$secret
+ENV
+  chmod 0600 "$envfile"
+  log "settings written"
+fi
+port="$(sed -n 's/^PIT_BBS_PORT=//p' "$envfile")"
+
+if ! docker container inspect "$container" >/dev/null 2>&1; then
+  docker run -d --name "$container" --restart unless-stopped \
+    --memory 512m --memory-swap 512m --cpus 1 \
+    --env-file "$envfile" -e PORT=3000 -e HOST=0.0.0.0 -e NODE_ENV=production -e NODE_OPTIONS=--max-old-space-size=384 \
+    -p "127.0.0.1:$port:3000" -v "$data:/app/data" \
+    --log-opt max-size=20m --log-opt max-file=2 \
+    --label pit-bbs.name="$name" "$image" >/dev/null
+  log "container started on 127.0.0.1:$port"
+else
+  docker start "$container" >/dev/null
+fi
+
+for _ in $(seq 1 90); do
+  curl -fsS -o /dev/null "http://127.0.0.1:$port/healthz" && break
+  sleep 1
+done
+
+# The forum tree, the board's settings, and its administrators: once.
+if [ ! -f "$data/.seeded" ]; then
+  install -m 0644 /usr/local/share/pit-bbs/seed.ts "$data/pit-seed.ts"
+  docker exec -e PIT_NAME="$name" -e PIT_ADMIN_SUBS="${PIT_ADMIN_SUBS:-}" "$container" bun /app/data/pit-seed.ts
+  rm -f "$data/pit-seed.ts"
+  touch "$data/.seeded"
+  docker restart "$container" >/dev/null   # settings are cached per process
+  log "seeded"
+fi
+
+# One certificate covers <name>.pit.world, social.<name> and bbs.<name>.
+[ -f "/etc/nginx/pit-proxy-certs/$host.crt" ] || /usr/local/bin/pit-proxy-cert "$name.pit.world" || log "certificate not issued yet"
+log "ready: https://$host/"

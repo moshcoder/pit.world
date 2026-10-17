@@ -18,6 +18,9 @@ import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { readFileSync } from 'node:fs'
+import { Accounts, serviceHost } from './accounts.js'
+import { COOKIE_PATHS, mountAccounts, type AccountDeps } from './accounts-routes.js'
+import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 
@@ -37,6 +40,8 @@ export type Deps = {
   listings?: Listings
   /** Mirrors the ring to rssamplifier.com; unset means no mirror. */
   ringSync?: RingSync
+  /** pit.world accounts (sign in with CoinPay, sign-in for *.pit.world sites); unset means off. */
+  accounts?: AccountDeps
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -62,8 +67,8 @@ export function createApp(deps: Deps) {
   app.use('*', async (c, next) => {
     await next()
     for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.header(name, value)
-    // Belt and braces: nothing on pit.world sets a cookie, and nothing ever will by accident.
-    c.res.headers.delete('set-cookie')
+    // Belt and braces: only the sign-in and account routes set a cookie, and only after you press Sign in.
+    if (!deps.accounts || !COOKIE_PATHS.test(c.req.path)) c.res.headers.delete('set-cookie')
   })
 
   const limited = (c: Context<Env>) => !limiter.take(c.env?.ip || 'unknown')
@@ -267,6 +272,7 @@ export function createApp(deps: Deps) {
     c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
   )
 
+  if (deps.accounts) mountAccounts(app, deps.accounts)
   if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName, { ringChanged: () => deps.ringSync?.soon(ringSites) })
 
   app.notFound((c) =>
@@ -303,7 +309,16 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const ringSync = env.RSSAMPLIFIER_API_KEY
     ? new RingSync({ apiKey: env.RSSAMPLIFIER_API_KEY, ...(env.RSSAMPLIFIER_URL ? { base: env.RSSAMPLIFIER_URL } : {}), ...(env.RSSAMPLIFIER_RING ? { slug: env.RSSAMPLIFIER_RING } : {}) })
     : undefined
-  const app = createApp({ keys: keysFromEnv(), newsletter, listings, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const site = env.PIT_SITE ?? 'https://pit.world'
+  const accounts: AccountDeps = {
+    accounts: new Accounts(env.PIT_ACCOUNTS_DB ?? `${dataDir}/accounts.db`),
+    site,
+    coinpay: env.PIT_COINPAY_CLIENT_ID && env.PIT_COINPAY_CLIENT_SECRET ? { clientId: env.PIT_COINPAY_CLIENT_ID, clientSecret: env.PIT_COINPAY_CLIENT_SECRET } : null,
+    bridgeKey: env.PIT_BRIDGE_KEY ?? null,
+    extraClients: (env.PIT_BRIDGE_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    admins: (env.PIT_ADMIN_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  }
+  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Once a day: re-read every claimed site (its feed, whether it has an ICANN address), then mirror the ring.
   const daily = async () => {
     await listings.checkSites().catch(() => 0)
@@ -313,6 +328,11 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   setInterval(daily, 24 * 3600 * 1000).unref()
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts() }
+  const serviceDeps = {
+    ...proxyDeps,
+    socialUrl: env.PIT_SOCIAL_URL === 'off' ? null : (env.PIT_SOCIAL_URL ?? 'http://127.0.0.1:8794'),
+    boards: env.PIT_BBS === 'off' ? null : new Boards(env.PIT_BOARDS_DB ?? `${dataDir}/boards.db`, { max: Number(env.PIT_BBS_MAX ?? 100) }),
+  }
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 8787),
     hostname: options.hostname ?? process.env.HOST ?? '127.0.0.1',
@@ -324,6 +344,10 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       const peer = srv.requestIP(request)?.address ?? ''
       const local = trustProxy && (peer === '127.0.0.1' || peer === '::1')
       const forwarded = local ? request.headers.get('x-real-ip') : null
+      const proto = (local && request.headers.get('x-forwarded-proto')) || 'http'
+      // social.<name>.pit.world and bbs.<name>.pit.world are ours (src/services.ts), checked before the relay.
+      const svc = serviceHost(request.headers.get('host'))
+      if (svc) return serviceRequest(request, svc, forwarded || peer, proto, serviceDeps)
       // <name>.pit.world is a Moshpit name relayed to the old internet (src/proxy.ts), not pit.world itself.
       const name = proxiedName(request.headers.get('host'))
       if (name) return proxyRequest(request, name, forwarded || peer, (local && request.headers.get('x-forwarded-proto')) || 'http', proxyDeps)

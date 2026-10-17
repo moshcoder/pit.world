@@ -9,6 +9,7 @@
  *   pit pros [WORDS] [--category C] [--near PLACE]   the pro directory
  *   pit edit DOMAIN --key K --field VALUE ...        edit your listing
  *   pit quote DOMAIN --name N --email E --message M  ask a listed pro for a quote
+ *   pit login | whoami | logout your pit.world account (OAuth 2.1, PKCE, loopback)
  *   pit ring                    the pit.world web ring
  *   pit open WORDS              the results page in your browser
  *   pit mcp                     MCP server on stdio
@@ -37,6 +38,11 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit quote DOMAIN --name N --email E --message M [--phone P]
                                ask one listed pro for a quote; they reply to your email
   pit ring                     the pit.world web ring
+  pit login [--no-browser]     sign in to your pit.world account (CoinPay, OAuth 2.1):
+                               one account for every social.<name> and bbs.<name>.pit.world
+  pit whoami                   your account and the pit.world sites you use
+  pit logout                   revoke this computer's token
+  pit social NAME | pit bbs NAME   the social feed or board of a Moshpit name
   pit subscribe EMAIL          get the pit.world newsletter (double opt-in)
   pit open WORDS               open the results page in your browser
   pit mcp                      MCP server on stdio: claude mcp add pit -- pit mcp
@@ -228,6 +234,34 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         const url = `${client.base}/search?q=${encodeURIComponent(query)}`
         const argv = process.platform === 'darwin' ? ['open', url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '""', url] : ['xdg-open', url]
         spawn(argv[0]!, argv.slice(1), { detached: true, stdio: 'ignore' }).on('error', () => out.log(url)).unref()
+        return 0
+      }
+      case 'login': {
+        const { login } = await import('./login.js')
+        const me = await login(client.base, (t) => out.log(t), { open: !words.includes('--no-browser') })
+        out.log(`Signed in as ${me.name ?? me.sub}. Every social.<name>.pit.world and bbs.<name>.pit.world uses this account.`)
+        return 0
+      }
+      case 'whoami': {
+        const me = await (await import('./login.js')).whoami(client.base)
+        if (json) out.log(JSON.stringify(me, null, 2))
+        else {
+          out.log(`${me.account.name ?? '(no name)'}  ${me.account.sub}${me.admin ? '  (admin)' : ''}`)
+          for (const s of me.sites ?? []) out.log(`  https://${s.client_id}/`)
+        }
+        return 0
+      }
+      case 'logout':
+        out.log((await (await import('./login.js')).logout(client.base)) ? 'Signed out; the token is revoked.' : 'Not signed in.')
+        return 0
+      case 'social':
+      case 'bbs': {
+        const name = (words[0] ?? '').toLowerCase()
+        if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(name)) return usage(out, `pit ${command} NAME   (e.g. pit ${command} family.ancestry)`)
+        const url = `https://${command}.${name}.pit.world/`
+        out.log(url)
+        const argv = process.platform === 'darwin' ? ['open', url] : process.platform === 'win32' ? ['cmd', '/c', 'start', '""', url] : ['xdg-open', url]
+        if (!json) spawn(argv[0]!, argv.slice(1), { detached: true, stdio: 'ignore' }).on('error', () => {}).unref()
         return 0
       }
       case 'mcp':
