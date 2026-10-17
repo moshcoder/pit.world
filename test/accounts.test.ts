@@ -101,6 +101,8 @@ describe('sign in with CoinPay', () => {
     expect((await w.signIn('https://evil.example/x')).location).toBe('/account')
     expect((await w.signIn('//evil.example/x')).location).toBe('/account')
     expect((await w.signIn(`${SITE}/bridge/authorize?client_id=x`)).location).toBe('/bridge/authorize?client_id=x')
+    // Behind nginx our own URLs arrive as http://pit.world/...: still ours.
+    expect((await w.signIn('http://pit.world/bridge/authorize?client_id=y')).location).toBe('/bridge/authorize?client_id=y')
   })
 })
 
@@ -126,8 +128,9 @@ describe('sign-in for *.pit.world sites', () => {
     // Signed out, normal: off to sign in, then back to the same authorize request.
     const started = await board.begin({ returnTo: '/f/general' })
     const authorizePath = new URL(started.url).pathname + new URL(started.url).search
-    const toSignin = await w.req(authorizePath)
-    expect(toSignin.headers.get('location')).toStartWith(`${SITE}/signin?next=`)
+    // As production sees it: nginx terminates TLS, so the request URL is http://.
+    const toSignin = await w.app.request(`http://pit.world${authorizePath}`)
+    expect(toSignin.headers.get('location')).toBe(`${SITE}/signin?next=${encodeURIComponent(authorizePath)}`)
     const { cookie, location } = await w.signIn(new URL(toSignin.headers.get('location')!).searchParams.get('next')!)
     expect(location).toBe(authorizePath)
     const answered = await w.req(location!, { cookie })
