@@ -232,6 +232,20 @@ describe('the web app', () => {
     expect(await (await request('/offline')).text()).toContain("You're offline")
   })
 
+  it('links CSS and JS by content hash, so a deploy is never hidden behind a cache', async () => {
+    const { request } = app()
+    const home = await (await request('/')).text()
+    const css = home.match(/href="(\/style\.css\?v=[0-9a-f]{10})"/)?.[1]
+    const js = home.match(/src="(\/app\.js\?v=[0-9a-f]{10})"/)?.[1]
+    expect(css).toBeDefined()
+    expect(js).toBeDefined()
+    const sheet = await request(css!)
+    expect(sheet.headers.get('content-type')).toBe('text/css; charset=utf-8')
+    expect(await sheet.text()).toContain('.newsletter')
+    expect((await request(js!)).status).toBe(200)
+    expect(await (await request('/sw.js')).text()).not.toContain("'pit-shell-v1'")
+  })
+
   it('explains every way onto the Moshpit network, linked from the home page', async () => {
     const { request } = app()
     expect(await (await request('/')).text()).toContain('href="/connect"')

@@ -2,11 +2,23 @@
  * Server-rendered pages. Every page works with JavaScript off (Tor Browser on
  * "Safest" included); /app.js only adds keyboard shortcuts.
  */
+import { createHash } from 'node:crypto'
+import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 
 export const SITE = 'https://pit.world'
+
+// Each asset URL carries a hash of its content, so a deploy that changes the CSS or
+// JS reaches returning visitors on their next page load instead of an hour later
+// (browser cache) or never (the service worker keeps whatever it stored first).
+const asset = (name: string) => {
+  const body = readFileSync(new URL(`../public/${name}`, import.meta.url))
+  return `/${name}?v=${createHash('sha256').update(body).digest('hex').slice(0, 10)}`
+}
+const STYLE_URL = asset('style.css')
+const APP_URL = asset('app.js')
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
@@ -49,8 +61,8 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="pit.world">
 <link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
-<link rel="stylesheet" href="/style.css">
-<script src="/app.js" defer></script>
+<link rel="stylesheet" href="${STYLE_URL}">
+<script src="${APP_URL}" defer></script>
 </head>
 <body class="${options.bodyClass ?? ''}">
 ${options.body}
