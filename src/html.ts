@@ -58,6 +58,7 @@ ${options.body}
   <nav>
     <a href="/privacy">Privacy</a>
     <a href="/connect">Connect to Moshpit</a>
+    <a href="/build">Build an app</a>
     <a href="/about">How it works</a>
     <a href="/about#default">Make it your default</a>
     <a href="/about#bangs">Bangs</a>
@@ -145,6 +146,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     </ul>
     <p class="default"><a href="/about#default">Make pit.world your default search →</a></p>
     <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
+    <p class="default"><a href="/build">Build an app: $49, then $2 a month →</a></p>
   </header>
   ${networkPanel(stats)}
   ${options.newsletter ? newsletterForm() : ''}
@@ -457,6 +459,54 @@ export function newsletterPage(kind: 'check' | 'invalid' | 'undeliverable' | 'fa
 <h1>${esc(copy[0])}</h1>
 <p>${esc(copy[1])}</p>
 ${retry ? newsletterForm() : '<p><a class="btn" href="/">Back to search</a></p>'}
+</main>`,
+  })
+}
+
+export function buildPage(): string {
+  return layout({
+    title: 'Build an app: $49, then $2 a month to keep it online · pit.world',
+    description: 'Describe an app in plain words. AI agents build it on the open source Profullstack stack, you approve it, and it stays online for $2 a month. Paid in crypto through CoinPay.',
+    path: '/build',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose build">
+<p class="kicker">Build an app</p>
+<h1>Describe it. We build it. $2 a month keeps it online.</h1>
+<p class="lede">Tell an AI product team what you want, in your own words. It writes a plan you can argue with, builds the app on the open source <a href="${LINKS.stack}">Profullstack stack</a>, and shows you it working before anything launches. Then it stays online for $2 a month.</p>
+
+<form class="idea" action="${LINKS.chovyStart}" method="get">
+  <label for="idea">What should it do?</label>
+  <textarea id="idea" name="idea" rows="5" maxlength="2000" required placeholder="A booking page for my barbershop: customers pick a barber and a time, pay a deposit, and get a text reminder the day before."></textarea>
+  <input type="hidden" name="plan" value="starter">
+  <input type="hidden" name="ref" value="pitworld">
+  <button class="btn" type="submit">Start building →</button>
+  <p class="small">You continue on chovy.com, where the agents work. Your idea is sent there, not kept here.</p>
+</form>
+
+<div class="prices">
+  <div><b>$49</b><span>once, to build it</span><p>One small app: pages, a database, sign-in and payments where it needs them, on your own subdomain.</p></div>
+  <div><b>$2</b><span>a month, to keep it online</span><p>Hosting for that one app. Stop paying and it is paused, not deleted; pay again and it is back.</p></div>
+</div>
+<p>Both are paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>. No card, no account with a payment company.</p>
+
+<h2>What you get</h2>
+<ul>
+<li><b>A real app, not a mock-up.</b> It is not called finished until it can be shown working.</li>
+<li><b>You approve the launch.</b> Nothing goes live without your yes.</li>
+<li><b>You own it.</b> The code and the domain are yours. Take them anywhere.</li>
+<li><b>An open stack.</b> MIT-licensed packages pulled out of 170 products that run on them, with a CLI, a terminal app and an MCP server where it makes sense.</li>
+</ul>
+
+<h2>Questions</h2>
+<h3>Do I need to know how to code?</h3>
+<p>No. Describe what you want the way you would to a friend. The agents ask when something is unclear.</p>
+<h3>What does "small app" mean?</h3>
+<p>One focused product: a booking page, a shop for a few items, a directory, a tool for your team. Bigger builds are possible on chovy.com and priced there.</p>
+<h3>What happens if I stop paying the $2?</h3>
+<p>The app is paused, not deleted. Pay again and it comes back as it was.</p>
+<h3>Who builds it?</h3>
+<p><a href="https://chovy.com">Chovy</a>, an AI product team by Profullstack, Inc., the people behind pit.world.</p>
 </main>`,
   })
 }

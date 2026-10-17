@@ -23,6 +23,9 @@ export const LINKS = {
   tronInstall: 'curl -fsSL https://tronbrowser.dev/install.sh | sh',
   /** The registry's root, as it publishes it; pit.world serves the same file at /moshpit-root-ca.crt. */
   ca: 'https://pit.moshcode.sh/api/moshpit/ca.crt',
+  /** Where /build hands an app idea: chovy.com's start flow, Starter plan, credited to pit.world. */
+  chovyStart: 'https://chovy.com/start',
+  stack: 'https://profullstack.com/stack',
 }
 
 /** CN=Moshpit Root CA, O=Moshpit, valid to 2046-09-11. Anyone installing it should check this first. */
