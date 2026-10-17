@@ -104,20 +104,27 @@ export function matches(promo: Promo, query: string): boolean {
 }
 
 /**
- * What to show for a search in a tab. Live shows everything live (matches first);
- * Videos and Music show listings that mention the search, then anything live.
- * PairUX always leads.
+ * What to show for a search in a tab. PairUX leads: on Live every channel and
+ * room (matches and live ones first), on Videos the live ones and those that
+ * mention the search. Then nixamp, always, since it streams live and on demand.
+ * Music is nixamp only.
  */
 export function pick(all: Promo[], query: string, vertical: Vertical): Promo[] {
   if (vertical === 'web' || vertical === 'images') return []
-  const pool = vertical === 'music' ? all.filter((p) => p.source === 'nixamp') : all
-  const score = (p: Promo) => (matches(p, query) ? 4 : 0) + (p.live ? 2 : 0) + (p.source === 'pairux' ? 1 : 0)
-  const shown = pool.filter((p) => matches(p, query) || p.live || vertical === 'live')
+  const score = (p: Promo) => (matches(p, query) ? 4 : 0) + (p.live ? 2 : 0)
   const seen = new Set<string>()
-  return shown
-    .sort((a, b) => score(b) - score(a))
-    .filter((p) => (seen.has(p.url) ? false : (seen.add(p.url), true)))
-    .slice(0, vertical === 'live' ? 12 : 6)
+  const best = (source: Promo['source'], keep: (p: Promo) => boolean, max: number) =>
+    all
+      .filter((p) => p.source === source && keep(p))
+      .sort((a, b) => score(b) - score(a))
+      .filter((p) => (seen.has(p.url) ? false : (seen.add(p.url), true)))
+      .slice(0, max)
+  // nixamp is live and on demand, so it is always offered on Videos, Music and Live.
+  // Each source has its own slots, so sixty PairUX channels never crowd it out.
+  const nixamp = best('nixamp', () => true, vertical === 'music' ? 6 : 4)
+  if (vertical === 'music') return nixamp
+  const pairux = best('pairux', (p) => vertical === 'live' || p.live || matches(p, query), vertical === 'live' ? 8 : 4)
+  return [...pairux, ...nixamp]
 }
 
 export class Promoted {
