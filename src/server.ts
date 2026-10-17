@@ -6,7 +6,8 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, connectPage, homePage, mobileConfig, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, connectPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
@@ -18,6 +19,9 @@ export type Deps = {
   limiter?: RateLimiter
   fetch?: typeof fetch
   publicDir?: string
+  newsletter?: Newsletter
+  /** Bearer token for /api/admin/*; unset means the admin API is off. */
+  adminToken?: string
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -57,7 +61,40 @@ export function createApp(deps: Deps) {
     }
   }
 
-  app.get('/', async (c) => c.html(homePage(await registry.stats())))
+  const newsletter = deps.newsletter
+  app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false })))
+
+  // --- newsletter (double opt-in) ------------------------------------------------
+  app.post('/subscribe', async (c) => {
+    if (!newsletter?.enabled) return c.notFound()
+    if (limited(c)) return c.html(newsletterPage('limited'), 429, { 'retry-after': '30' })
+    const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
+    // The honeypot: a field people never see. A bot that fills it gets the normal answer and nothing else.
+    if (typeof form.website === 'string' && form.website !== '') return c.html(newsletterPage('check'))
+    const result = await newsletter.signup(form.email)
+    const page = result === 'sent' || result === 'already' ? 'check' : result
+    return c.html(newsletterPage(page), page === 'check' ? 200 : page === 'failed' ? 503 : 400)
+  })
+  app.post('/api/subscribe', async (c) => {
+    if (!newsletter?.enabled) return c.json({ error: 'The newsletter is not open on this instance.' }, 404)
+    if (limited(c)) {
+      c.header('retry-after', '30')
+      return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { email?: unknown }
+    const result = await newsletter.signup(body.email)
+    if (result === 'sent' || result === 'already') return c.json({ ok: true, status: 'check-inbox' })
+    const status = { invalid: 400, undeliverable: 400, failed: 503 }[result]
+    return c.json({ ok: false, status: result }, status as 400 | 503)
+  })
+  app.get('/confirm', (c) => {
+    if (!newsletter) return c.notFound()
+    return newsletter.confirm(c.req.query('t')) ? c.html(newsletterPage('confirmed')) : c.html(newsletterPage('expired'), 410)
+  })
+  app.get('/api/admin/subscribers.csv', (c) => {
+    if (!newsletter || !adminAuthorized(c.req.header('authorization'), deps.adminToken)) return c.json({ error: 'unauthorized' }, 401)
+    return c.body(newsletter.csv(), 200, { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store' })
+  })
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
@@ -169,7 +206,10 @@ export function keysFromEnv(env: Record<string, string | undefined> = process.en
 }
 
 export function serve(options: { port?: number; hostname?: string } = {}) {
-  const app = createApp({ keys: keysFromEnv() })
+  const env = process.env
+  const dataDir = env.PIT_DATA_DIR ?? `${env.HOME ?? '.'}/.local/share/pit-world`
+  const newsletter = new Newsletter(env.PIT_NEWSLETTER_DB ?? `${dataDir}/newsletter.db`, env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null)
+  const app = createApp({ keys: keysFromEnv(), newsletter, ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 8787),
