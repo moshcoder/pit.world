@@ -25,7 +25,9 @@
 #   PORT           the app listens here, on loopback   (default: 3000)
 #   HEALTH_PATH    GET this until it answers 2xx/3xx   (default: /)
 #   HEALTH_TIMEOUT seconds                             (default: 120)
-#   DOMAINS        "example.com www.example.com": nginx site for them, none if empty
+#   DOMAINS        "example.com www.example.com": nginx site for them, none if empty.
+#                  The first is canonical: once TLS is up, every other name
+#                  (and plain http) answers 301 to https://<first>.
 #   TLS            1 | 0: Let's Encrypt via certbot    (default: 1)
 #   TLS_EMAIL      ACME account email                  (default: none)
 #   STATIC_DIR     RUNTIME=static: directory nginx serves (default: dist)
@@ -318,8 +320,9 @@ EOF
 }
 
 nginx_conf() {
-  local cert="$1" first
+  local cert="$1" first aliases
   first="${DOMAINS%% *}"
+  aliases="$(printf '%s' "${DOMAINS#"$first"}" | xargs)"
   local body
   if [ "$RUNTIME" = static ]; then
     local fallback='=404'
@@ -348,13 +351,27 @@ server {
     listen [::]:80;
     server_name $DOMAINS;
 $( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n    error_log /var/log/nginx/%s.error.log crit;\n' "$APP" )
-    return 301 https://\$host\$request_uri;
+    return 301 https://$first\$request_uri;
 }
+$( [ -n "$aliases" ] && cat <<ALIAS
+
+# One hostname per site: every other name (www.*) answers with a 301 to $first.
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name $aliases;
+    ssl_certificate /etc/letsencrypt/live/$first/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/$first/privkey.pem;
+$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n    error_log /var/log/nginx/%s.error.log crit;\n' "$APP" )
+    return 301 https://$first\$request_uri;
+}
+ALIAS
+)
 
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    server_name $DOMAINS;
+    server_name $first;
     ssl_certificate /etc/letsencrypt/live/$first/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$first/privkey.pem;
     client_max_body_size $MAX_BODY;
