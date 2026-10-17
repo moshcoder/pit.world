@@ -539,6 +539,19 @@ describe('promotion: the verifier is not a visitor', () => {
   })
 })
 
+describe('promotion: the CLI', () => {
+  it('passes configure --config through the top-level argument handling (which takes --json for itself)', async () => {
+    const { main } = await import('../src/cli.ts')
+    const h = setup()
+    process.env.PIT_ADMIN_TOKEN = 'admintoken'
+    const client = new PitClient('https://pit.world', (async (input: any, init: any) => h.app.request(String(input).replace('https://pit.world', ''), init, { ip: '127.0.0.1' })) as any)
+    const lines: string[] = []
+    const out = { log: (t: string) => lines.push(t), error: (t: string) => lines.push(`ERR ${t}`) }
+    expect(await main(['promo', 'configure', h.campaign, '--config', '{"perAccountPerDay":3}'], out, client)).toBe(0)
+    expect(h.promo.campaign(h.campaign).config.perAccountPerDay).toBe(3)
+  })
+})
+
 afterAll(() => {
   delete process.env.PIT_ADMIN_TOKEN
 })

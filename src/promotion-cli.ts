@@ -11,7 +11,7 @@ export const PROMO_HELP = `pit promo: promotion campaigns (operators; needs PIT_
   pit promo campaigns                       every campaign
   pit promo create --source-ref cmp_... --name N --slug S --title T [--intro TEXT]
   pit promo show ID                         overview: members, holds, posts, windows, reports
-  pit promo configure ID --json '{"spotlightAccounts":[...]}'
+  pit promo configure ID --config '{"spotlightAccounts":[...]}'  (or --config @FILE.json)
   pit promo import ID SNAPSHOT.json [--dry-run]
                                             a complete OutreachGraph snapshot
                                             (scripts/outreachgraph-campaign-export.sh)
@@ -98,8 +98,8 @@ export async function promoMain(args: string[], out: Out, client: PitClient, jso
       })
     }
     case 'configure': {
-      need(id && f.json, `configure ID --json '{...}'`)
-      return show(await client.promo('PATCH', `/campaigns/${e(id)}`, { config: JSON.parse(f.json!) }))
+      need(id && f.config, `configure ID --config '{...}' | --config @FILE.json`)
+      return show(await client.promo('PATCH', `/campaigns/${e(id)}`, { config: JSON.parse(f.config!.startsWith('@') ? readFileSync(f.config!.slice(1), 'utf8') : f.config!) }))
     }
     case 'import': {
       need(id && rest[1], 'import ID SNAPSHOT.json [--dry-run]')
