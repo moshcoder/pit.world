@@ -1,4 +1,5 @@
 #!/bin/sh
-# /etc/letsencrypt/renewal-hooks/deploy/reload-nginx: renewed certificates (the
-# <name>.pit.world relay hosts among them) reach nginx only on reload.
+# /etc/letsencrypt/renewal-hooks/deploy/reload-nginx: renewed certificates reach nginx
+# only on reload; the <name>.pit.world relay copies are refreshed first.
+/usr/local/bin/pit-proxy-cert --renewed
 nginx -t -q && systemctl reload nginx
