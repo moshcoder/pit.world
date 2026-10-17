@@ -1,0 +1,50 @@
+{
+  "name": "pitworld",
+  "version": "0.1.0",
+  "description": "pit.world: private search, and the front door to the Moshpit network. Web, API, CLI, TUI and MCP.",
+  "license": "MIT",
+  "type": "module",
+  "homepage": "https://pit.world",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/moshcoder/pit.world.git"
+  },
+  "bin": {
+    "pit": "bin/pit"
+  },
+  "files": [
+    "bin/pit",
+    "src",
+    "public",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "bun": ">=1.1"
+  },
+  "scripts": {
+    "start": "bun src/server.ts",
+    "dev": "bun --watch src/server.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@profullstack/hqtui": "^0.10.3",
+    "hono": "^4.8.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.9.0"
+  },
+  "keywords": [
+    "search",
+    "private search",
+    "moshpit",
+    "dns",
+    "mcp",
+    "cli",
+    "tui"
+  ]
+}
