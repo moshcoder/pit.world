@@ -161,6 +161,7 @@ export function createApp(deps: Deps) {
 export function keysFromEnv(env: Record<string, string | undefined> = process.env): Keys {
   return {
     serper: env.SERPER_API_KEY,
+    bing: env.DATAFORSEO_LOGIN && env.DATAFORSEO_PASSWORD ? `${env.DATAFORSEO_LOGIN}:${env.DATAFORSEO_PASSWORD}` : undefined,
     linkup: env.LINKUP_API_KEY,
     exa: env.EXA_API_KEY,
     perplexity: env.PERPLEXITY_API_KEY,
