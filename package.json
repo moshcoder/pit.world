@@ -1,6 +1,7 @@
 {
   "name": "pitworld",
-  "version": "0.1.0",
+  "version": "0.1.1",
+  "mcpName": "world.pit/pit",
   "description": "pit.world: private search, and the front door to the Moshpit network. Web, API, CLI, TUI and MCP.",
   "license": "MIT",
   "type": "module",

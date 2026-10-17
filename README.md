@@ -55,7 +55,7 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 | Web + API | `bun src/server.ts` (`PORT`, `HOST`; provider keys `SERPER_API_KEY`, `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` (Bing), `LINKUP_API_KEY`, `EXA_API_KEY`, `PERPLEXITY_API_KEY`) |
 | CLI | `pit search`, `pit resolve`, `pit network`, `pit open` |
 | TUI | `pit` |
-| MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network` |
+| MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
 | PWA | installable from any browser (`/manifest.webmanifest`, share target into `/search`); the worker in `public/sw.js` caches the static shell and an offline page, never a search |
 
 The CLI, TUI and MCP talk to `https://pit.world` (or `PIT_URL`), so they need no keys.

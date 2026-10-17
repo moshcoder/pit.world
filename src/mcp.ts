@@ -12,7 +12,7 @@ import { PitClient } from './client.js'
 export function createMcpServer(client = new PitClient()): McpServer {
   // Typed loosely: the SDK's generic tool() signature recurses past TypeScript's
   // instantiation depth with zod shapes. The shapes are still validated at runtime.
-  const server: any = new McpServer({ name: 'pit.world', version: '0.1.0' })
+  const server: any = new McpServer({ name: 'pit.world', version: '0.1.1' })
 
   server.tool(
     'search',
