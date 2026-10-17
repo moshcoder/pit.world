@@ -34,7 +34,9 @@
 #   REDIS          0 | 1: local redis, REDIS_URL in db.env                 (default: 0)
 #   MAX_BODY       nginx client_max_body_size          (default: 100m)
 #   ACCESS_LOG     on | off: nginx access log for the site (default: on).
-#                  pit.world sets off: a private search engine keeps no request log.
+#                  off also raises the site's error log to crit, because nginx
+#                  writes the request line (query string included) into
+#                  error-level entries. pit.world sets off: it keeps no request log.
 #   SRC_DIR        the checkout to build               (default: this script's repo)
 #   APP_DIR        where the service runs from         (default: SRC_DIR)
 #   STATE_DIR      app.env, db.env, run.sh             (default: ~/.local/share/<APP>)
@@ -345,7 +347,7 @@ server {
     listen 80;
     listen [::]:80;
     server_name $DOMAINS;
-$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n' )
+$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n    error_log /var/log/nginx/%s.error.log crit;\n' "$APP" )
     return 301 https://\$host\$request_uri;
 }
 
@@ -356,7 +358,7 @@ server {
     ssl_certificate /etc/letsencrypt/live/$first/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/$first/privkey.pem;
     client_max_body_size $MAX_BODY;
-$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n' )
+$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n    error_log /var/log/nginx/%s.error.log crit;\n' "$APP" )
 $body
 }
 EOF
@@ -367,7 +369,7 @@ server {
     listen [::]:80;
     server_name $DOMAINS;
     client_max_body_size $MAX_BODY;
-$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n' )
+$( [ "$ACCESS_LOG" = off ] && printf '    access_log off;\n    error_log /var/log/nginx/%s.error.log crit;\n' "$APP" )
 $body
 }
 EOF
