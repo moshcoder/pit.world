@@ -309,6 +309,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       // <name>.pit.world is a Moshpit name relayed to the old internet (src/proxy.ts), not pit.world itself.
       const name = proxiedName(request.headers.get('host'))
       if (name) return proxyRequest(request, name, forwarded || peer, (local && request.headers.get('x-forwarded-proto')) || 'http', proxyDeps)
+      // threatcrush-disable-next-line js-ssrf-outbound-request  not an outbound request: Hono's in-process dispatch of the incoming request
       return app.fetch(request, { ip: forwarded || peer })
     },
   })
