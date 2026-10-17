@@ -1,0 +1,44 @@
+# Ship every merge to dev2, where pit.world runs as root from /opt/pit.world.
+# PIT_DEPLOY_KEY is a root key restricted on dev2 to one forced command,
+# /usr/local/bin/pit-world-deploy, which takes a commit already on origin/main,
+# fast-forwards the checkout to it and runs bin/install.sh. It can do nothing else.
+name: Deploy to dev2
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-dev2
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Set up ssh
+        env:
+          SSH_KEY: ${{ secrets.PIT_DEPLOY_KEY }}
+          KNOWN_HOSTS: ${{ secrets.PIT_KNOWN_HOSTS }}
+        run: |
+          install -d -m 700 ~/.ssh
+          printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          printf '%s\n' "$KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/known_hosts
+
+      - name: Deploy
+        env:
+          SHA: ${{ github.sha }}
+        run: ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 root@dev2.profullstack.com "deploy $SHA"
+
+      - name: Verify the site answers
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' https://pit.world/health || true)
+            if [ "$code" = 200 ]; then echo "pit.world $code"; exit 0; fi
+            echo "attempt $i: $code"; sleep 10
+          done
+          echo "pit.world never answered"; exit 1
