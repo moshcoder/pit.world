@@ -6,7 +6,7 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, connectPage, errorPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, buildPage, connectPage, errorPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
@@ -98,6 +98,7 @@ export function createApp(deps: Deps) {
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
+  app.get('/build', (c) => c.html(buildPage()))
   app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
   app.get('/robots.txt', (c) =>
@@ -105,7 +106,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/about', '/privacy']
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/about', '/privacy']
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,

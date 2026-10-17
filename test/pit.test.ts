@@ -357,3 +357,17 @@ describe('Google + Bing', () => {
     expect(merged[0]!.sources).toEqual(['serper', 'bing'])
   })
 })
+
+describe('/build', () => {
+  it('hands the idea to chovy.com on the Starter plan, credited to pit.world, linked from home', async () => {
+    const { request } = app()
+    const html = await (await request('/build')).text()
+    expect(html).toContain('action="https://chovy.com/start"')
+    expect(html).toContain('name="plan" value="starter"')
+    expect(html).toContain('name="ref" value="pitworld"')
+    expect(html).toContain('$49')
+    expect(html).toContain('$2')
+    expect(await (await request('/')).text()).toContain('href="/build"')
+    expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/build')
+  })
+})
