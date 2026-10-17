@@ -45,6 +45,7 @@ export const RING: RingSite[] = [
   { name: 'pit.world', about: 'Private search, and the front door of the Moshpit network.', moshpit: false, feed: 'https://pit.world/b/feed.xml' },
   { name: 'seo.rank', about: 'Free, open-source on-page SEO audit. API, CLI and MCP.', moshpit: true },
   { name: 'family.ancestry', about: 'Your family tree, on your own name. Import GEDCOM, share by link.', moshpit: true },
+  { name: 'pay.agent', about: 'Get paid in crypto with one link. Sign in with CoinPay; people and agents pay you by name.', moshpit: true },
 ]
 
 let source: (() => ListingMember[]) | null = null
