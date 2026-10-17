@@ -127,6 +127,14 @@ pre code { background: none; padding: 0; }
 .prose li { margin: 6px 0; }
 .bangs { border-collapse: collapse; width: 100%; font-size: 15px; }
 .bangs td { padding: 6px 8px; border-bottom: 1px solid var(--line); }
+.prose h3 { margin: 22px 0 6px; font-size: 17px; }
+.prose pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.prose .lede { font-size: 17px; }
+.methods { border-collapse: collapse; width: 100%; font-size: 15px; margin: 8px 0 4px; }
+.methods th, .methods td { text-align: left; padding: 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.methods th { font: 700 12px var(--mono); color: var(--muted); text-transform: uppercase; letter-spacing: 0.1em; }
+.toc { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px 18px 12px 36px; }
+.fp { overflow-wrap: anywhere; }
 
 .foot { border-top: 1px solid var(--line); padding: 22px 16px 30px; text-align: center; color: var(--muted); font-size: 14px; }
 .foot nav { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; margin-bottom: 8px; }
