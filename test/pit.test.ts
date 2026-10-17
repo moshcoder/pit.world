@@ -7,6 +7,7 @@ import { esc } from '../src/html.ts'
 import { looksLikeName, MOSHPIT_ROOT_SHA256, Registry } from '../src/moshpit.ts'
 import { RateLimiter } from '../src/ratelimit.ts'
 import { Cache, cleanHits, mergeResults, parseDataForSeo, parseSerper, search, SearchUnavailable } from '../src/search.ts'
+import { pick } from '../src/promoted.ts'
 import { createApp } from '../src/server.ts'
 import { initialState, onKey } from '../src/tui.ts'
 
@@ -324,6 +325,15 @@ describe('categories: images, videos, music, live', () => {
     expect(pairux).toBeLessThan(nixamp)
     expect(nixamp).toBeLessThan(web)
     expect(html).toContain('https://pairux.com/@chovy')
+  })
+
+  it('keeps room for nixamp however many PairUX channels there are', () => {
+    const channels = Array.from({ length: 60 }, (_, i) => ({ source: 'pairux' as const, title: `Channel ${i}`, url: `https://pairux.com/@c${i}`, line: '', live: false }))
+    const stream = { source: 'nixamp' as const, title: 'server1', url: 'https://server1.chovy.nixamp.com:4321/view/k', line: '5,719 on demand', live: false }
+    const live = pick([...channels, stream], 'coding', 'live')
+    expect(live.at(-1)).toEqual(stream)
+    expect(live[0]!.source).toBe('pairux')
+    expect(pick([...channels, stream], 'coding', 'videos')).toEqual([stream])
   })
 
   it('keeps music to music sites and to nixamp', async () => {
