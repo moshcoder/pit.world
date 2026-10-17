@@ -647,7 +647,7 @@ export class Promotion {
       .query(`SELECT * FROM promo_placements WHERE campaign_id = ? AND (lease_until IS NULL OR lease_until < ?)
                 AND ((channel = 'myna' AND state IN ('ready', 'publishing') AND planned_at <= ?) OR state IN ('scheduled', 'uncertain')
                      OR (state = 'published' AND account NOT LIKE 'linkedin:%'))
-              ORDER BY planned_at LIMIT ?`)
+              ORDER BY CASE WHEN state IN ('ready', 'publishing') THEN 0 ELSE 1 END, CASE WHEN state IN ('ready', 'publishing') THEN planned_at ELSE updated_at END LIMIT ?`)
       .all(c.id, now, now, max) as any[]
     const leased = []
     for (const r of rows) {

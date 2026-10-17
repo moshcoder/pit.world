@@ -121,7 +121,7 @@ export type WorkerResult = { placement: string; action: string; state?: string; 
 
 /** One pass over what the lease hands out. Returns what it did, per placement. */
 export async function workOnce(client: PitClient, campaignId: string, myna: Myna, options: { owner?: string; max?: number; fetch?: typeof fetch } = {}): Promise<WorkerResult[]> {
-  const { placements, reason } = await client.promo<{ placements: Placement[]; reason?: string }>('POST', `/campaigns/${encodeURIComponent(campaignId)}/lease`, { owner: options.owner ?? 'myna-worker', max: options.max ?? 5 })
+  const { placements, reason } = await client.promo<{ placements: Placement[]; reason?: string }>('POST', `/campaigns/${encodeURIComponent(campaignId)}/lease`, { owner: options.owner ?? 'myna-worker', max: options.max ?? 20 })
   if (reason) return [{ placement: '-', action: 'idle', detail: reason }]
   const out: WorkerResult[] = []
   const report = async (p: Placement, body: Record<string, unknown>, action: string) => {
