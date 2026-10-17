@@ -2,7 +2,7 @@
 import { docPage, esc } from './html.js'
 import type { ClaimStart, ContactStatus, Listing } from './listings.js'
 import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel } from './pros.js'
-import { ringSnippet, RSS_RING } from './ring.js'
+import { proxyUrl, ringSnippet, RSS_RING } from './ring.js'
 
 const p = (s: string) => encodeURIComponent(s)
 const ext = (href: string, text: string) => `<a href="${esc(href)}" rel="noreferrer noopener">${esc(text)}</a>`
@@ -19,8 +19,12 @@ function licenseRow(l: Listing): string {
   return `<li><b>License</b> ${esc(l.license)}${esc(checked)}${verify}</li>`
 }
 
-/** The listing's website: a link on its own domain (some sites only answer on www or http), else https://<domain>/. */
+/**
+ * The listing's website: a link on its own domain (some sites only answer on www or http), else https://<domain>/.
+ * A site that lives only on Moshpit opens through our relay, so the link works in any browser.
+ */
 export function siteUrl(l: Listing): string {
+  if (l.moshpitOnly) return proxyUrl(l.domain)
   const own = l.links.find((u) => {
     try {
       return new URL(u).hostname.replace(/^www\./, '') === l.domain
@@ -49,7 +53,7 @@ function details(l: Listing): string {
     l.address && `<li><b>Address</b> ${esc(l.address)}</li>`,
     licenseRow(l),
     l.phone && `<li><b>Phone</b> <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">${esc(l.phone)}</a></li>`,
-    l.moshpit && `<li><b>On Moshpit</b> ${ext(`https://${l.moshpit}/`, l.moshpit)}</li>`,
+    l.moshpit && `<li><b>On Moshpit</b> ${ext(`https://${l.moshpit}/`, l.moshpit)} · ${ext(proxyUrl(l.moshpit), `${l.moshpit}.pit.world`)} <span class="muted">(any browser)</span></li>`,
     l.feed && `<li><b>Feed</b> ${ext(l.feed, bare(l.feed))}</li>`,
     ...l.links.filter((u) => u !== siteUrl(l)).map((u) => `<li>${ext(u, bare(u))}</li>`),
   ].filter(Boolean)

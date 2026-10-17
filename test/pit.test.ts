@@ -522,3 +522,16 @@ describe('the Moshpit ring', () => {
     expect((await request('/ring/sideways')).status).toBe(404)
   })
 })
+
+describe('the Moshpit name card leads with a link that opens anywhere', () => {
+  it('a served name links through <name>.pit.world, with the bare name for Moshpit DNS', async () => {
+    const { resultsPage } = await import('../src/html.ts')
+    const page = resultsPage({ query: 'family.tree', result: null, error: null, resolution: { name: 'family.tree', registered: true, nameRegistered: true, target: 'dev2.profullstack.com', mode: 'clearnet', page: 'https://pit.moshcode.sh/n/family.tree' } })
+    expect(page).toContain('<h2><a href="https://family.tree.pit.world/"')
+    expect(page).toContain('class="btn" href="https://family.tree.pit.world/" rel="noreferrer noopener">Open family.tree</a>')
+    expect(page).toContain('href="https://family.tree/" rel="noreferrer noopener">On Moshpit DNS</a>')
+    const unclaimed = resultsPage({ query: 'nobody.tree', result: null, error: null, resolution: { name: 'nobody.tree', registered: true, nameRegistered: false, target: null, mode: null, page: 'https://pit.moshcode.sh/n/nobody.tree' } })
+    expect(unclaimed).not.toContain('nobody.tree.pit.world')
+    expect(unclaimed).toContain('>Claim it</a>')
+  })
+})
