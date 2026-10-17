@@ -9,7 +9,8 @@ import type { NetworkStats, Resolution } from './moshpit.js'
 export type ApiSearch = {
   query: string
   provider: string | null
-  cached: boolean
+  /** Older servers only; pit.world no longer says whether an answer came from its cache. */
+  cached?: boolean
   results: Hit[]
   moshpit: Resolution | null
 }
@@ -40,5 +41,18 @@ export class PitClient {
 
   network(): Promise<NetworkStats> {
     return this.get('/api/network')
+  }
+
+  /** Start a newsletter signup; the address only joins after the emailed link is clicked. */
+  async subscribe(email: string): Promise<{ ok: boolean; status: string }> {
+    const response = await this.fetchImpl(`${this.base}/api/subscribe`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ email }),
+      signal: AbortSignal.timeout(15_000),
+    })
+    const body = (await response.json().catch(() => ({}))) as any
+    if (response.status === 429 || response.status === 404) throw new Error(body?.error ?? `HTTP ${response.status}`)
+    return { ok: Boolean(body?.ok), status: String(body?.status ?? `HTTP ${response.status}`) }
   }
 }

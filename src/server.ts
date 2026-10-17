@@ -6,7 +6,8 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, connectPage, homePage, mobileConfig, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, connectPage, errorPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
@@ -18,6 +19,9 @@ export type Deps = {
   limiter?: RateLimiter
   fetch?: typeof fetch
   publicDir?: string
+  newsletter?: Newsletter
+  /** Bearer token for /api/admin/*; unset means the admin API is off. */
+  adminToken?: string
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -25,7 +29,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'",
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
@@ -57,13 +61,48 @@ export function createApp(deps: Deps) {
     }
   }
 
-  app.get('/', async (c) => c.html(homePage(await registry.stats())))
+  const newsletter = deps.newsletter
+  app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false })))
+
+  // --- newsletter (double opt-in) ------------------------------------------------
+  app.post('/subscribe', async (c) => {
+    if (!newsletter?.enabled) return c.notFound()
+    if (limited(c)) return c.html(newsletterPage('limited'), 429, { 'retry-after': '30' })
+    const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
+    // The honeypot: a field people never see. A bot that fills it gets the normal answer and nothing else.
+    if (typeof form.website === 'string' && form.website !== '') return c.html(newsletterPage('check'))
+    const result = await newsletter.signup(form.email)
+    const page = result === 'sent' || result === 'already' ? 'check' : result
+    return c.html(newsletterPage(page), page === 'check' ? 200 : page === 'failed' ? 503 : 400)
+  })
+  app.post('/api/subscribe', async (c) => {
+    if (!newsletter?.enabled) return c.json({ error: 'The newsletter is not open on this instance.' }, 404)
+    if (limited(c)) {
+      c.header('retry-after', '30')
+      return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { email?: unknown }
+    const result = await newsletter.signup(body.email)
+    if (result === 'sent' || result === 'already') return c.json({ ok: true, status: 'check-inbox' })
+    const status = { invalid: 400, undeliverable: 400, failed: 503 }[result]
+    return c.json({ ok: false, status: result }, status as 400 | 503)
+  })
+  app.get('/confirm', (c) => {
+    if (!newsletter) return c.notFound()
+    return newsletter.confirm(c.req.query('t')) ? c.html(newsletterPage('confirmed')) : c.html(newsletterPage('expired'), 410)
+  })
+  app.get('/api/admin/subscribers.csv', (c) => {
+    if (!newsletter || !adminAuthorized(c.req.header('authorization'), deps.adminToken)) return c.json({ error: 'unauthorized' }, 401)
+    return c.body(newsletter.csv(), 200, { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store' })
+  })
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
   app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
-  app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n'))
+  app.get('/robots.txt', (c) =>
+    c.body('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
+  )
   app.get('/sitemap.xml', (c) =>
     c.body(
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/about', '/privacy']
@@ -112,10 +151,11 @@ export function createApp(deps: Deps) {
       c.header('retry-after', '30')
       return c.json({ error: 'rate limited' }, 429)
     }
-    const n = Number(c.req.query('n') ?? 10)
-    const [{ result, error }, resolution] = await Promise.all([runSearch(query, Number.isFinite(n) ? n : 10), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const raw = Math.trunc(Number(c.req.query('n') ?? 10))
+    const n = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 20) : 10
+    const [{ result, error }, resolution] = await Promise.all([runSearch(query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     if (!result) return c.json({ query, error, moshpit: resolution }, 503)
-    return c.json({ query: result.query, provider: result.provider, cached: result.cached, results: result.hits, moshpit: resolution })
+    return c.json({ query, provider: result.provider, results: result.hits, moshpit: resolution })
   })
 
   app.get('/api/resolve', async (c) => {
@@ -153,7 +193,15 @@ export function createApp(deps: Deps) {
     c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
   )
 
-  app.notFound((c) => c.html(homePage(null).replace('<p class="tag">', '<p class="tag">That page does not exist. '), 404))
+  app.notFound((c) =>
+    c.req.path.startsWith('/api/')
+      ? c.json({ error: 'not found' }, 404)
+      : c.html(homePage(null).replace('<p class="tag">', '<p class="tag">That page does not exist. ').replace(/<link rel="canonical"[^>]*>/, '<meta name="robots" content="noindex">'), 404),
+  )
+  // Nothing about the request is logged, the query least of all.
+  app.onError((_error, c) =>
+    c.req.path.startsWith('/api/') ? c.json({ error: 'Something went wrong.' }, 500) : c.html(errorPage(), 500),
+  )
   return app
 }
 
@@ -169,7 +217,10 @@ export function keysFromEnv(env: Record<string, string | undefined> = process.en
 }
 
 export function serve(options: { port?: number; hostname?: string } = {}) {
-  const app = createApp({ keys: keysFromEnv() })
+  const env = process.env
+  const dataDir = env.PIT_DATA_DIR ?? `${env.HOME ?? '.'}/.local/share/pit-world`
+  const newsletter = new Newsletter(env.PIT_NEWSLETTER_DB ?? `${dataDir}/newsletter.db`, env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null)
+  const app = createApp({ keys: keysFromEnv(), newsletter, ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 8787),

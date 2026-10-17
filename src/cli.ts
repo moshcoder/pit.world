@@ -5,6 +5,7 @@
  *   pit search WORDS [--json] [-n N]
  *   pit resolve NAME [--json]   a Moshpit name
  *   pit network [--json]        live Moshpit numbers
+ *   pit subscribe EMAIL         newsletter signup (confirm by email)
  *   pit open WORDS              the results page in your browser
  *   pit mcp                     MCP server on stdio
  *   pit serve [--port N]        run your own pit.world (needs provider keys)
@@ -18,6 +19,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit search WORDS [-n N]      search the web privately
   pit resolve NAME             look up a Moshpit name (chovy.hacker)
   pit network                  live numbers for the Moshpit network
+  pit subscribe EMAIL          get the pit.world newsletter (double opt-in)
   pit open WORDS               open the results page in your browser
   pit mcp                      MCP server on stdio: claude mcp add pit -- pit mcp
   pit serve [--port N]         run your own instance (SERPER_API_KEY etc.)
@@ -60,7 +62,7 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
           out.log(JSON.stringify(result, null, 2))
           return 0
         }
-        if (result.moshpit?.registered) out.log(`◉ Moshpit: ${result.moshpit.name}${result.moshpit.target ? ` → ${result.moshpit.target}` : ''}  ${result.moshpit.page}\n`)
+        if (result.moshpit?.nameRegistered) out.log(`◉ Moshpit: ${result.moshpit.name}${result.moshpit.target ? ` → ${result.moshpit.target}` : ''}  ${result.moshpit.page}\n`)
         result.results.forEach((hit, i) => {
           out.log(`${String(i + 1).padStart(2)}. ${hit.title}\n    ${hit.url}${hit.description ? `\n    ${hit.description}` : ''}`)
         })
@@ -73,8 +75,24 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         if (!name) return usage(out, 'pit resolve NAME')
         const r = await client.resolve(name)
         if (json) out.log(JSON.stringify(r, null, 2))
-        else out.log(r.registered ? `${r.name} is on the Moshpit network${r.target ? `, pointing at ${r.target}` : ''}.\n${r.page}` : `${r.name} is not registered. Claim it: ${r.page}`)
+        else out.log(r.nameRegistered ? `${r.name} is on the Moshpit network${r.target ? `, pointing at ${r.target}` : ''}.\n${r.page}` : `${r.name} is not registered. Claim it: ${r.page}`)
         return 0
+      }
+      case 'subscribe': {
+        const email = words[0]
+        if (!email) return usage(out, 'pit subscribe EMAIL')
+        const r = await client.subscribe(email)
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else
+          out.log(
+            {
+              'check-inbox': 'Check your inbox: click the confirmation link within 48 hours to join the pit.world newsletter.',
+              invalid: "That doesn't look like an email address.",
+              undeliverable: "That domain can't receive email.",
+              failed: "pit.world couldn't send the confirmation right now. Try again in a few minutes.",
+            }[r.status] ?? r.status,
+          )
+        return r.ok ? 0 : 1
       }
       case 'network': {
         const s = await client.network()
@@ -107,7 +125,7 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
       }
       default:
         // `pit some words` is a search.
-        return main(['search', ...rest, ...(json ? ['--json'] : [])], out, client)
+        return main(['search', ...rest, ...(nAt === -1 ? [] : ['-n', String(n)]), ...(json ? ['--json'] : [])], out, client)
     }
   } catch (error) {
     out.error(`pit: ${error instanceof Error ? error.message : String(error)}`)

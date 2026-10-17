@@ -113,7 +113,20 @@ ${esc(LINKS.enable)}</code></pre><p>Or point your browser's secure DNS at <code>
 </section>`
 }
 
-export function homePage(stats: NetworkStats | null): string {
+export function newsletterForm(): string {
+  return `<section id="newsletter" class="newsletter">
+  <p class="kicker">The pit.world newsletter</p>
+  <h2>What's new on pit.world and the Moshpit network.</h2>
+  <p class="lede">About once a month. You confirm by email before anything is sent, and every issue has a one-click unsubscribe. Your address is the only thing pit.world will ever keep, and only if you click the link.</p>
+  <form class="subscribe" action="/subscribe" method="post">
+    <input name="email" type="email" placeholder="you@example.com" aria-label="Email address" autocomplete="email" maxlength="254" required>
+    <input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
+    <button type="submit">Subscribe</button>
+  </form>
+</section>`
+}
+
+export function homePage(stats: NetworkStats | null, options: { newsletter?: boolean } = {}): string {
   return layout({
     title: 'pit.world: private search, and the doorway to the Moshpit network',
     description: 'Search the web without being the product. No logs, no cookies, no profile, no JavaScript required. And search the Moshpit network, the namespace ICANN didn\'t sell you.',
@@ -134,12 +147,13 @@ export function homePage(stats: NetworkStats | null): string {
     <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
   </header>
   ${networkPanel(stats)}
+  ${options.newsletter ? newsletterForm() : ''}
 </main>`,
   })
 }
 
 function moshpitCard(resolution: Resolution): string {
-  const live = resolution.nameRegistered || resolution.registered
+  const live = resolution.nameRegistered
   return `<aside class="card mosh">
   <p class="kicker">Moshpit name</p>
   <h2><a href="https://${esc(resolution.name)}/" rel="noreferrer noopener">${esc(resolution.name)}</a></h2>
@@ -158,7 +172,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
   ${searchForm(query)}
 </header>
 <main class="results">
-  ${resolution && (resolution.registered || resolution.nameRegistered) ? moshpitCard(resolution) : ''}
+  ${resolution?.registered ? moshpitCard(resolution) : ''}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a></p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   <ol class="hits">
@@ -207,6 +221,8 @@ export function privacyPage(): string {
 <p>When a search looks like a name (<code>chovy.hacker</code>), pit.world also asks the public Moshpit registry whether it exists. That lookup is the name only, from our server.</p>
 <h2>Bangs</h2>
 <p><code>!gh hqtui</code> sends you to GitHub's own search. From that moment you are on their site, under their privacy policy; pit.world only redirects you there without a referrer.</p>
+<h2 id="newsletter">The newsletter, only if you ask</h2>
+<p>The newsletter is the one thing pit.world keeps, and only after you ask twice. When you sign up, pit.world stores your address beside a fingerprint of a one-time link and emails you that link. Nothing else about you: no IP address, no browser, no referrer. Click it and your address joins the list; don't, and both are deleted within 48 hours. Issues are sent by our newsletter tool through our email provider, and every one has a one-click unsubscribe that takes you off for good.</p>
 <h2>Source</h2>
 <p>The code that does all of this is public: <a href="https://github.com/moshcoder/pit.world">github.com/moshcoder/pit.world</a>.</p>
 </main>`,
@@ -414,6 +430,48 @@ sudo update-ca-trust</code></pre>
 
 <h2 id="next">Next</h2>
 <p>On the network? <a href="${LINKS.claim}">Claim an ending</a> and put your own names on it, or browse what is already there in the <a href="${LINKS.registry}">registry</a>.</p>
+</main>`,
+  })
+}
+
+/** The page after a signup or a confirmation click. One page per outcome, never one that says who is on the list. */
+export function newsletterPage(kind: 'check' | 'invalid' | 'undeliverable' | 'failed' | 'limited' | 'confirmed' | 'expired'): string {
+  const copy = {
+    check: ['Check your inbox', 'If that address can get the newsletter, a confirmation link is on its way. Click it within 48 hours to join; otherwise the address is forgotten.'],
+    invalid: ["That doesn't look like an email address", 'Check it and try again.'],
+    undeliverable: ["That domain can't receive email", 'There is no mail server for it. Check the spelling after the @.'],
+    failed: ["We couldn't send the confirmation", 'Our email provider did not take the message. Please try again in a few minutes.'],
+    limited: ['Slow down a little', 'Too many requests from your connection. Try again in a minute.'],
+    confirmed: ["You're on the list", 'Thanks. The next issue comes to your inbox, and each one has a one-click unsubscribe.'],
+    expired: ['That link has expired', 'Confirmation links work once, for 48 hours. Sign up again and use the new link.'],
+  }[kind]
+  const retry = kind === 'invalid' || kind === 'undeliverable' || kind === 'failed' || kind === 'expired'
+  return layout({
+    title: `${copy[0]} · pit.world`,
+    description: 'The pit.world newsletter.',
+    path: '/subscribe',
+    bodyClass: 'doc',
+    noindex: true,
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<h1>${esc(copy[0])}</h1>
+<p>${esc(copy[1])}</p>
+${retry ? newsletterForm() : '<p><a class="btn" href="/">Back to search</a></p>'}
+</main>`,
+  })
+}
+
+export function errorPage(): string {
+  return layout({
+    title: 'Something went wrong · pit.world',
+    description: 'pit.world hit an error.',
+    path: '/',
+    bodyClass: 'doc',
+    noindex: true,
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<h1>Something went wrong</h1>
+<p>pit.world hit an error answering that. Nothing about your request was logged. Try again, or try other words.</p>
 </main>`,
   })
 }
