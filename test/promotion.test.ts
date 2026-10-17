@@ -524,6 +524,21 @@ describe('promotion: the myna worker', () => {
   })
 })
 
+describe('promotion: the verifier is not a visitor', () => {
+  it('sends a user agent the event filter excludes, so checking a post never counts as a view', async () => {
+    const { isPerson } = await import('../src/listings-routes.ts')
+    const { verifyPublic } = await import('../src/promotion-worker.ts')
+    const seen: string[] = []
+    const fetchImpl = (async (_url: string, init: any) => {
+      seen.push(init.headers['user-agent'])
+      return new Response('<h1>x</h1>', { status: 200 })
+    }) as any
+    await verifyPublic({ id: 'plc_x', channel: 'pit.world', account: 'pit.world', publicUrl: 'https://pit.world/roundup/x' } as any, fetchImpl)
+    expect(seen).toHaveLength(1)
+    expect(isPerson(seen[0])).toBe(false)
+  })
+})
+
 afterAll(() => {
   delete process.env.PIT_ADMIN_TOKEN
 })
