@@ -1,0 +1,22 @@
+#!/bin/sh
+# Make (or keep) the Let's Encrypt certificate for one <name>.pit.world relay host.
+# Installed as /usr/local/bin/pit-proxy-cert; pit.world's src/proxy.ts runs it on a
+# name's first plain-http visit, and it is safe to run by hand:
+#   pit-proxy-cert family.ancestry.pit.world
+set -eu
+host="${1:-}"
+case "$host" in
+  *.*.pit.world) ;;
+  *) echo "usage: pit-proxy-cert <name>.pit.world" >&2; exit 2 ;;
+esac
+printf '%s' "$host" | grep -Eq '^[a-z0-9.-]+$' || { echo "bad host: $host" >&2; exit 2; }
+
+# This box's root umask is 007; nginx (www-data) must read the challenge files.
+umask 022
+mkdir -p /var/www/pit-acme/.well-known/acme-challenge
+chmod -R a+rX /var/www/pit-acme
+exec 9>/run/lock/pit-proxy-cert.lock
+flock 9
+certbot certonly --webroot -w /var/www/pit-acme -d "$host" --cert-name "$host" \
+  --non-interactive --agree-tos --keep-until-expiring --quiet
+nginx -t -q && systemctl reload nginx

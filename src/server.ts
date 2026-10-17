@@ -11,6 +11,7 @@ import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { neighbors, randomSite, ringJson, siteHref } from './ring.js'
+import { liveCerts, proxiedName, proxyRequest } from './proxy.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
@@ -293,13 +294,21 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }))
   const app = createApp({ keys: keysFromEnv(), newsletter, listings, ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
+  const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts() }
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 8787),
     hostname: options.hostname ?? process.env.HOST ?? '127.0.0.1',
+    // Proxied sites take uploads (family.ancestry photos) and can be slow to answer.
+    idleTimeout: 120,
+    maxRequestBodySize: 32 * 1024 * 1024,
     fetch(request, srv) {
       // Behind nginx on loopback the peer is always 127.0.0.1; nginx passes the visitor in X-Real-IP.
       const peer = srv.requestIP(request)?.address ?? ''
-      const forwarded = trustProxy && (peer === '127.0.0.1' || peer === '::1') ? request.headers.get('x-real-ip') : null
+      const local = trustProxy && (peer === '127.0.0.1' || peer === '::1')
+      const forwarded = local ? request.headers.get('x-real-ip') : null
+      // <name>.pit.world is a Moshpit name relayed to the old internet (src/proxy.ts), not pit.world itself.
+      const name = proxiedName(request.headers.get('host'))
+      if (name) return proxyRequest(request, name, forwarded || peer, (local && request.headers.get('x-forwarded-proto')) || 'http', proxyDeps)
       return app.fetch(request, { ip: forwarded || peer })
     },
   })

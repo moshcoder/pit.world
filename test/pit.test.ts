@@ -491,9 +491,9 @@ describe('the Moshpit ring', () => {
     for (const r of [0, 0.5, 0.99]) expect(randomSite('seo.rank', () => r).name).not.toBe('seo.rank')
   })
 
-  it('links a Moshpit name through the gateway unless the visitor is on Moshpit DNS', () => {
+  it('links a Moshpit name through pit.world unless the visitor is on Moshpit DNS', () => {
     const seo = RING.find((s) => s.name === 'seo.rank')!
-    expect(siteHref(seo, false)).toBe('https://pit.moshcode.sh/n/seo.rank')
+    expect(siteHref(seo, false)).toBe('https://seo.rank.pit.world/')
     expect(siteHref(seo, true)).toBe('https://seo.rank/')
     expect(siteHref(RING.find((s) => s.name === 'pit.world')!, false)).toBe('https://pit.world/')
   })
@@ -504,7 +504,7 @@ describe('the Moshpit ring', () => {
       const html = await (await request(path)).text()
       expect(html).toContain('<nav class="ring-bar"')
       expect(html).toContain('<a href="https://pit.world/" aria-current="page"')
-      expect(html).toContain('href="https://pit.moshcode.sh/n/seo.rank"')
+      expect(html).toContain('href="https://seo.rank.pit.world/"')
     }
   })
 
@@ -512,9 +512,9 @@ describe('the Moshpit ring', () => {
     const { request } = app()
     const res = await request('/api/ring')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
-    const body = (await res.json()) as { sites: Array<{ name: string; url: string; gatewayUrl: string }> }
-    expect(body.sites.find((s) => s.name === 'seo.rank')).toMatchObject({ url: 'https://seo.rank/', gatewayUrl: 'https://pit.moshcode.sh/n/seo.rank' })
-    expect((await request('/ring/next?from=pit.world')).headers.get('location')).toBe('https://pit.moshcode.sh/n/seo.rank')
+    const body = (await res.json()) as { sites: Array<{ name: string; url: string; proxyUrl: string }> }
+    expect(body.sites.find((s) => s.name === 'seo.rank')).toMatchObject({ url: 'https://seo.rank/', proxyUrl: 'https://seo.rank.pit.world/' })
+    expect((await request('/ring/next?from=pit.world')).headers.get('location')).toBe('https://seo.rank.pit.world/')
     expect((await request('/ring/next?from=pit.world&direct=1')).headers.get('location')).toBe('https://seo.rank/')
     expect((await request('/ring/prev?from=seo.rank')).headers.get('location')).toBe('https://pit.world/')
     expect((await request('/ring/random?from=seo.rank')).status).toBe(302)
