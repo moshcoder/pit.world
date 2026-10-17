@@ -8,14 +8,13 @@
  * for a site that would rather paste three static links.
  *
  * A Moshpit name only opens for a visitor on Moshpit DNS. Everyone else gets
- * the registry gateway, which fetches the name's homepage through Moshpit DoH
- * and serves it on an ICANN hostname: https://pit.moshcode.sh/n/<name>.
+ * the whole site through pit.world's proxy, https://<name>.pit.world/ (src/proxy.ts).
  */
 // Its own escaper, so html.ts can import this module without a cycle.
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
 
-export const GATEWAY = 'https://pit.moshcode.sh/n/'
+export const proxyUrl = (name: string) => `https://${name}.pit.world/`
 export const RING_HOME = 'https://pit.world/ring'
 
 export type RingSite = {
@@ -36,7 +35,7 @@ export const RING: RingSite[] = [
 
 /** Where a link to `site` should point, given whether the visitor can resolve Moshpit names. */
 export function siteHref(site: RingSite, direct: boolean): string {
-  return site.moshpit && !direct ? `${GATEWAY}${site.name}` : `https://${site.name}/`
+  return site.moshpit && !direct ? proxyUrl(site.name) : `https://${site.name}/`
 }
 
 export function findSite(name: string | undefined): RingSite | undefined {
@@ -64,8 +63,8 @@ export function ringJson() {
   return {
     name: 'The Moshpit ring',
     home: RING_HOME,
-    gateway: GATEWAY,
-    sites: RING.map((s) => ({ ...s, url: `https://${s.name}/`, gatewayUrl: s.moshpit ? `${GATEWAY}${s.name}` : `https://${s.name}/` })),
+    proxy: 'https://<name>.pit.world/',
+    sites: RING.map((s) => ({ ...s, url: `https://${s.name}/`, proxyUrl: s.moshpit ? proxyUrl(s.name) : `https://${s.name}/` })),
   }
 }
 
