@@ -254,7 +254,7 @@ ${tabs(query, vertical)}
   return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true })
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null }): string {
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string }): string {
   const { query, result, resolution, error } = options
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
@@ -265,7 +265,8 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
 ${tabs(query, 'web')}
 <main class="results">
   ${resolution?.registered ? moshpitCard(resolution) : ''}
-  ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a></p>` : ''}
+  ${options.card ?? ''}
+  ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a>${options.card ? '' : ` · <a href="/b/${encodeURIComponent(domain)}">business listing</a>`}</p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   <ol class="hits">
     ${hits
@@ -597,6 +598,21 @@ export function buildPage(): string {
 <p>The app is paused, not deleted. Pay again and it comes back as it was.</p>
 <h3>Who builds it?</h3>
 <p><a href="https://chovy.com">Chovy</a>, an AI product team by Profullstack, Inc., the people behind pit.world.</p>
+</main>`,
+  })
+}
+
+/** A plain document page (header bar + prose column), for modules that render their own pages. */
+export function docPage(options: { title: string; description: string; path: string; body: string; noindex?: boolean; query?: string }): string {
+  return layout({
+    title: options.title,
+    description: options.description,
+    path: options.path,
+    bodyClass: 'doc',
+    ...(options.noindex ? { noindex: true } : {}),
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm(options.query ?? '')}</header>
+<main class="prose">
+${options.body}
 </main>`,
   })
 }

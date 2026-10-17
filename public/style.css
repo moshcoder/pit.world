@@ -203,3 +203,19 @@ pre code { background: none; padding: 0; }
   .search button { padding: 0 16px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* business listings */
+.facts { list-style: none; padding: 0; margin: 12px 0; display: grid; gap: 6px; }
+.facts b { display: inline-block; min-width: 92px; color: var(--muted); font: 700 12px var(--mono); text-transform: uppercase; letter-spacing: 0.08em; }
+.verified { color: var(--accent); }
+.claim { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-top: 24px; }
+.claim h2 { margin-top: 0; }
+.claim form, .listing-lookup { margin: 8px 0 0; }
+.listing-lookup { display: flex; gap: 10px; flex-wrap: wrap; }
+.listing-lookup input { flex: 1; min-width: 200px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); font: 16px var(--sans); padding: 10px 16px; }
+.listing-form { display: grid; gap: 6px; }
+.listing-form label { font-weight: 700; margin-top: 8px; }
+.listing-form input, .listing-form textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 12px; }
+.listing-form .btn { justify-self: start; margin-top: 12px; border: 0; cursor: pointer; }
+.card.listing { border-color: var(--line); }
+form .btn { border: 0; cursor: pointer; }

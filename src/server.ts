@@ -11,6 +11,10 @@ import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { Promoted } from './promoted.js'
+import { listingCard } from './listings-html.js'
+import { mountListings } from './listings-routes.js'
+import { liveVerifier, Listings } from './listings.js'
+import { readFileSync } from 'node:fs'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 
@@ -26,6 +30,8 @@ export type Deps = {
   adminToken?: string
   /** PairUX + nixamp listings for the Videos, Music and Live tabs. */
   promoted?: Promoted
+  /** Claimable business listings (/b); unset means the feature is off. */
+  listings?: Listings
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -155,7 +161,8 @@ export function createApp(deps: Deps) {
       return c.html(mediaPage({ query, vertical, result, promos, error }), result || promos.length ? 200 : 503)
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
-    return c.html(resultsPage({ query, result, resolution, error }), result || resolution ? 200 : 503)
+    const claimed = deps.listings?.claimedOnly(query)
+    return c.html(resultsPage({ query, result, resolution, error, ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed ? 200 : 503)
   })
 
   // --- JSON API ---------------------------------------------------------------
@@ -238,6 +245,8 @@ export function createApp(deps: Deps) {
     c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
   )
 
+  if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName)
+
   app.notFound((c) =>
     c.req.path.startsWith('/api/')
       ? c.json({ error: 'not found' }, 404)
@@ -265,7 +274,10 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const env = process.env
   const dataDir = env.PIT_DATA_DIR ?? `${env.HOME ?? '.'}/.local/share/pit-world`
   const newsletter = new Newsletter(env.PIT_NEWSLETTER_DB ?? `${dataDir}/newsletter.db`, env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null)
-  const app = createApp({ keys: keysFromEnv(), newsletter, ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const registry = new Registry()
+  const rootPem = readFileSync(new URL('../public/moshpit-root-ca.crt', import.meta.url), 'utf8')
+  const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }))
+  const app = createApp({ keys: keysFromEnv(), newsletter, listings, ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 8787),

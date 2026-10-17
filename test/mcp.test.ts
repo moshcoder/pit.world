@@ -31,7 +31,7 @@ it('lists the tools and answers search and moshpit_resolve', async () => {
   await client.connect(transport)
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort()
-    expect(tools).toEqual(['moshpit_network', 'moshpit_resolve', 'search'])
+    expect(tools).toEqual(['listing', 'moshpit_network', 'moshpit_resolve', 'search'])
     const resolved: any = await client.callTool({ name: 'moshpit_resolve', arguments: { name: 'chovy.hacker' } })
     expect(resolved.content[0].text).toContain('dev.profullstack.com')
     const searched: any = await client.callTool({ name: 'search', arguments: { query: 'hqtui', limit: 3 } })

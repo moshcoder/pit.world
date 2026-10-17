@@ -33,6 +33,13 @@ export function createMcpServer(client = new PitClient()): McpServer {
     async ({ name }: { name: string }) => ({ content: [{ type: 'text', text: JSON.stringify(await client.resolve(name), null, 2) }] }),
   )
 
+  server.tool(
+    'listing',
+    'Look up a business listing on pit.world by domain (example.com or a Moshpit name): name, description, hours, address, phone, links, and whether the owner has claimed it.',
+    { domain: z.string().min(3).max(253) },
+    async ({ domain }: { domain: string }) => ({ content: [{ type: 'text', text: JSON.stringify(await client.listing(domain), null, 2) }] }),
+  )
+
   server.tool('moshpit_network', 'Live numbers for the Moshpit network: endings claimed, registry events, recent claims, endings for sale.', {}, async () => ({
     content: [{ type: 'text', text: JSON.stringify(await client.network(), null, 2) }],
   }))

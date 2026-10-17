@@ -19,6 +19,9 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit search WORDS [-n N]      search the web privately
   pit resolve NAME             look up a Moshpit name (chovy.hacker)
   pit network                  live numbers for the Moshpit network
+  pit listing DOMAIN           a business listing (pit.world/b)
+  pit claim DOMAIN             claim your business listing
+  pit verify CLAIM_ID          finish a claim; prints your edit key once
   pit subscribe EMAIL          get the pit.world newsletter (double opt-in)
   pit open WORDS               open the results page in your browser
   pit mcp                      MCP server on stdio: claude mcp add pit -- pit mcp
@@ -92,6 +95,39 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
               failed: "pit.world couldn't send the confirmation right now. Try again in a few minutes.",
             }[r.status] ?? r.status,
           )
+        return r.ok ? 0 : 1
+      }
+      case 'listing': {
+        const domain = words[0]
+        if (!domain) return usage(out, 'pit listing DOMAIN')
+        const l = await client.listing(domain)
+        if (json) out.log(JSON.stringify(l, null, 2))
+        else {
+          out.log(`${l.name || l.domain}  (${l.claimed ? 'claimed by the owner' : 'unclaimed'})  https://pit.world/b/${l.domain}`)
+          for (const [k, v] of [['', l.description], ['Hours', l.hours], ['Address', l.address], ['Phone', l.phone], ['Moshpit', l.moshpit]] as const) if (v) out.log(k ? `${k}: ${v}` : v)
+          for (const link of l.links) out.log(link)
+        }
+        return 0
+      }
+      case 'claim': {
+        const domain = words[0]
+        if (!domain) return usage(out, 'pit claim DOMAIN')
+        const c = await client.claim(domain)
+        if (json) out.log(JSON.stringify(c, null, 2))
+        else
+          out.log(
+            `To claim ${c.domain}, do ONE of these, then run: pit verify ${c.claimId}\n\n` +
+              `  DNS TXT record   ${c.txtHost}  =  ${c.token}\n` +
+              `  homepage <head>  ${c.meta}\n\nOr finish in the browser: ${c.page}`,
+          )
+        return 0
+      }
+      case 'verify': {
+        const claimId = words[0]
+        if (!claimId) return usage(out, 'pit verify CLAIM_ID')
+        const r = await client.verify(claimId)
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else out.log(r.ok ? `Verified by ${r.method}. Your edit key (shown once, save it):\n${r.editKey}` : r.reason === 'unknown-claim' ? 'That claim id is unknown or expired (claims last 7 days).' : 'Not found yet. DNS can take a few minutes; try again.')
         return r.ok ? 0 : 1
       }
       case 'network': {
