@@ -39,7 +39,8 @@ export function place(l: Listing): string {
   return [l.city, l.region, l.country].filter(Boolean).join(', ')
 }
 
-function details(l: Listing): string {
+function details(l: Listing, track?: { domain: string; via: string }): string {
+  const beacon = track ? ` data-ev="phone" data-domain="${esc(track.domain)}"${track.via ? ` data-via="${esc(track.via)}"` : ''}` : ''
   const where = place(l)
   const operator = l.operator ? (operatorHref(l.operator) ? ext(l.operator, bare(l.operator)) : `<span class="handle">${esc(l.operator)}</span>`) : ''
   const rows = [
@@ -52,7 +53,7 @@ function details(l: Listing): string {
     l.hours && `<li><b>Hours</b> ${esc(l.hours)}</li>`,
     l.address && `<li><b>Address</b> ${esc(l.address)}</li>`,
     licenseRow(l),
-    l.phone && `<li><b>Phone</b> <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">${esc(l.phone)}</a></li>`,
+    l.phone && `<li><b>Phone</b> <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}"${beacon}>${esc(l.phone)}</a></li>`,
     l.moshpit && `<li><b>On Moshpit</b> ${ext(`https://${l.moshpit}/`, l.moshpit)} · ${ext(proxyUrl(l.moshpit), `${l.moshpit}.pit.world`)} <span class="muted">(any browser)</span></li>`,
     l.feed && `<li><b>Feed</b> ${ext(l.feed, bare(l.feed))}</li>`,
     ...l.links.filter((u) => u !== siteUrl(l)).map((u) => `<li>${ext(u, bare(u))}</li>`),
@@ -103,8 +104,18 @@ ${state ? `<p class="notice">${esc(QUOTE_NOTES[state])}</p>` : ''}
 </section>`
 }
 
-export function listingPage(l: Listing, options: { quote?: QuoteState } = {}): string {
+/**
+ * A directory listing's website link goes through /b/<domain>/go, which counts the click (for promotion
+ * campaigns only; see src/promotion-routes.ts) and redirects to the site. A bare unclaimed page links direct.
+ */
+function websiteHref(l: Listing, via: string): string {
+  if (!(l.claimed || l.seeded) || !l.listed) return siteUrl(l)
+  return `/b/${p(l.domain)}/go${via ? `?via=${p(via)}` : ''}`
+}
+
+export function listingPage(l: Listing, options: { quote?: QuoteState; via?: string } = {}): string {
   const title = l.name || l.domain
+  const via = options.via ?? ''
   const claim = l.claimed
     ? `<p class="small">Claimed by the owner of ${esc(l.domain)}.${l.ring ? ` In the <a href="/ring">pit.world ring</a>.` : ''} <a href="/b/${p(l.domain)}/edit">Owner? Edit this listing</a></p>`
     : l.seeded
@@ -125,13 +136,14 @@ export function listingPage(l: Listing, options: { quote?: QuoteState } = {}): s
     noindex: !l.claimed && !l.seeded,
     body: `<p class="kicker">Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
-<p><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">${esc(l.domain)}</a></p>
+<p><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a></p>
 ${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'}
-${details(l)}
+${details(l, { domain: l.domain, via })}
 ${services(l)}
 ${l.claimed ? quoteForm(l, options.quote) : ''}
-${l.claimed ? '' : l.seeded ? `<p class="small">Written by pit.world from public information, not by the business. Details can go out of date: check with ${esc(l.domain)} before you hire.</p>` : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
-${claim}`,
+${l.claimed ? '' : l.seeded ? `<p class="small">Written by pit.world from public information, not by the business. Details can go out of date: check with ${esc(l.domain)} before you hire. Something wrong? The owner can claim this page to correct it, or take it down.</p>` : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
+${claim}
+${l.listed && l.phone ? '<script src="/listing.js" defer></script>' : ''}`,
   })
 }
 
