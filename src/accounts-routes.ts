@@ -68,7 +68,8 @@ export function mountAccounts(app: Hono<any>, d: AccountDeps) {
     if (value.startsWith('/') && !value.startsWith('//') && !value.startsWith('/\\')) return value.slice(0, 4000)
     try {
       const u = new URL(value)
-      if (u.origin === origin) return `${u.pathname}${u.search}`.slice(0, 4000)
+      // Same host on either scheme: behind nginx our own URLs arrive as http://.
+      if (u.host === new URL(origin).host && (u.protocol === 'https:' || u.protocol === 'http:')) return `${u.pathname}${u.search}`.slice(0, 4000)
     } catch {}
     return '/account'
   }
@@ -202,7 +203,11 @@ ${tokens.length ? `<ul class="plain">${tokens.map((t) => `<li>${esc(t.label)} <s
         accounts.recordGrant(me.id, clientId.toLowerCase())
         return { sub: me.sub, ...(me.name ? { name: me.name } : {}), ...(me.email ? { email: me.email, email_verified: false } : {}) }
       },
-      loginUrl: (returnTo) => `${site}/signin?next=${encodeURIComponent(returnTo)}`,
+      // Behind nginx the request URL says http://; come back to the same path on our public origin.
+      loginUrl: (returnTo) => {
+        const u = new URL(returnTo)
+        return `${site}/signin?next=${encodeURIComponent(`${u.pathname}${u.search}`)}`
+      },
     })
   }
 
