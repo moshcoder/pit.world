@@ -1,8 +1,8 @@
 {
   "name": "pitworld",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "mcpName": "world.pit/pit",
-  "description": "pit.world: private search, and the front door to the Moshpit network. Web, API, CLI, TUI and MCP.",
+  "description": "pit.world MCP server: private web search and Moshpit name lookups for AI agents (stdio, no API key). Also a web app, API, CLI and TUI.",
   "license": "MIT",
   "type": "module",
   "homepage": "https://pit.world",
@@ -46,6 +46,9 @@
     "dns",
     "mcp",
     "cli",
-    "tui"
+    "tui",
+    "mcp server",
+    "model context protocol",
+    "web search mcp"
   ]
 }

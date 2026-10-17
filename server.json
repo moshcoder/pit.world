@@ -1,20 +1,20 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "world.pit/pit",
-  "title": "pit.world",
-  "description": "Private web search with no API key, plus Moshpit network name lookups. No logs, no cookies.",
+  "title": "pit.world MCP server",
+  "description": "MCP server for private web search (no API key) and Moshpit name lookups. No logs, no cookies.",
   "websiteUrl": "https://pit.world",
   "repository": {
     "url": "https://github.com/moshcoder/pit.world",
     "source": "github"
   },
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "pitworld",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "runtimeHint": "bunx",
       "transport": {
         "type": "stdio"
