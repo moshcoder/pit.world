@@ -412,7 +412,8 @@ write_nginx() {
   backup="$(mktemp)"
   $SUDO cat "$conf" > "$backup" 2>/dev/null || : > "$backup"
   CHANGED=0
-  nginx_conf "$cert" | put_root_file "$conf" 0644
+  # Not a pipe: put_root_file must run in this shell so CHANGED=1 survives.
+  put_root_file "$conf" 0644 < <(nginx_conf "$cert")
   [ -n "$link" ] && { $SUDO test -L "$link" || { $SUDO ln -sfn "$conf" "$link"; CHANGED=1; }; }
   if [ "$CHANGED" = 1 ]; then
     if ! $SUDO nginx -t >/dev/null 2>&1; then
@@ -432,7 +433,7 @@ write_nginx() {
     for d in $DOMAINS; do args+=(-d "$d"); done
     if [ -n "$TLS_EMAIL" ]; then args+=(-m "$TLS_EMAIL"); else args+=(--register-unsafely-without-email); fi
     if $SUDO certbot "${args[@]}"; then
-      nginx_conf 1 | put_root_file "$conf" 0644
+      put_root_file "$conf" 0644 < <(nginx_conf 1)
       $SUDO nginx -t && $SUDO systemctl reload nginx
       log "tls: certificate issued for $DOMAINS"
     else
