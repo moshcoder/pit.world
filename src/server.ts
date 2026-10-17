@@ -154,7 +154,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/ring', '/pros', '/b', '/about', '/privacy', ...(deps.listings ? deps.listings.directory({ limit: 100 }).listings.map((l) => `/b/${encodeURIComponent(l.domain)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/ring', '/pros', '/b', '/about', '/privacy', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,

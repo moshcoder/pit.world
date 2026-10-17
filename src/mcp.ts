@@ -13,7 +13,7 @@ import { CATEGORIES, PRICES } from './pros.js'
 export function createMcpServer(client = new PitClient()): McpServer {
   // Typed loosely: the SDK's generic tool() signature recurses past TypeScript's
   // instantiation depth with zod shapes. The shapes are still validated at runtime.
-  const server: any = new McpServer({ name: 'pit.world', version: '0.2.0' })
+  const server: any = new McpServer({ name: 'pit.world', version: '0.3.0' })
 
   server.tool(
     'search',
@@ -43,7 +43,7 @@ export function createMcpServer(client = new PitClient()): McpServer {
 
   server.tool(
     'pros',
-    `Search the pit.world pro directory: businesses and independent pros whose owners verified their own site. No paid placement and no reviews; newest-updated first. Filter by category (one of: ${CATEGORIES.map((c) => c.slug).join(', ')}), by place (city, region or country words), and by words (what the person needs).`,
+    `Search the pit.world pro directory: businesses and independent pros. claimed=true means the owner verified their own site; seeded=true means pit.world listed it from public records (e.g. a CSLB contractor license, shown in license) and the owner has not claimed it yet. No paid placement and no reviews; a few featured listings first, then verified owners by latest edit. Filter by category (one of: ${CATEGORIES.map((c) => c.slug).join(', ')}), by place (city, region or country words), and by words (what the person needs).`,
     {
       query: z.string().max(120).optional(),
       category: z.enum(CATEGORIES.map((c) => c.slug) as [string, ...string[]]).optional(),

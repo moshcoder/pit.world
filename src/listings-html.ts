@@ -8,6 +8,29 @@ const p = (s: string) => encodeURIComponent(s)
 const ext = (href: string, text: string) => `<a href="${esc(href)}" rel="noreferrer noopener">${esc(text)}</a>`
 const bare = (u: string) => u.replace(/^https?:\/\//, '').replace(/\/$/, '')
 
+/** CSLB's license lookup. Its detail pages need a session cookie, so link the search form. */
+const CSLB_CHECK = 'https://www.cslb.ca.gov/OnlineServices/CheckLicenseII/CheckLicense.aspx'
+const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+
+function licenseRow(l: Listing): string {
+  if (!l.license) return ''
+  const checked = l.licenseCheckedAt ? ` · active when pit.world checked on ${day(l.licenseCheckedAt)}` : ''
+  const verify = /^CSLB\b/.test(l.license) ? ` · ${ext(CSLB_CHECK, 'check it at CSLB')}` : ''
+  return `<li><b>License</b> ${esc(l.license)}${esc(checked)}${verify}</li>`
+}
+
+/** The listing's website: a link on its own domain (some sites only answer on www or http), else https://<domain>/. */
+export function siteUrl(l: Listing): string {
+  const own = l.links.find((u) => {
+    try {
+      return new URL(u).hostname.replace(/^www\./, '') === l.domain
+    } catch {
+      return false
+    }
+  })
+  return own ?? `https://${l.domain}/`
+}
+
 export function place(l: Listing): string {
   return [l.city, l.region, l.country].filter(Boolean).join(', ')
 }
@@ -24,10 +47,11 @@ function details(l: Listing): string {
     l.price && `<li><b>Price</b> ${esc(priceLabel(l.price))}</li>`,
     l.hours && `<li><b>Hours</b> ${esc(l.hours)}</li>`,
     l.address && `<li><b>Address</b> ${esc(l.address)}</li>`,
+    licenseRow(l),
     l.phone && `<li><b>Phone</b> <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">${esc(l.phone)}</a></li>`,
     l.moshpit && `<li><b>On Moshpit</b> ${ext(`https://${l.moshpit}/`, l.moshpit)}</li>`,
     l.feed && `<li><b>Feed</b> ${ext(l.feed, bare(l.feed))}</li>`,
-    ...l.links.map((u) => `<li>${ext(u, bare(u))}</li>`),
+    ...l.links.filter((u) => u !== siteUrl(l)).map((u) => `<li>${ext(u, bare(u))}</li>`),
   ].filter(Boolean)
   return rows.length ? `<ul class="facts">${rows.join('')}</ul>` : ''
 }
@@ -43,7 +67,7 @@ export function listingCard(l: Listing): string {
   <h2><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a></h2>
   ${l.description ? `<p>${esc(l.description)}</p>` : ''}
   ${details(l)}
-  <p class="row"><a class="btn" href="https://${esc(l.domain)}/" rel="noreferrer noopener">Visit ${esc(l.domain)}</a> <a href="/b/${p(l.domain)}">Full listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Get in touch</a>` : ''}</p>
+  <p class="row"><a class="btn" href="${esc(siteUrl(l))}" rel="noreferrer noopener">Visit ${esc(l.domain)}</a> <a href="/b/${p(l.domain)}">Full listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Get in touch</a>` : ''}</p>
 </aside>`
 }
 
@@ -79,7 +103,13 @@ export function listingPage(l: Listing, options: { quote?: QuoteState } = {}): s
   const title = l.name || l.domain
   const claim = l.claimed
     ? `<p class="small">Claimed by the owner of ${esc(l.domain)}.${l.ring ? ` In the <a href="/ring">pit.world ring</a>.` : ''} <a href="/b/${p(l.domain)}/edit">Owner? Edit this listing</a></p>`
-    : `<section class="claim">
+    : l.seeded
+      ? `<section class="claim" id="claim">
+  <h2>Is this your business? Claim it</h2>
+  <p>pit.world listed ${esc(title)} in the <a href="/pros">pro directory</a> from public records: its own website and its state license. Nobody at ${esc(l.domain)} wrote or paid for this page. Claim it to take it over: rewrite it, add your services, hours and links, turn on quote requests, or take it out of the directory. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
+  <form action="/b/${p(l.domain)}/claim" method="post"><button class="btn" type="submit">Claim this listing</button></form>
+</section>`
+      : `<section class="claim" id="claim">
   <h2>Is this your business?</h2>
   <p>Claim the listing to write it yourself: what you do, who runs it, where you work, services, hours, phone, links and your Moshpit name. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
   <form action="/b/${p(l.domain)}/claim" method="post"><button class="btn" type="submit">Claim this listing</button></form>
@@ -88,15 +118,15 @@ export function listingPage(l: Listing, options: { quote?: QuoteState } = {}): s
     title: `${title} · pit.world`,
     description: l.description || `${l.domain} on pit.world`,
     path: `/b/${p(l.domain)}`,
-    noindex: !l.claimed,
-    body: `<p class="kicker">Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : ' · unclaimed'}</p>
+    noindex: !l.claimed && !l.seeded,
+    body: `<p class="kicker">Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
-<p><a href="https://${esc(l.domain)}/" rel="noreferrer noopener">${esc(l.domain)}</a></p>
+<p><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">${esc(l.domain)}</a></p>
 ${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'}
 ${details(l)}
 ${services(l)}
 ${l.claimed ? quoteForm(l, options.quote) : ''}
-${l.claimed ? '' : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
+${l.claimed ? '' : l.seeded ? `<p class="small">Written by pit.world from public information, not by the business. Details can go out of date: check with ${esc(l.domain)} before you hire.</p>` : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
 ${claim}`,
   })
 }
@@ -209,6 +239,9 @@ ${l.claimed ? '' : `<p class="notice">This listing is not claimed yet. <a href="
   <h2>Links</h2>
   ${field('links', 'Links (one per line, up to 5)', l.links.join('\n'), 1600, true)}
   ${field('moshpit', 'Moshpit name (e.g. acme.bakery)', l.moshpit, 253)}
+  <h2>Pro directory listing</h2>
+  <label for="listed">In the <a href="/pros">pro directory</a></label><select id="listed" name="listed"><option value="in"${l.listed || !l.claimed ? ' selected' : ''}>Listed</option><option value="out"${l.claimed && !l.listed ? ' selected' : ''}>Take it out of the directory</option></select>
+  <p class="small">Out of the directory, this page still answers at pit.world/b/${esc(l.domain)}.</p>
   <h2>Web ring</h2>
   <label for="ring">The pit.world ring</label><select id="ring" name="ring"><option value="in"${l.ring || !l.claimed ? ' selected' : ''}>In the ring</option><option value="out"${l.claimed && !l.ring ? ' selected' : ''}>Leave the ring</option></select>
   <button class="btn" type="submit">Save</button>
@@ -266,11 +299,12 @@ export function prosPage(options: { listings: Listing[]; total: number; category
     .map((l) => {
       const where = [l.area, place(l)].filter(Boolean).join(' · ')
       return `<li class="pro">
-  <h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> <span class="verified">✓</span></h3>
+  <h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> ${l.claimed ? '<span class="verified" title="Verified owner">✓</span>' : '<span class="small">unclaimed</span>'}</h3>
   <p class="small">${[l.category ? esc(categoryOf(l.category)?.label ?? '') : '', where ? esc(where) : '', l.price ? esc(priceLabel(l.price)) : ''].filter(Boolean).join(' · ') || esc(l.domain)}</p>
   ${l.description ? `<p>${esc(l.description.length > 220 ? `${l.description.slice(0, 217)}…` : l.description)}</p>` : ''}
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
-  <p class="row"><a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}</p>
+  ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
+  <p class="row"><a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
 </li>`
     })
     .join('')
@@ -279,12 +313,12 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   const chips = CATEGORIES.map((c) => `<a class="chip${cat?.slug === c.slug ? ' on' : ''}" href="/pros/${p(c.slug)}" title="${esc(c.examples)}">${esc(c.label)}${options.counts[c.slug] ? ` <span>${options.counts[c.slug]}</span>` : ''}</a>`).join('')
   return docPage({
     title: `${heading}${options.near ? ` near ${options.near}` : ''} · pit.world pros`,
-    description: cat ? `${cat.label} (${cat.examples}) with verified owners on pit.world. No paid placement, no fake reviews.` : 'A directory of businesses and pros whose owners verified their own site. No paid placement, no fake reviews, no tracking.',
+    description: cat ? `${cat.label} (${cat.examples}) on pit.world. No paid placement, no fake reviews.` : 'A directory of businesses and pros: verified owners and licensed businesses waiting to claim. No paid placement, no fake reviews, no tracking.',
     path: cat ? `/pros/${p(cat.slug)}` : '/pros',
     noindex: Boolean(options.q || options.near || options.page > 1),
     body: `<p class="kicker">Pro directory</p>
 <h1>${esc(heading)}</h1>
-<p class="lede">Businesses and independent pros whose owners proved they run their own site. Nobody pays to be placed higher, and there are no star ratings to buy: the newest-updated listing is first. Get in touch with a person, not a lead broker.</p>
+<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> ones were listed by pit.world from public records (a state license, the business's own website) and are waiting for their owner. Nobody pays to be placed higher and there are no star ratings to buy: a few listings pit.world features come first, then verified owners by latest edit. Get in touch with a person, not a lead broker.</p>
 <form class="listing-lookup" action="${cat ? `/pros/${p(cat.slug)}` : '/pros'}" method="get">
   <input name="q" value="${esc(options.q)}" placeholder="What do you need? (plumber, tax prep, web app)" aria-label="What you need" maxlength="120">
   <input name="near" value="${esc(options.near)}" placeholder="Where? (city, region or country)" aria-label="Where" maxlength="120">
