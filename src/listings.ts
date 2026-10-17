@@ -42,17 +42,51 @@ export type Listing = {
   quotes: boolean
   /** In the pit.world web ring (every claimed listing is, unless the owner opts out). */
   ring: boolean
+  /** In the /pros directory (an owner can take a claimed listing out; the page itself stays). */
+  listed: boolean
   /** The site's RSS/Atom feed, discovered from its homepage. */
   feed: string
   /** The name only opens on Moshpit DNS (no ICANN address). */
   moshpitOnly: boolean
   claimed: boolean
+  /**
+   * Listed by pit.world from public records before the owner claimed it (see seed()). Shown in the
+   * directory, marked as unclaimed, never routed quote requests. Claiming hands it to the owner.
+   */
+  seeded: boolean
+  /** Editorial order in the directory: higher first. Never sold. */
+  featured: number
+  /** A public license the listing was checked against, e.g. "CSLB #349328 (B - General Building)". */
+  license: string
+  /** When pit.world last saw that license active at the issuer. */
+  licenseCheckedAt: number | null
+  /** Page views of /b/<domain> by people (crawlers and scripts are not counted). */
+  views: number
   updatedAt: number | null
+}
+
+/** What pit.world writes when it lists a business itself. Public business facts only: never an email address. */
+export type SeedInput = {
+  domain: string
+  name: string
+  description?: string
+  phone?: string
+  address?: string
+  category?: string
+  area?: string
+  city?: string
+  region?: string
+  country?: string
+  services?: string[]
+  links?: string[]
+  license?: string
+  licenseCheckedAt?: number
+  featured?: number
 }
 
 export const EDIT_FIELDS = [
   'name', 'description', 'hours', 'address', 'phone', 'links', 'moshpit',
-  'operator', 'company', 'companyUrl', 'category', 'area', 'city', 'region', 'country', 'services', 'price', 'ring',
+  'operator', 'company', 'companyUrl', 'category', 'area', 'city', 'region', 'country', 'services', 'price', 'ring', 'listed',
 ] as const
 
 export type ListingEdit = Partial<Pick<Listing, (typeof EDIT_FIELDS)[number]>>
@@ -66,7 +100,7 @@ export type Verifier = {
   resolves?(domain: string): Promise<boolean>
 }
 
-const LIMITS = { name: 80, description: 600, hours: 200, address: 200, phone: 40, link: 300, links: 5, moshpit: 253, company: 100, area: 160, place: 80 }
+const LIMITS = { name: 80, description: 600, hours: 200, address: 200, phone: 40, link: 300, links: 5, moshpit: 253, company: 100, area: 160, place: 80, license: 120 }
 /** Quote requests one listing will pass on: per hour, and per day. */
 const QUOTE_LIMITS = { hour: 5, day: 20, siteDay: 400 }
 const CONTACT_TTL_MS = 48 * 3600 * 1000
@@ -243,7 +277,7 @@ export type ContactResult = 'pending' | 'cleared' | 'unchanged' | 'invalid' | 'u
 export type ContactStatus = 'none' | 'pending' | 'confirmed'
 export type QuoteInput = { name?: unknown; email?: unknown; phone?: unknown; message?: unknown }
 export type QuoteResult = 'sent' | 'invalid' | 'undeliverable' | 'unavailable' | 'limited' | 'failed'
-export type DirectoryQuery = { category?: unknown; near?: unknown; q?: unknown; limit?: number; offset?: number }
+export type DirectoryQuery = { category?: unknown; near?: unknown; q?: unknown; limit?: number; offset?: number; claimedOnly?: boolean }
 
 /**
  * Columns added after the first release. Each statement is written out whole, never assembled, so the
@@ -269,6 +303,12 @@ const MIGRATIONS: Array<[string, string]> = [
   ['feed_url', "ALTER TABLE listings ADD COLUMN feed_url TEXT NOT NULL DEFAULT ''"],
   ['site_checked_at', 'ALTER TABLE listings ADD COLUMN site_checked_at INTEGER'],
   ['moshpit_only', 'ALTER TABLE listings ADD COLUMN moshpit_only INTEGER NOT NULL DEFAULT 0'],
+  ['seeded_at', 'ALTER TABLE listings ADD COLUMN seeded_at INTEGER'],
+  ['featured', 'ALTER TABLE listings ADD COLUMN featured INTEGER NOT NULL DEFAULT 0'],
+  ['license', "ALTER TABLE listings ADD COLUMN license TEXT NOT NULL DEFAULT ''"],
+  ['license_checked_at', 'ALTER TABLE listings ADD COLUMN license_checked_at INTEGER'],
+  ['views', 'ALTER TABLE listings ADD COLUMN views INTEGER NOT NULL DEFAULT 0'],
+  ['directory_opt_out', 'ALTER TABLE listings ADD COLUMN directory_opt_out INTEGER NOT NULL DEFAULT 0'],
 ]
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
@@ -339,9 +379,15 @@ export class Listings {
       price: row?.price ?? '',
       quotes: Boolean(row?.claimed_at && row?.contact_email),
       ring: Boolean(row?.claimed_at && !row?.ring_opt_out),
+      listed: Boolean((row?.claimed_at || row?.seeded_at) && !row?.directory_opt_out),
       feed: row?.feed_url ?? '',
       moshpitOnly: Boolean(row?.moshpit_only),
       claimed: Boolean(row?.claimed_at),
+      seeded: Boolean(row?.seeded_at && !row?.claimed_at),
+      featured: row?.featured ?? 0,
+      license: row?.license ?? '',
+      licenseCheckedAt: row?.license_checked_at ?? null,
+      views: row?.views ?? 0,
       updatedAt: row?.updated_at ?? null,
     }
   }
@@ -351,12 +397,13 @@ export class Listings {
     const domain = normalizeDomain(input)
     if (!domain) return null
     let row = this.row(domain)
-    const stale = !row || (!row.claimed_at && (row.meta_at ?? 0) < this.now() - META_TTL_MS)
+    // A listing pit.world wrote itself keeps what it wrote; only bare unclaimed ones follow the homepage.
+    const stale = !row || (!row.claimed_at && !row.seeded_at && (row.meta_at ?? 0) < this.now() - META_TTL_MS)
     if (stale && options.fetchMeta !== false) {
       const html = await this.verifier.homepage(domain)
       if (html) {
         const meta = readMeta(html)
-        if (row) this.db.run('UPDATE listings SET name = ?, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL', [meta.name, meta.description, this.now(), domain])
+        if (row) this.db.run('UPDATE listings SET name = ?, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL', [meta.name, meta.description, this.now(), domain])
         else this.db.run('INSERT INTO listings (domain, name, description, meta_at) VALUES (?, ?, ?, ?)', [domain, meta.name, meta.description, this.now()])
         row = this.row(domain)
       }
@@ -449,14 +496,15 @@ export class Listings {
       services: pick('services', (v) => cleanServices(v)),
       price: pick('price', (v) => (PRICES.some((p) => p.slug === v) ? String(v) : '')),
       ring: pick('ring', (v) => v !== false && v !== 'out' && v !== 'false' && v !== '0'),
+      listed: pick('listed', (v) => v !== false && v !== 'out' && v !== 'false' && v !== '0'),
     }
     if (next.moshpit && !isMoshpitName(next.moshpit)) next.moshpit = ''
     this.db.run(
-      'UPDATE listings SET name = ?, description = ?, hours = ?, address = ?, phone = ?, links = ?, moshpit = ?, operator = ?, company = ?, company_url = ?, category = ?, area = ?, city = ?, region = ?, country = ?, services = ?, price = ?, ring_opt_out = ?, updated_at = ? WHERE domain = ?',
+      'UPDATE listings SET name = ?, description = ?, hours = ?, address = ?, phone = ?, links = ?, moshpit = ?, operator = ?, company = ?, company_url = ?, category = ?, area = ?, city = ?, region = ?, country = ?, services = ?, price = ?, ring_opt_out = ?, directory_opt_out = ?, updated_at = ? WHERE domain = ?',
       [
         next.name, next.description, next.hours, next.address, next.phone, JSON.stringify(next.links), next.moshpit,
         next.operator, next.company, next.companyUrl, next.category, next.area, next.city, next.region, next.country, JSON.stringify(next.services), next.price,
-        next.ring ? 0 : 1, this.now(), domain,
+        next.ring ? 0 : 1, next.listed ? 0 : 1, this.now(), domain,
       ],
     )
     return this.toListing(this.row(domain), domain)
@@ -565,7 +613,15 @@ export class Listings {
     const category = categoryOf(query.category)?.slug ?? ''
     const near = words(query.near)
     const terms = words(query.q)
-    const rows = this.db.query('SELECT * FROM listings WHERE claimed_at IS NOT NULL ORDER BY updated_at DESC').all() as any[]
+    // Featured first (an editorial pick, never paid), then owner-verified listings by latest edit, then the
+    // ones pit.world listed itself. claimedOnly leaves those out (the feed of claims).
+    const rows = this.db
+      .query(
+        query.claimedOnly
+          ? 'SELECT * FROM listings WHERE claimed_at IS NOT NULL ORDER BY updated_at DESC'
+          : 'SELECT * FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0 ORDER BY featured DESC, claimed_at IS NULL, updated_at DESC, domain',
+      )
+      .all() as any[]
     const matched = rows
       .map((row) => this.toListing(row, row.domain))
       .filter((l) => !category || l.category === category)
@@ -584,9 +640,9 @@ export class Listings {
     return { total: matched.length, listings: matched.slice(offset, offset + limit) }
   }
 
-  /** How many claimed listings each category has. */
+  /** How many directory listings (claimed or listed by pit.world) each category has. */
   categoryCounts(): Record<string, number> {
-    const rows = this.db.query("SELECT category, COUNT(*) AS n FROM listings WHERE claimed_at IS NOT NULL AND category <> '' GROUP BY category").all() as Array<{ category: string; n: number }>
+    const rows = this.db.query("SELECT category, COUNT(*) AS n FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0 AND category <> '' GROUP BY category").all() as Array<{ category: string; n: number }>
     return Object.fromEntries(rows.map((r) => [r.category, r.n]))
   }
 
@@ -596,6 +652,59 @@ export class Listings {
       .query('SELECT domain, name, description, moshpit_only, feed_url, ring_joined_at FROM listings WHERE claimed_at IS NOT NULL AND ring_opt_out = 0 ORDER BY ring_joined_at, domain')
       .all() as any[]
     return rows.map((r) => ({ domain: r.domain, name: r.name || r.domain, description: r.description, moshpitOnly: Boolean(r.moshpit_only), feed: r.feed_url, joinedAt: r.ring_joined_at ?? 0 }))
+  }
+
+  /**
+   * List a business pit.world found in public records (a contractor's license, its own website), before
+   * its owner has claimed it. Refuses a claimed listing: once the owner has it, pit.world never writes to
+   * it again. Re-seeding the same domain updates what pit.world wrote and keeps its view count.
+   */
+  seed(input: SeedInput): Listing | null {
+    const domain = normalizeDomain(input.domain)
+    const name = clean(input.name, LIMITS.name)
+    if (!domain || !name) return null
+    const row = this.row(domain)
+    if (row?.claimed_at) return null
+    const values = [
+      name,
+      clean(input.description, LIMITS.description),
+      clean(input.phone, LIMITS.phone),
+      clean(input.address, LIMITS.address),
+      JSON.stringify(cleanLinks(input.links ?? [])),
+      categoryOf(input.category)?.slug ?? '',
+      clean(input.area, LIMITS.area),
+      clean(input.city, LIMITS.place),
+      clean(input.region, LIMITS.place),
+      clean(input.country, LIMITS.place),
+      JSON.stringify(cleanServices(input.services ?? [])),
+      clean(input.license, LIMITS.license),
+      input.licenseCheckedAt ?? null,
+      Math.trunc(Number(input.featured ?? 0)) || 0,
+    ]
+    if (!row) this.db.run('INSERT INTO listings (domain) VALUES (?)', [domain])
+    this.db.run(
+      'UPDATE listings SET name = ?, description = ?, phone = ?, address = ?, links = ?, category = ?, area = ?, city = ?, region = ?, country = ?, services = ?, license = ?, license_checked_at = ?, featured = ?, seeded_at = COALESCE(seeded_at, ?), updated_at = ? WHERE domain = ? AND claimed_at IS NULL',
+      [...values, this.now(), this.now(), domain],
+    )
+    return this.toListing(this.row(domain), domain)
+  }
+
+  /** Take a listing pit.world wrote back out of the directory (an owner asked, or a license lapsed). */
+  unseed(input: unknown): boolean {
+    const domain = normalizeDomain(input)
+    if (!domain) return false
+    return this.db.run('DELETE FROM listings WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NOT NULL', [domain]).changes > 0
+  }
+
+  /** Count one view of a listing that is in the directory. Bare unclaimed pages are not counted. */
+  view(input: unknown): void {
+    const domain = normalizeDomain(input)
+    if (domain) this.db.run('UPDATE listings SET views = views + 1 WHERE domain = ? AND (claimed_at IS NOT NULL OR seeded_at IS NOT NULL)', [domain])
+  }
+
+  /** Every listing in the directory, for the sitemap. */
+  directoryDomains(): string[] {
+    return (this.db.query('SELECT domain FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0 ORDER BY featured DESC, domain').all() as Array<{ domain: string }>).map((r) => r.domain)
   }
 
   /** Read a claimed site's homepage again: its feed, and whether it has an ICANN address at all. */

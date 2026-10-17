@@ -144,3 +144,110 @@ describe('listings: claim and edit', () => {
     expect(lines.join('\n')).toContain('claimed by the owner')
   })
 })
+
+describe('listings: listed by pit.world (seeded)', () => {
+  const BROWSER = { 'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15' }
+  const seedAcme = (h: ReturnType<typeof harness>, extra: Partial<Parameters<Listings['seed']>[0]> = {}) =>
+    h.listings.seed({ domain: 'acme-builders.com', name: 'Acme Builders, Inc.', description: 'Custom homes in Los Gatos.', phone: '(408) 555-0100', category: 'construction', area: 'Los Gatos and the South Bay', city: 'Los Gatos', region: 'CA', country: 'USA', services: ['Custom homes', 'Remodels'], license: 'CSLB #123456 (B - General Building)', licenseCheckedAt: Date.UTC(2026, 9, 17), ...extra })
+
+  it('shows in /pros, marked unclaimed, indexable, with a claim button and the license', async () => {
+    const h = harness()
+    expect(seedAcme(h)).toMatchObject({ seeded: true, claimed: false, quotes: false, ring: false, listed: true })
+    const pros = await (await h.request('/pros/construction')).text()
+    expect(pros).toContain('Acme Builders, Inc.')
+    expect(pros).toContain('unclaimed')
+    expect(pros).toContain('Yours? Claim it')
+    const page = await (await h.request('/b/acme-builders.com', { headers: BROWSER })).text()
+    expect(page).not.toContain('noindex')
+    expect(page).toContain('listed by pit.world · unclaimed')
+    expect(page).toContain('Is this your business? Claim it')
+    expect(page).toContain('action="/b/acme-builders.com/claim"')
+    expect(page).toContain('CSLB #123456 (B - General Building) · active when pit.world checked on 2026-10-17')
+    expect(page).toContain('(408) 555-0100')
+    expect(page).not.toContain('id="quote"')
+    expect(await (await h.request('/sitemap.xml')).text()).toContain('/b/acme-builders.com')
+  })
+
+  it('keeps what pit.world wrote instead of the homepage, never sends quotes, and stays out of the ring and the claims feed', async () => {
+    const h = harness({ 'acme-builders.com': '<title>Home | Template</title>' })
+    seedAcme(h)
+    expect((await h.listings.get('acme-builders.com'))!.name).toBe('Acme Builders, Inc.')
+    expect(await h.listings.requestQuote('acme-builders.com', { name: 'A', email: 'a@example.com', message: 'Please quote me a kitchen.' })).toBe('unavailable')
+    expect(h.listings.ringMembers().map((m) => m.domain)).not.toContain('acme-builders.com')
+    expect(await (await h.request('/b/feed.xml')).text()).not.toContain('acme-builders.com')
+  })
+
+  it('puts featured listings first, then claimed ones, then the rest', async () => {
+    const h = harness()
+    seedAcme(h)
+    h.listings.seed({ domain: 'first-builders.com', name: 'First Builders', category: 'construction', featured: 10 })
+    const key = await claimByDns(h, 'acme-bakery.com')
+    h.listings.edit('acme-bakery.com', key, { category: 'construction' }, looksLikeName)
+    expect(h.listings.directory({ category: 'construction' }).listings.map((l) => l.domain)).toEqual(['first-builders.com', 'acme-bakery.com', 'acme-builders.com'])
+    expect(h.listings.categoryCounts().construction).toBe(3)
+  })
+
+  it('counts views from people, not crawlers or scripts', async () => {
+    const h = harness()
+    seedAcme(h)
+    await h.request('/b/acme-builders.com', { headers: BROWSER })
+    await h.request('/b/acme-builders.com', { headers: BROWSER })
+    await h.request('/b/acme-builders.com', { headers: { 'user-agent': 'Googlebot/2.1 (+http://www.google.com/bot.html)' } })
+    await h.request('/b/acme-builders.com', { headers: { 'user-agent': 'curl/8.5.0' } })
+    await h.request('/b/acme-builders.com')
+    expect((await h.listings.get('acme-builders.com', { fetchMeta: false }))!.views).toBe(2)
+    // A bare unclaimed page is not counted (nothing to report to anyone).
+    await h.request('/b/acme-bakery.com', { headers: BROWSER })
+    expect((await h.listings.get('acme-bakery.com', { fetchMeta: false }))!.views).toBe(0)
+  })
+
+  it('the owner claims it and takes over; pit.world can never write to it again; the owner can leave the directory', async () => {
+    const h = harness()
+    seedAcme(h)
+    await h.request('/b/acme-builders.com', { headers: BROWSER })
+    const key = await claimByDns(h, 'acme-builders.com')
+    const claimed = (await h.listings.get('acme-builders.com'))!
+    expect(claimed).toMatchObject({ claimed: true, seeded: false, name: 'Acme Builders, Inc.', views: 1 })
+    expect(h.listings.seed({ domain: 'acme-builders.com', name: 'Overwritten' })).toBeNull()
+    expect(h.listings.unseed('acme-builders.com')).toBe(false)
+    h.listings.edit('acme-builders.com', key, { listed: false }, looksLikeName)
+    expect(h.listings.directory().listings.map((l) => l.domain)).not.toContain('acme-builders.com')
+    expect((await h.request('/b/acme-builders.com')).status).toBe(200)
+  })
+
+  it('unseed removes it; seed refuses a listing without a name, and never stores an email', async () => {
+    const h = harness()
+    seedAcme(h)
+    expect(h.listings.unseed('acme-builders.com')).toBe(true)
+    expect(h.listings.directory().total).toBe(0)
+    expect(h.listings.seed({ domain: 'acme-builders.com', name: '' })).toBeNull()
+    const l = h.listings.seed({ domain: 'acme-builders.com', name: 'Acme', contactEmail: 'owner@acme-builders.com' } as any)!
+    expect(JSON.stringify(l)).not.toContain('owner@')
+  })
+
+  it('seeds from a JSON file with the admin command and reports views', async () => {
+    const { admin } = await import('../src/admin.ts')
+    const { writeFileSync, mkdtempSync } = await import('node:fs')
+    const dir = mkdtempSync(`${process.env.TMPDIR ?? '/tmp'}/pit-admin-`)
+    writeFileSync(`${dir}/seed.json`, JSON.stringify([{ domain: 'acme-builders.com', name: 'Acme Builders', category: 'construction' }]))
+    const h = harness()
+    const lines: string[] = []
+    const out = { log: (t: string) => lines.push(t), error: (t: string) => lines.push(t) }
+    expect(await admin(['seed', `${dir}/seed.json`], h.listings, out)).toBe(0)
+    expect(lines[0]).toContain('seeded  acme-builders.com')
+    lines.length = 0
+    expect(await admin(['views'], h.listings, out)).toBe(0)
+    expect(JSON.parse(lines[0]!)).toEqual([{ domain: 'acme-builders.com', name: 'Acme Builders', claimed: false, views: 0, url: 'https://pit.world/b/acme-builders.com' }])
+  })
+})
+
+describe('listings: website link', () => {
+  it('links the site on its own domain when it only answers on www or http', async () => {
+    const h = harness()
+    h.listings.seed({ domain: 'old-builders.com', name: 'Old Builders', links: ['http://www.old-builders.com/', 'https://houzz.com/pro/old'] })
+    const page = await (await h.request('/b/old-builders.com')).text()
+    expect(page).toContain('href="http://www.old-builders.com/"')
+    expect(page).not.toContain('href="https://old-builders.com/"')
+    expect(page).toContain('houzz.com/pro/old')
+  })
+})

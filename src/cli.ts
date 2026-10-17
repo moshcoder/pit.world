@@ -32,7 +32,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
        [--contact EMAIL|""] [--ring in|out] [--name N] [--description D]
                                edit your listing (or PIT_EDIT_KEY=... instead of --key)
   pit pros [WORDS] [--category SLUG] [--near PLACE]
-                               the pro directory: verified businesses, no paid placement
+                               the pro directory: verified and licensed businesses, no paid placement
   pit categories               the directory's categories
   pit quote DOMAIN --name N --email E --message M [--phone P]
                                ask one listed pro for a quote; they reply to your email
@@ -118,8 +118,8 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         const l = await client.listing(domain)
         if (json) out.log(JSON.stringify(l, null, 2))
         else {
-          out.log(`${l.name || l.domain}  (${l.claimed ? 'claimed by the owner' : 'unclaimed'})  https://pit.world/b/${l.domain}`)
-          for (const [k, v] of [['', l.description], ['Hours', l.hours], ['Address', l.address], ['Phone', l.phone], ['Moshpit', l.moshpit]] as const) if (v) out.log(k ? `${k}: ${v}` : v)
+          out.log(`${l.name || l.domain}  (${l.claimed ? 'claimed by the owner' : l.seeded ? 'listed by pit.world, unclaimed' : 'unclaimed'})  https://pit.world/b/${l.domain}`)
+          for (const [k, v] of [['', l.description], ['Hours', l.hours], ['Address', l.address], ['Phone', l.phone], ['License', l.license], ['Moshpit', l.moshpit]] as const) if (v) out.log(k ? `${k}: ${v}` : v)
           for (const link of l.links) out.log(link)
         }
         return 0
@@ -153,7 +153,7 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
           if (!r.results.length) out.log('No listings match. Claim yours: https://pit.world/b')
           for (const l of r.results) {
             const where = [l.area, [l.city, l.region, l.country].filter(Boolean).join(', ')].filter(Boolean).join(' · ')
-            out.log(`${l.name || l.domain}  https://pit.world/b/${l.domain}${l.category ? `\n    ${l.category}` : ''}${where ? `  ${where}` : ''}${l.description ? `\n    ${l.description}` : ''}${l.quotes ? '\n    takes quote requests: pit quote ' + l.domain : ''}`)
+            out.log(`${l.name || l.domain}${l.claimed ? '' : '  (unclaimed)'}  https://pit.world/b/${l.domain}${l.category ? `\n    ${l.category}` : ''}${where ? `  ${where}` : ''}${l.description ? `\n    ${l.description}` : ''}${l.quotes ? '\n    takes quote requests: pit quote ' + l.domain : ''}`)
           }
           if (r.total > r.results.length) out.log(`… ${r.total - r.results.length} more (use -n or the web: https://pit.world/pros)`)
         }

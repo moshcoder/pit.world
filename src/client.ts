@@ -72,7 +72,7 @@ export class PitClient {
     return this.post('/api/listing/verify', { claim: claimId })
   }
 
-  /** The pro directory: claimed listings, filtered by category, place and words. */
+  /** The pro directory: claimed listings and ones pit.world listed (seeded), filtered by category, place and words. */
   pros(options: { category?: string; near?: string; q?: string; n?: number; page?: number } = {}): Promise<{ total: number; page: number; results: Listing[] }> {
     const params = new URLSearchParams()
     if (options.category) params.set('c', options.category)

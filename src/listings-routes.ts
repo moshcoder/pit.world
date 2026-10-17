@@ -39,6 +39,10 @@ const CONTACT_MESSAGES: Record<ContactResult, string> = {
   failed: "pit.world couldn't send the confirmation email just now; try saving again in a few minutes.",
 }
 
+/** Crawlers, link previews and scripts: their visits are not views. A missing user agent is not a person either. */
+const NOT_A_PERSON = /bot|crawl|spider|slurp|preview|fetch|curl|wget|python|httpx|go-http|java\/|node|bun\/|axios|headless|lighthouse|monitor|scan|check|facebookexternalhit|embedly|whatsapp|telegram|discord|slack/i
+export const isPerson = (userAgent: string | undefined) => Boolean(userAgent) && !NOT_A_PERSON.test(userAgent!)
+
 const pageNumber = (raw: string | undefined) => {
   const n = Math.trunc(Number(raw ?? 1))
   return Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 1
@@ -81,13 +85,14 @@ export function mountListings(
   })
 
   app.get('/b/feed.xml', (c) =>
-    c.body(listingsFeed(listings.directory({ limit: 50 }).listings), 200, { 'content-type': 'application/atom+xml; charset=utf-8', 'cache-control': 'public, max-age=900' }),
+    c.body(listingsFeed(listings.directory({ limit: 50, claimedOnly: true }).listings), 200, { 'content-type': 'application/atom+xml; charset=utf-8', 'cache-control': 'public, max-age=900' }),
   )
 
   app.get('/b/:domain', async (c) => {
     const listing = await listings.get(c.req.param('domain'))
     if (!listing) return c.notFound()
     if (listing.domain !== c.req.param('domain')) return c.redirect(`/b/${encodeURIComponent(listing.domain)}`, 301)
+    if (c.req.method === 'GET' && isPerson(c.req.header('user-agent'))) listings.view(listing.domain)
     return c.html(listingPage(listing))
   })
 
