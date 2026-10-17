@@ -4,6 +4,22 @@
 # name's first plain-http visit, and it is safe to run by hand:
 #   pit-proxy-cert family.ancestry.pit.world
 set -eu
+
+# nginx workers (www-data) read these at handshake time; /etc/letsencrypt/live is root only.
+install_for_nginx() {
+  install -d -m 0750 -g www-data /etc/nginx/pit-proxy-certs
+  install -m 0644 "/etc/letsencrypt/live/$1/fullchain.pem" "/etc/nginx/pit-proxy-certs/$1.crt"
+  install -m 0640 -g www-data "/etc/letsencrypt/live/$1/privkey.pem" "/etc/nginx/pit-proxy-certs/$1.key"
+}
+
+# As the certbot deploy hook: copy whatever was just renewed.
+if [ "${1:-}" = "--renewed" ]; then
+  for d in ${RENEWED_DOMAINS:-}; do
+    case "$d" in *.*.pit.world) install_for_nginx "$d" ;; esac
+  done
+  exit 0
+fi
+
 host="${1:-}"
 case "$host" in
   *.*.pit.world) ;;
@@ -19,4 +35,5 @@ exec 9>/run/lock/pit-proxy-cert.lock
 flock 9
 certbot certonly --webroot -w /var/www/pit-acme -d "$host" --cert-name "$host" \
   --non-interactive --agree-tos --keep-until-expiring --quiet
+install_for_nginx "$host"
 nginx -t -q && systemctl reload nginx

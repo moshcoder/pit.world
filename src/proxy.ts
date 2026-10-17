@@ -103,7 +103,7 @@ export type Certs = {
 }
 
 /** Certificates under /etc/letsencrypt/live, issued by /usr/local/bin/pit-proxy-cert. */
-export function liveCerts(options: { dir?: string; command?: string; weeklyCap?: number } = {}): Certs {
+export function liveCerts(options: { dir?: string; served?: string; command?: string; weeklyCap?: number } = {}): Certs {
   const dir = options.dir ?? '/etc/letsencrypt/live'
   const command = options.command ?? '/usr/local/bin/pit-proxy-cert'
   const cap = options.weeklyCap ?? 30
@@ -117,7 +117,8 @@ export function liveCerts(options: { dir?: string; command?: string; weeklyCap?:
     }
   }
   return {
-    has: (host) => existsSync(`${dir}/${host}/fullchain.pem`),
+    // The copy nginx serves from (pit-proxy-cert makes it), not certbot's original.
+    has: (host) => existsSync(`${options.served ?? '/etc/nginx/pit-proxy-certs'}/${host}.crt`),
     issue(host) {
       if (Date.now() - (asked.get(host) ?? 0) < 3_600_000 || issuedThisWeek() + asked.size >= cap || !existsSync(command)) return false
       asked.set(host, Date.now())
