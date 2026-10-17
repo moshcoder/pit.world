@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
+import { GATEWAY, RING, ringBar, siteHref } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 
@@ -67,12 +68,14 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <script src="${APP_URL}" defer></script>
 </head>
 <body class="${options.bodyClass ?? ''}">
+${ringBar('pit.world', false)}
 ${options.body}
 <footer class="foot">
   <nav>
     <a href="/privacy">Privacy</a>
     <a href="/connect">Connect to Moshpit</a>
     <a href="/build">Build an app</a>
+    <a href="/ring">Moshpit ring</a>
     <a href="/about">How it works</a>
     <a href="/about#default">Make it your default</a>
     <a href="/about#bangs">Bangs</a>
@@ -708,4 +711,24 @@ export function openSearchXml(): string {
   <Url type="application/opensearchdescription+xml" rel="self" template="${SITE}/opensearch.xml"/>
   <moz:SearchForm>${SITE}/</moz:SearchForm>
 </OpenSearchDescription>`
+}
+
+export function ringPage(): string {
+  const rows = RING.map((s) => `<li><h3><a href="${esc(siteHref(s, false))}">${esc(s.name)}</a></h3><p>${esc(s.about)}</p>${s.moshpit ? `<p class="muted">A Moshpit name. On Moshpit DNS: <a href="${esc(siteHref(s, true))}">${esc(siteHref(s, true))}</a>. Everyone else: through the gateway, as linked above.</p>` : ''}</li>`).join('')
+  return docPage({
+    title: 'The Moshpit ring: sites on the Moshpit network',
+    description: 'A web ring of sites on the Moshpit network. Every member carries the same bar, so you can walk from one to the next, Moshpit DNS or not.',
+    path: '/ring',
+    body: `<h1>The Moshpit ring</h1>
+<p class="lede">Sites on the Moshpit network, linked the old way: every member carries the same bar across the top, with the one before it, the one after it, and a random one.</p>
+<ul class="ring-list">${rows}</ul>
+<h2>No Moshpit DNS? Still works.</h2>
+<p>A name like <code>seo.rank</code> only opens for a visitor on Moshpit DNS. When a member site cannot tell that you are, the bar links through the registry gateway instead, <code>${esc(GATEWAY)}&lt;name&gt;</code>, which looks the name up over Moshpit DoH and shows you its homepage on an ordinary address. <a href="/connect">Get on Moshpit DNS</a> and the links go straight to the site.</p>
+<h2>Join</h2>
+<p>Run a site on a Moshpit name (or link to the network from one that isn't)? Add the bar and ask to be listed: open an issue on <a href="https://github.com/moshcoder/pit.world/issues">github.com/moshcoder/pit.world</a>.</p>
+<ul>
+<li><code>GET https://pit.world/api/ring</code>: the members as JSON, with a direct and a gateway URL for each. Draw the bar from it.</li>
+<li>Or paste three links, no code at all: <code>https://pit.world/ring/prev?from=&lt;your.name&gt;</code>, <code>/ring/next?from=…</code> and <code>/ring/random?from=…</code>. Add <code>&amp;direct=1</code> when your visitors are on Moshpit DNS.</li>
+</ul>`,
+  })
 }

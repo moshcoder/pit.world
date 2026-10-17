@@ -6,10 +6,11 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage, ringPage } from './html.js'
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
+import { neighbors, randomSite, ringJson, siteHref } from './ring.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
@@ -120,6 +121,19 @@ export function createApp(deps: Deps) {
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
   app.get('/build', (c) => c.html(buildPage()))
+
+  // --- the Moshpit ring -----------------------------------------------------------
+  app.get('/ring', (c) => c.html(ringPage()))
+  app.get('/api/ring', (c) =>
+    // Member sites fetch this server-side; the CORS header lets a browser-only site use it too.
+    c.json(ringJson(), 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }),
+  )
+  app.get('/ring/:to{next|prev|random}', (c) => {
+    const from = c.req.query('from')
+    const to = c.req.param('to')
+    const site = to === 'random' ? randomSite(from) : neighbors(from)[to as 'next' | 'prev']
+    return c.redirect(siteHref(site, c.req.query('direct') === '1'), 302)
+  })
   app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
   app.get('/robots.txt', (c) =>
@@ -127,7 +141,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/about', '/privacy']
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/ring', '/about', '/privacy']
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,

@@ -163,6 +163,20 @@ pre code { background: none; padding: 0; }
 .subscribe button { border: 0; background: var(--accent); color: var(--accent-ink); font: 700 14px var(--mono); padding: 0 18px; cursor: pointer; }
 .subscribe .hp { position: absolute; left: -9999px; width: 1px; height: 1px; opacity: 0; }
 
+/* the Moshpit ring bar, on every page */
+.ring-bar { display: flex; align-items: center; gap: 4px 16px; padding: 6px 16px; border-bottom: 1px solid var(--line); background: var(--panel); font: 13px/1.4 var(--mono); white-space: nowrap; overflow-x: auto; scrollbar-width: none; }
+.ring-bar::-webkit-scrollbar { display: none; }
+.ring-bar a, .ring-bar a:visited { color: var(--muted); text-decoration: none; }
+.ring-bar a:hover, .ring-bar a:focus-visible { color: var(--link); text-decoration: underline; }
+.ring-bar .ring-home, .ring-bar .ring-home:visited { color: var(--accent); font-weight: 700; }
+.ring-bar .ring-sites { display: inline-flex; gap: 12px; padding: 0 12px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.ring-bar [aria-current='page'], .ring-bar [aria-current='page']:visited { color: var(--text); }
+@media (max-width: 640px) { .ring-bar .ring-sites, .ring-bar .ring-home span { display: none; } }
+.ring-list { list-style: none; padding: 0; }
+.ring-list li { border: 1px solid var(--line); border-radius: 10px; padding: 4px 18px; margin: 12px 0; background: var(--panel); }
+.ring-list h3 { margin: 12px 0 4px; font-family: var(--mono); }
+.ring-list .muted { color: var(--muted); font-size: 14px; }
+
 .foot { border-top: 1px solid var(--line); padding: 22px 16px 30px; text-align: center; color: var(--muted); font-size: 14px; }
 .foot nav { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; margin-bottom: 8px; }
 .foot a { color: var(--muted); }
