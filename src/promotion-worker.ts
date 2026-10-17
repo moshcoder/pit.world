@@ -93,7 +93,7 @@ export async function verifyPublic(p: Placement, fetchImpl: typeof fetch = fetch
   const network = p.channel === 'pit.world' ? 'pit.world' : p.account.split(':')[0]
   const at = new Date().toISOString()
   const get = async (url: string) => {
-    const r = await fetchImpl(url, { headers: { accept: 'application/json, text/html', 'user-agent': 'pit.world promotion verifier (+https://pit.world)' }, signal: AbortSignal.timeout(15_000) })
+    const r = await fetchImpl(url, { headers: { accept: 'application/json, text/html', 'user-agent': 'pit.world-verifier-bot (+https://pit.world/privacy#listings)' }, signal: AbortSignal.timeout(15_000) })
     return { status: r.status, text: await r.text().catch(() => '') }
   }
   if (network === 'pit.world') {
