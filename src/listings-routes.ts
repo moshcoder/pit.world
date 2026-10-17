@@ -1,11 +1,18 @@
-/** Routes for business listings: /b pages and /api/listing. Mounted by createApp when a Listings store is given. */
+/** Routes for business listings (/b, /pros, /api/listing, /api/pros). Mounted by createApp when a Listings store is given. */
 import type { Context, Hono } from 'hono'
-import { claimPage, editPage, listingPage, listingsIndexPage, verifiedPage, verifyFailedPage } from './listings-html.js'
-import { normalizeDomain, type ClaimStart, type ListingEdit, type Listings } from './listings.js'
+import {
+  claimPage, contactConfirmedPage, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, verifiedPage, verifyFailedPage, type QuoteState,
+} from './listings-html.js'
+import { EDIT_FIELDS, normalizeDomain, type ClaimStart, type ContactResult, type ListingEdit, type Listings } from './listings.js'
+import { CATEGORIES, categoryOf, PRICES } from './pros.js'
+import { RateLimiter } from './ratelimit.js'
 
 type Env = { Bindings: { ip?: string } }
 
-const EDIT_FIELDS = ['name', 'description', 'hours', 'address', 'phone', 'links', 'moshpit'] as const
+export type ListingHooks = {
+  /** Something about ring membership may have changed (a claim, an edit). */
+  ringChanged?: () => void
+}
 
 function rebuild(listings: Listings, claimId: string): ClaimStart | null {
   const claim = listings.claimFor(claimId)
@@ -21,10 +28,50 @@ function edits(source: Record<string, unknown>): ListingEdit {
   return out as ListingEdit
 }
 
-export function mountListings(app: Hono<Env>, listings: Listings, limited: (c: Context<Env>) => boolean, isMoshpitName: (name: string) => boolean) {
+const CONTACT_MESSAGES: Record<ContactResult, string> = {
+  pending: 'Check that inbox: quote requests start once the link pit.world just sent there is clicked.',
+  cleared: 'Quote requests are off, and the address is forgotten.',
+  unchanged: '',
+  invalid: "The quote-request address doesn't look like an email address; it was not changed.",
+  undeliverable: "The quote-request address's domain can't receive mail; it was not changed.",
+  unauthorized: '',
+  unavailable: 'This pit.world instance cannot send mail, so quote requests are off.',
+  failed: "pit.world couldn't send the confirmation email just now; try saving again in a few minutes.",
+}
+
+const pageNumber = (raw: string | undefined) => {
+  const n = Math.trunc(Number(raw ?? 1))
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 1
+}
+
+export function mountListings(
+  app: Hono<Env>,
+  listings: Listings,
+  limited: (c: Context<Env>) => boolean,
+  isMoshpitName: (name: string) => boolean,
+  hooks: ListingHooks = {},
+) {
   const tooMany = (c: Context<Env>) => {
     c.header('retry-after', '30')
     return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
+  }
+  // Quote requests: three an hour from one visitor, whatever listings they are for.
+  const quoteLimiter = new RateLimiter(3, 3 / 60)
+  const quoteLimited = (c: Context<Env>) => limited(c) || !quoteLimiter.take(c.env?.ip || 'unknown')
+  const ringChanged = () => hooks.ringChanged?.()
+
+  /** Save an edit, and the private contact address when one was sent. */
+  async function save(domain: string, key: unknown, body: Record<string, unknown>) {
+    const saved = listings.edit(domain, key, edits(body), isMoshpitName)
+    if (!saved) return null
+    let contact: ContactResult | null = null
+    if (body.contactRemove === '1' || body.contactRemove === true || body.contactEmail === '') contact = await listings.setContact(domain, key, '')
+    else {
+      const email = body.contactEmail ?? body.contact
+      if (typeof email === 'string' && email.trim()) contact = await listings.setContact(domain, key, email)
+    }
+    ringChanged()
+    return { saved: (await listings.get(domain, { fetchMeta: false }))!, contact, status: listings.contactStatus(domain, key) }
   }
 
   // --- pages ---------------------------------------------------------------------
@@ -32,6 +79,10 @@ export function mountListings(app: Hono<Env>, listings: Listings, limited: (c: C
     const domain = normalizeDomain(c.req.query('domain'))
     return domain ? c.redirect(`/b/${encodeURIComponent(domain)}`, 302) : c.html(listingsIndexPage())
   })
+
+  app.get('/b/feed.xml', (c) =>
+    c.body(listingsFeed(listings.directory({ limit: 50 }).listings), 200, { 'content-type': 'application/atom+xml; charset=utf-8', 'cache-control': 'public, max-age=900' }),
+  )
 
   app.get('/b/:domain', async (c) => {
     const listing = await listings.get(c.req.param('domain'))
@@ -61,7 +112,10 @@ export function mountListings(app: Hono<Env>, listings: Listings, limited: (c: C
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
     const claimId = String(form.claim ?? '')
     const result = await listings.verify(claimId)
-    if (result.ok) return c.html(verifiedPage(domain, result.editKey, result.method), 200, { 'cache-control': 'no-store' })
+    if (result.ok) {
+      ringChanged()
+      return c.html(verifiedPage(domain, result.editKey, result.method), 200, { 'cache-control': 'no-store' })
+    }
     return c.html(verifyFailedPage(domain, rebuild(listings, claimId)), result.reason === 'unknown-claim' ? 410 : 400)
   })
 
@@ -73,11 +127,51 @@ export function mountListings(app: Hono<Env>, listings: Listings, limited: (c: C
   app.post('/b/:domain/edit', async (c) => {
     if (limited(c)) return c.text('Too many requests. Try again shortly.', 429, { 'retry-after': '30' })
     const form = (await c.req.parseBody().catch(() => ({}))) as Record<string, unknown>
-    const saved = listings.edit(c.req.param('domain'), form.key, edits(form), isMoshpitName)
-    if (saved) return c.html(editPage(saved, 'Saved.'))
+    const domain = normalizeDomain(c.req.param('domain'))
+    const result = domain ? await save(domain, form.key, form) : null
+    if (result) return c.html(editPage(result.saved, ['Saved.', result.contact ? CONTACT_MESSAGES[result.contact] : ''].filter(Boolean).join(' '), result.status))
     const listing = await listings.get(c.req.param('domain'), { fetchMeta: false })
     return listing ? c.html(editPage(listing, 'That edit key does not match this listing.'), 403) : c.notFound()
   })
+
+  app.get('/b/:domain/contact', (c) => {
+    const domain = normalizeDomain(c.req.param('domain'))
+    if (!domain) return c.notFound()
+    const ok = listings.confirmContact(domain, c.req.query('t'))
+    return c.html(contactConfirmedPage(domain, ok), ok ? 200 : 410, { 'cache-control': 'no-store' })
+  })
+
+  app.post('/b/:domain/quote', async (c) => {
+    const listing = await listings.get(c.req.param('domain'), { fetchMeta: false })
+    if (!listing?.claimed) return c.notFound()
+    const show = (state: QuoteState, status: 200 | 400 | 429 | 503 = 200) => c.html(listingPage(listing, { quote: state }), status, { 'cache-control': 'no-store' })
+    if (quoteLimited(c)) return show('limited', 429)
+    const form = (await c.req.parseBody().catch(() => ({}))) as Record<string, unknown>
+    // The honeypot: a field people never see. A bot that fills it is told it worked, and nothing is sent.
+    if (typeof form.website === 'string' && form.website !== '') return show('sent')
+    const result = await listings.requestQuote(listing.domain, form)
+    return show(result, result === 'sent' ? 200 : result === 'limited' ? 429 : result === 'failed' ? 503 : 400)
+  })
+
+  const directory = (c: Context<Env>, category: string | undefined) => {
+    const perPage = 20
+    const page = pageNumber(c.req.query('page'))
+    const q = (c.req.query('q') ?? '').trim().slice(0, 120)
+    const near = (c.req.query('near') ?? '').trim().slice(0, 120)
+    const { total, listings: found } = listings.directory({ category, q, near, limit: perPage, offset: (page - 1) * perPage })
+    return c.html(prosPage({ listings: found, total, category: category ?? '', q, near, page, perPage, counts: listings.categoryCounts() }))
+  }
+  app.get('/pros', (c) => {
+    const cat = categoryOf(c.req.query('c') ?? c.req.query('category'))
+    if (cat) {
+      const params = new URLSearchParams()
+      for (const k of ['q', 'near', 'page']) if (c.req.query(k)) params.set(k, c.req.query(k)!)
+      const s = params.toString()
+      return c.redirect(`/pros/${cat.slug}${s ? `?${s}` : ''}`, 301)
+    }
+    return directory(c, undefined)
+  })
+  app.get('/pros/:category', (c) => (categoryOf(c.req.param('category')) ? directory(c, c.req.param('category')) : c.notFound()))
 
   // --- API -----------------------------------------------------------------------
   app.get('/api/listing', async (c) => {
@@ -98,6 +192,7 @@ export function mountListings(app: Hono<Env>, listings: Listings, limited: (c: C
     if (limited(c)) return tooMany(c)
     const body = (await c.req.json().catch(() => ({}))) as { claim?: unknown }
     const result = await listings.verify(body.claim)
+    if (result.ok) ringChanged()
     return result.ok ? c.json(result) : c.json(result, result.reason === 'unknown-claim' ? 410 : 400)
   })
 
@@ -105,7 +200,33 @@ export function mountListings(app: Hono<Env>, listings: Listings, limited: (c: C
     if (limited(c)) return tooMany(c)
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
     const key = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '')
-    const saved = listings.edit(body.domain, key, edits(body), isMoshpitName)
-    return saved ? c.json(saved) : c.json({ error: 'unauthorized: send the edit key as Authorization: Bearer <key>' }, 401)
+    const domain = normalizeDomain(body.domain)
+    const result = domain ? await save(domain, key, body) : null
+    if (!result) return c.json({ error: 'unauthorized: send the edit key as Authorization: Bearer <key>' }, 401)
+    return c.json({ ...result.saved, contactStatus: result.status, ...(result.contact ? { contactResult: result.contact } : {}) })
+  })
+
+  app.post('/api/listing/quote', async (c) => {
+    if (quoteLimited(c)) return tooMany(c)
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    if (typeof body.website === 'string' && body.website !== '') return c.json({ ok: true, status: 'sent' })
+    const result = await listings.requestQuote(body.domain, body)
+    const status = { sent: 200, invalid: 400, undeliverable: 400, unavailable: 404, limited: 429, failed: 503 }[result] as 200 | 400 | 404 | 429 | 503
+    return c.json({ ok: result === 'sent', status: result }, status)
+  })
+
+  app.get('/api/pros', (c) => {
+    const raw = Math.trunc(Number(c.req.query('n') ?? 20))
+    const n = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 100) : 20
+    const page = pageNumber(c.req.query('page'))
+    const category = c.req.query('c') ?? c.req.query('category') ?? ''
+    if (category && !categoryOf(category)) return c.json({ error: 'unknown category; see GET /api/pros/categories' }, 400)
+    const { total, listings: results } = listings.directory({ category, q: c.req.query('q'), near: c.req.query('near'), limit: n, offset: (page - 1) * n })
+    return c.json({ total, page, results })
+  })
+
+  app.get('/api/pros/categories', (c) => {
+    const counts = listings.categoryCounts()
+    return c.json({ categories: CATEGORIES.map((cat) => ({ ...cat, count: counts[cat.slug] ?? 0 })), prices: PRICES })
   })
 }

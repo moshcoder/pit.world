@@ -235,4 +235,23 @@ pre code { background: none; padding: 0; }
 .listing-form input, .listing-form textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 12px; }
 .listing-form .btn { justify-self: start; margin-top: 12px; border: 0; cursor: pointer; }
 .card.listing { border-color: var(--line); }
+.listing-form select { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 12px; }
+.listing-form h2 { margin: 22px 0 0; font-size: 18px; }
+.listing-form .check { font-weight: 400; display: flex; gap: 8px; align-items: center; }
+.listing-form .check input { width: auto; }
+.listing-form .small { margin: 0; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; opacity: 0; }
+.quote { border-top: 1px solid var(--line); margin-top: 26px; padding-top: 6px; }
+.services { columns: 2 220px; padding-left: 18px; }
+.handle { font-family: var(--mono); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
+.chip, .chip:visited { border: 1px solid var(--line); border-radius: 999px; padding: 4px 12px; color: var(--muted); text-decoration: none; font-size: 14px; }
+.chip:hover { color: var(--text); }
+.chip.on, .chip.on:visited { border-color: var(--accent); color: var(--text); }
+.chip span { color: var(--accent); font-family: var(--mono); font-size: 12px; }
+.pros { list-style: none; padding: 0; display: grid; gap: 12px; }
+.pro { border: 1px solid var(--line); border-radius: 10px; padding: 4px 18px 12px; background: var(--panel); }
+.pro h3 { margin: 12px 0 4px; }
+.pro .row { display: flex; gap: 14px; flex-wrap: wrap; margin: 6px 0 0; }
+.listing-lookup input[name=near] { max-width: 260px; }
 form .btn { border: 0; cursor: pointer; }

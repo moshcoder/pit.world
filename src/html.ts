@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
-import { RING, ringBar, siteHref } from './ring.js'
+import { ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 
@@ -64,6 +64,7 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="pit.world">
 <link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
+<link rel="alternate" type="application/atom+xml" title="New on pit.world" href="/b/feed.xml">
 <link rel="stylesheet" href="${STYLE_URL}">
 <script src="${APP_URL}" defer></script>
 </head>
@@ -75,7 +76,9 @@ ${options.body}
     <a href="/privacy">Privacy</a>
     <a href="/connect">Connect to Moshpit</a>
     <a href="/build">Build an app</a>
-    <a href="/ring">Moshpit ring</a>
+    <a href="/ring">Web ring</a>
+    <a href="/pros">Find a pro</a>
+    <a href="/b">Claim your listing</a>
     <a href="/about">How it works</a>
     <a href="/about#default">Make it your default</a>
     <a href="/about#bangs">Bangs</a>
@@ -713,22 +716,46 @@ export function openSearchXml(): string {
 </OpenSearchDescription>`
 }
 
-export function ringPage(): string {
-  const rows = RING.map((s) => `<li><h3><a href="${esc(siteHref(s, false))}">${esc(s.name)}</a></h3><p>${esc(s.about)}</p>${s.moshpit ? `<p class="muted">A Moshpit name. On Moshpit DNS: <a href="${esc(siteHref(s, true))}">${esc(siteHref(s, true))}</a>. Everyone else: through pit.world, as linked above.</p>` : ''}</li>`).join('')
+export function ringPage(options: { mirror?: { ok: boolean; at: number; missing: string[] } | null } = {}): string {
+  const sites = ringSites()
+  const rows = sites
+    .map(
+      (s) =>
+        `<li><h3><a href="${esc(siteHref(s, false))}">${esc(s.name)}</a></h3><p>${esc(s.about)}</p>${s.listing ? `<p class="muted"><a href="/b/${encodeURIComponent(s.name)}">Listing on pit.world</a>${s.feed ? ` · <a href="${esc(s.feed)}" rel="noreferrer noopener">feed</a>` : ''}</p>` : ''}${s.moshpit ? `<p class="muted">A Moshpit name. On Moshpit DNS: <a href="${esc(siteHref(s, true))}">${esc(siteHref(s, true))}</a>. Everyone else: through pit.world, as linked above.</p>` : ''}</li>`,
+    )
+    .join('')
   return docPage({
-    title: 'The Moshpit ring: sites on the Moshpit network',
-    description: 'A web ring of sites on the Moshpit network. Every member carries the same bar, so you can walk from one to the next, Moshpit DNS or not.',
+    title: 'The pit.world ring: a web ring of claimed sites and the Moshpit network',
+    description: 'A web ring of every business and site claimed on pit.world, plus the Moshpit network sites it started with. Walk from one to the next, Moshpit DNS or not.',
     path: '/ring',
-    body: `<h1>The Moshpit ring</h1>
-<p class="lede">Sites on the Moshpit network, linked the old way: every member carries the same bar across the top, with the one before it, the one after it, and a random one.</p>
+    body: `<h1>The pit.world ring</h1>
+<p class="lede">${sites.length} sites, linked the old way: each member carries the same links, to the one before it, the one after it, and a random one. Every business that claims its listing on pit.world joins automatically, so this is also the quickest way to look around the sites on pit.world.</p>
+<p class="row"><a class="btn" href="/ring/random">Visit a random site</a> <a href="/pros">Browse the pro directory</a> <a href="${RSS_RING}" rel="noreferrer noopener">The ring's feeds on rssamplifier.com</a></p>
 <ul class="ring-list">${rows}</ul>
 <h2>No Moshpit DNS? Still works.</h2>
 <p>A name like <code>seo.rank</code> only opens for a visitor on Moshpit DNS. When a member site cannot tell that you are, the bar links to <code>https://&lt;name&gt;.pit.world/</code> instead: the whole site, relayed by pit.world on an ordinary address that opens in any browser. <a href="/connect">Get on Moshpit DNS</a> and the links go straight to the site.</p>
 <h2>Join</h2>
-<p>Run a site on a Moshpit name (or link to the network from one that isn't)? Add the bar and ask to be listed: open an issue on <a href="https://github.com/moshcoder/pit.world/issues">github.com/moshcoder/pit.world</a>.</p>
+<p><a href="/b">Claim your site's listing</a>: claiming is joining. The verified page gives you the links to paste; owners can leave the ring from the edit page. Members with an RSS or Atom feed on their homepage (<code>&lt;link rel="alternate"&gt;</code>) are mirrored to <a href="${RSS_RING}" rel="noreferrer noopener">rssamplifier.com/ring/pit-world</a>, which reads their posts${options.mirror ? ` (last synced ${esc(new Date(options.mirror.at).toISOString().slice(0, 16).replace('T', ' '))} UTC)` : ''}.</p>
 <ul>
 <li><code>GET https://pit.world/api/ring</code>: the members as JSON, with a direct and a pit.world URL for each. Draw the bar from it.</li>
-<li>Or paste three links, no code at all: <code>https://pit.world/ring/prev?from=&lt;your.name&gt;</code>, <code>/ring/next?from=…</code> and <code>/ring/random?from=…</code>. Add <code>&amp;direct=1</code> when your visitors are on Moshpit DNS.</li>
+<li>Or paste links, no code at all: <code>https://pit.world/ring/prev?from=&lt;your site&gt;</code>, <code>/ring/next?from=…</code> and <code>/ring/random?from=…</code>. Add <code>&amp;direct=1</code> when your visitors are on Moshpit DNS.</li>
+<li>Every member's feed in one file: <a href="/ring/opml">/ring/opml</a>. From the terminal: <code>pit ring</code>.</li>
 </ul>`,
   })
+}
+
+/** The ring's feeds as OPML, for a feed reader. */
+export function ringOpml(sites: RingSite[]): string {
+  const x = (s: unknown) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!)
+  return `<?xml version="1.0" encoding="utf-8"?>
+<opml version="2.0">
+<head><title>The pit.world ring</title><ownerId>https://pit.world/ring</ownerId></head>
+<body>
+${sites
+  .filter((s) => s.feed)
+  .map((s) => `<outline type="rss" text="${x(s.name)}" title="${x(s.name)}" xmlUrl="${x(s.feed)}" htmlUrl="${x(`https://${s.name}/`)}"/>`)
+  .join('\n')}
+</body>
+</opml>
+`
 }

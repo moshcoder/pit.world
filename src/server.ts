@@ -6,11 +6,12 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage, ringPage } from './html.js'
+import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
-import { neighbors, randomSite, ringJson, siteHref } from './ring.js'
+import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
+import { RingSync } from './ring-sync.js'
 import { liveCerts, proxiedName, proxyRequest } from './proxy.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
@@ -34,6 +35,8 @@ export type Deps = {
   promoted?: Promoted
   /** Claimable business listings (/b); unset means the feature is off. */
   listings?: Listings
+  /** Mirrors the ring to rssamplifier.com; unset means no mirror. */
+  ringSync?: RingSync
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -123,16 +126,20 @@ export function createApp(deps: Deps) {
   app.get('/connect', (c) => c.html(connectPage()))
   app.get('/build', (c) => c.html(buildPage()))
 
-  // --- the Moshpit ring -----------------------------------------------------------
-  app.get('/ring', (c) => c.html(ringPage()))
+  // --- the pit.world ring ----------------------------------------------------------
+  useListings(deps.listings ? () => deps.listings!.ringMembers() : null)
+  app.get('/ring', (c) => c.html(ringPage({ mirror: deps.ringSync?.last ?? null })))
   app.get('/api/ring', (c) =>
     // Member sites fetch this server-side; the CORS header lets a browser-only site use it too.
     c.json(ringJson(), 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }),
   )
-  app.get('/ring/:to{next|prev|random}', (c) => {
-    const from = c.req.query('from')
+  app.get('/ring/opml', (c) => c.body(ringOpml(ringSites()), 200, { 'content-type': 'text/x-opml; charset=utf-8', 'cache-control': 'public, max-age=900' }))
+  app.get('/ring/:to{next|prev|previous|random}', (c) => {
+    // ?from= is the house shape; ?host=, ?url= and ?via= are what other rings send; the Referer is the last resort.
+    const from = c.req.query('from') ?? c.req.query('host') ?? c.req.query('url') ?? c.req.query('via') ?? c.req.header('referer')
     const to = c.req.param('to')
-    const site = to === 'random' ? randomSite(from) : neighbors(from)[to as 'next' | 'prev']
+    const site = to === 'random' ? randomSite(from) : neighbors(from)[to === 'next' ? 'next' : 'prev']
+    c.header('cache-control', 'no-store')
     return c.redirect(siteHref(site, c.req.query('direct') === '1'), 302)
   })
   app.get('/offline', (c) => c.html(offlinePage()))
@@ -142,7 +149,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/ring', '/about', '/privacy']
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/ring', '/pros', '/b', '/about', '/privacy', ...(deps.listings ? deps.listings.directory({ limit: 100 }).listings.map((l) => `/b/${encodeURIComponent(l.domain)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,
@@ -260,7 +267,7 @@ export function createApp(deps: Deps) {
     c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
   )
 
-  if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName)
+  if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName, { ringChanged: () => deps.ringSync?.soon(ringSites) })
 
   app.notFound((c) =>
     c.req.path.startsWith('/api/')
@@ -291,8 +298,19 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const newsletter = new Newsletter(env.PIT_NEWSLETTER_DB ?? `${dataDir}/newsletter.db`, env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null)
   const registry = new Registry()
   const rootPem = readFileSync(new URL('../public/moshpit-root-ca.crt', import.meta.url), 'utf8')
-  const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }))
-  const app = createApp({ keys: keysFromEnv(), newsletter, listings, ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const mailer = env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null
+  const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }), undefined, { mailer })
+  const ringSync = env.RSSAMPLIFIER_API_KEY
+    ? new RingSync({ apiKey: env.RSSAMPLIFIER_API_KEY, ...(env.RSSAMPLIFIER_URL ? { base: env.RSSAMPLIFIER_URL } : {}), ...(env.RSSAMPLIFIER_RING ? { slug: env.RSSAMPLIFIER_RING } : {}) })
+    : undefined
+  const app = createApp({ keys: keysFromEnv(), newsletter, listings, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  // Once a day: re-read every claimed site (its feed, whether it has an ICANN address), then mirror the ring.
+  const daily = async () => {
+    await listings.checkSites().catch(() => 0)
+    await ringSync?.run(ringSites)
+  }
+  setTimeout(daily, 60_000).unref()
+  setInterval(daily, 24 * 3600 * 1000).unref()
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts() }
   const server = Bun.serve({

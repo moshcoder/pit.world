@@ -8,13 +8,13 @@
     "url": "https://github.com/moshcoder/pit.world",
     "source": "github"
   },
-  "version": "0.1.2",
+  "version": "0.2.0",
   "packages": [
     {
       "registryType": "npm",
       "registryBaseUrl": "https://registry.npmjs.org",
       "identifier": "pitworld",
-      "version": "0.1.2",
+      "version": "0.2.0",
       "runtimeHint": "bunx",
       "transport": {
         "type": "stdio"

@@ -15,7 +15,7 @@ import { dirname } from 'node:path'
 const PENDING_TTL_MS = 48 * 3600 * 1000
 const FROM = 'pit.world <hello@pit.world>'
 
-export type Mailer = (message: { to: string; subject: string; text: string; html: string }) => Promise<void>
+export type Mailer = (message: { to: string; subject: string; text: string; html: string; replyTo?: string }) => Promise<void>
 export type MxLookup = (domain: string) => Promise<boolean>
 
 /** Syntax only: one @, a dotted domain, no spaces, sane lengths. The confirmation email is the real check. */
@@ -41,11 +41,11 @@ export const dnsMx: MxLookup = async (domain) => {
 }
 
 export function resendMailer(apiKey: string, fetchImpl: typeof fetch = fetch): Mailer {
-  return async ({ to, subject, text, html }) => {
+  return async ({ to, subject, text, html, replyTo }) => {
     const res = await fetchImpl('https://api.resend.com/emails', {
       method: 'POST',
       headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
-      body: JSON.stringify({ from: FROM, to: [to], subject, text, html }),
+      body: JSON.stringify({ from: FROM, to: [to], subject, text, html, ...(replyTo ? { reply_to: replyTo } : {}) }),
     })
     if (!res.ok) throw new Error(`mail provider answered ${res.status}`)
   }

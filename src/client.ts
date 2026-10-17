@@ -6,6 +6,7 @@
 import type { Hit } from './search.js'
 import type { NetworkStats, Resolution } from './moshpit.js'
 import type { Listing } from './listings.js'
+import type { Category } from './pros.js'
 
 export type ApiSearch = {
   query: string
@@ -69,6 +70,52 @@ export class PitClient {
   /** Check the record or tag; on success the edit key comes back, once. */
   verify(claimId: string): Promise<{ ok: boolean; method?: string; editKey?: string; reason?: string }> {
     return this.post('/api/listing/verify', { claim: claimId })
+  }
+
+  /** The pro directory: claimed listings, filtered by category, place and words. */
+  pros(options: { category?: string; near?: string; q?: string; n?: number; page?: number } = {}): Promise<{ total: number; page: number; results: Listing[] }> {
+    const params = new URLSearchParams()
+    if (options.category) params.set('c', options.category)
+    if (options.near) params.set('near', options.near)
+    if (options.q) params.set('q', options.q)
+    if (options.n) params.set('n', String(options.n))
+    if (options.page) params.set('page', String(options.page))
+    return this.get(`/api/pros?${params}`)
+  }
+
+  categories(): Promise<{ categories: Array<Category & { count: number }>; prices: Array<{ slug: string; label: string }> }> {
+    return this.get('/api/pros/categories')
+  }
+
+  /** The pit.world web ring. */
+  ring(): Promise<{ name: string; home: string; mirror: string; count: number; sites: Array<{ name: string; about: string; moshpit: boolean; listing: boolean; feed?: string; url: string; proxyUrl: string }> }> {
+    return this.get('/api/ring')
+  }
+
+  /** Edit a claimed listing with its edit key. `contactEmail` sets the private quote-request address ('' clears it). */
+  async edit(domain: string, key: string, fields: Record<string, unknown>): Promise<Listing & { contactStatus?: string; contactResult?: string }> {
+    const response = await this.fetchImpl(`${this.base}/api/listing`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify({ ...fields, domain }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    const data = (await response.json().catch(() => ({}))) as any
+    if (!response.ok) throw new Error(data?.error ?? `HTTP ${response.status}`)
+    return data
+  }
+
+  /** Send one quote request to one listing's owner (their address stays private). */
+  async quote(domain: string, form: { name: string; email: string; phone?: string; message: string }): Promise<{ ok: boolean; status: string }> {
+    const response = await this.fetchImpl(`${this.base}/api/listing/quote`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json' },
+      body: JSON.stringify({ ...form, domain }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    const data = (await response.json().catch(() => ({}))) as any
+    if (response.status === 429) throw new Error(data?.error ?? 'Too many requests. Try again later.')
+    return { ok: Boolean(data?.ok), status: String(data?.status ?? `HTTP ${response.status}`) }
   }
 
   /** Start a newsletter signup; the address only joins after the emailed link is clicked. */

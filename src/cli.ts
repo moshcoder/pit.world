@@ -6,6 +6,10 @@
  *   pit resolve NAME [--json]   a Moshpit name
  *   pit network [--json]        live Moshpit numbers
  *   pit subscribe EMAIL         newsletter signup (confirm by email)
+ *   pit pros [WORDS] [--category C] [--near PLACE]   the pro directory
+ *   pit edit DOMAIN --key K --field VALUE ...        edit your listing
+ *   pit quote DOMAIN --name N --email E --message M  ask a listed pro for a quote
+ *   pit ring                    the pit.world web ring
  *   pit open WORDS              the results page in your browser
  *   pit mcp                     MCP server on stdio
  *   pit serve [--port N]        run your own pit.world (needs provider keys)
@@ -22,6 +26,17 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit listing DOMAIN           a business listing (pit.world/b)
   pit claim DOMAIN             claim your business listing
   pit verify CLAIM_ID          finish a claim; prints your edit key once
+  pit edit DOMAIN --key KEY [--operator riotcoder@profullstack.com] [--company "Acme, Inc."]
+       [--company-url URL] [--category SLUG] [--services "a; b"] [--area TEXT] [--city C]
+       [--region R] [--country C] [--price free|$|$$|$$$|$$$$|quote] [--hours H] [--phone P]
+       [--contact EMAIL|""] [--ring in|out] [--name N] [--description D]
+                               edit your listing (or PIT_EDIT_KEY=... instead of --key)
+  pit pros [WORDS] [--category SLUG] [--near PLACE]
+                               the pro directory: verified businesses, no paid placement
+  pit categories               the directory's categories
+  pit quote DOMAIN --name N --email E --message M [--phone P]
+                               ask one listed pro for a quote; they reply to your email
+  pit ring                     the pit.world web ring
   pit subscribe EMAIL          get the pit.world newsletter (double opt-in)
   pit open WORDS               open the results page in your browser
   pit mcp                      MCP server on stdio: claude mcp add pit -- pit mcp
@@ -130,6 +145,75 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         else out.log(r.ok ? `Verified by ${r.method}. Your edit key (shown once, save it):\n${r.editKey}` : r.reason === 'unknown-claim' ? 'That claim id is unknown or expired (claims last 7 days).' : 'Not found yet. DNS can take a few minutes; try again.')
         return r.ok ? 0 : 1
       }
+      case 'pros': {
+        const { flags, rest: terms } = parseFlags(words)
+        const r = await client.pros({ q: terms.join(' '), ...(flags.category ? { category: flags.category } : {}), ...(flags.near ? { near: flags.near } : {}), n: Number.isFinite(n) ? n : 10 })
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else {
+          if (!r.results.length) out.log('No listings match. Claim yours: https://pit.world/b')
+          for (const l of r.results) {
+            const where = [l.area, [l.city, l.region, l.country].filter(Boolean).join(', ')].filter(Boolean).join(' · ')
+            out.log(`${l.name || l.domain}  https://pit.world/b/${l.domain}${l.category ? `\n    ${l.category}` : ''}${where ? `  ${where}` : ''}${l.description ? `\n    ${l.description}` : ''}${l.quotes ? '\n    takes quote requests: pit quote ' + l.domain : ''}`)
+          }
+          if (r.total > r.results.length) out.log(`… ${r.total - r.results.length} more (use -n or the web: https://pit.world/pros)`)
+        }
+        return 0
+      }
+      case 'categories': {
+        const r = await client.categories()
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else for (const c of r.categories) out.log(`${c.slug.padEnd(14)} ${c.label}${c.count ? ` (${c.count})` : ''}  ${c.examples}`)
+        return 0
+      }
+      case 'ring': {
+        const r = await client.ring()
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else {
+          out.log(`${r.name}: ${r.count} sites  ${r.home}`)
+          for (const site of r.sites) out.log(`  ${site.name.padEnd(24)} ${site.proxyUrl}${site.feed ? `  feed ${site.feed}` : ''}`)
+        }
+        return 0
+      }
+      case 'edit': {
+        const { flags, rest: positional } = parseFlags(words)
+        const domain = positional[0]
+        const key = flags.key ?? process.env.PIT_EDIT_KEY
+        if (!domain || !key) return usage(out, 'pit edit DOMAIN --key KEY --field VALUE ...  (or PIT_EDIT_KEY)')
+        const fields: Record<string, unknown> = {}
+        const names: Record<string, string> = { 'company-url': 'companyUrl', contact: 'contactEmail' }
+        for (const [flag, value] of Object.entries(flags)) if (flag !== 'key') fields[names[flag] ?? flag] = value
+        if (typeof fields.services === 'string') fields.services = fields.services.split(';')
+        if (typeof fields.links === 'string') fields.links = fields.links.split(/[\s,]+/).filter(Boolean)
+        const l = await client.edit(domain, key, fields)
+        if (json) out.log(JSON.stringify(l, null, 2))
+        else
+          out.log(
+            `Saved https://pit.world/b/${l.domain}` +
+              (l.contactResult === 'pending' ? '\nCheck that inbox: quote requests start once the confirmation link is clicked.' : '') +
+              (l.contactResult && !['pending', 'unchanged', 'cleared'].includes(l.contactResult) ? `\nQuote-request address not changed: ${l.contactResult}` : '') +
+              (l.contactStatus ? `\nQuote requests: ${l.contactStatus}` : ''),
+          )
+        return 0
+      }
+      case 'quote': {
+        const { flags, rest: positional } = parseFlags(words)
+        const domain = positional[0]
+        if (!domain || !flags.name || !flags.email || !flags.message) return usage(out, 'pit quote DOMAIN --name NAME --email EMAIL --message TEXT [--phone PHONE]')
+        const r = await client.quote(domain, { name: flags.name, email: flags.email, message: flags.message, ...(flags.phone ? { phone: flags.phone } : {}) })
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else
+          out.log(
+            {
+              sent: 'Sent. The owner replies to your email directly.',
+              invalid: 'Needs a name, a real email and a message of a few words (at most three links).',
+              undeliverable: "Your email's domain can't receive mail, so they couldn't reply.",
+              unavailable: 'That listing is not taking messages through pit.world.',
+              limited: 'That listing has had a lot of messages recently. Try again later.',
+              failed: "pit.world couldn't send it just now. Try again in a few minutes.",
+            }[r.status] ?? r.status,
+          )
+        return r.ok ? 0 : 1
+      }
       case 'network': {
         const s = await client.network()
         if (json) out.log(JSON.stringify(s, null, 2))
@@ -167,6 +251,26 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
     out.error(`pit: ${error instanceof Error ? error.message : String(error)}`)
     return 1
   }
+}
+
+/** `--flag value` pairs (and `--flag=value`), and whatever is left. */
+export function parseFlags(args: string[]): { flags: Record<string, string>; rest: string[] } {
+  const flags: Record<string, string> = {}
+  const rest: string[] = []
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i]!
+    const m = /^--([a-z][a-z-]*)(?:=(.*))?$/.exec(arg)
+    if (!m) {
+      rest.push(arg)
+      continue
+    }
+    if (m[2] !== undefined) flags[m[1]!] = m[2]
+    else {
+      flags[m[1]!] = args[i + 1] ?? ''
+      i++
+    }
+  }
+  return { flags, rest }
 }
 
 function usage(out: Out, text: string): number {

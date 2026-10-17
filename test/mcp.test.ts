@@ -5,7 +5,8 @@ import { afterAll, beforeAll, expect, it } from 'bun:test'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { createApp } from '../src/server.ts'
-import { Registry } from '../src/moshpit.ts'
+import { looksLikeName, Registry } from '../src/moshpit.ts'
+import { Listings } from '../src/listings.ts'
 
 let server: ReturnType<typeof Bun.serve>
 
@@ -16,7 +17,14 @@ beforeAll(() => {
     if (url.startsWith('https://google.serper.dev')) return Response.json({ organic: [{ title: 'hqtui', link: 'https://hqtui.com/', snippet: 'terminal UI' }] })
     return Response.json({ total: 1, entries: [], tlds: [] })
   }) as typeof fetch
-  const app = createApp({ keys: { serper: 'K' }, registry: new Registry('https://registry.test', fake), fetch: fake })
+  const listings = new Listings(':memory:', { txt: async (h) => (h === '_pit-verify.acme-plumbing.com' ? [token] : []), homepage: async () => null })
+  let token = ''
+  const start = listings.startClaim('acme-plumbing.com')!
+  token = start.token
+  void listings.verify(start.claimId).then((r) => {
+    if (r.ok) listings.edit('acme-plumbing.com', r.editKey, { name: 'Acme Plumbing', category: 'home-services', city: 'Oakland', services: ['Leak repair'] }, looksLikeName)
+  })
+  const app = createApp({ keys: { serper: 'K' }, registry: new Registry('https://registry.test', fake), fetch: fake, listings })
   server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: (request) => app.fetch(request, { ip: '127.0.0.9' }) })
 })
 afterAll(() => server.stop(true))
@@ -31,7 +39,11 @@ it('lists the tools and answers search and moshpit_resolve', async () => {
   await client.connect(transport)
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort()
-    expect(tools).toEqual(['listing', 'moshpit_network', 'moshpit_resolve', 'search'])
+    expect(tools).toEqual(['edit_listing', 'listing', 'moshpit_network', 'moshpit_resolve', 'pros', 'ring', 'search'])
+    const pros: any = await client.callTool({ name: 'pros', arguments: { category: 'home-services', near: 'oakland' } })
+    expect(pros.content[0].text).toContain('Acme Plumbing')
+    const ring: any = await client.callTool({ name: 'ring', arguments: {} })
+    expect(ring.content[0].text).toContain('acme-plumbing.com')
     const resolved: any = await client.callTool({ name: 'moshpit_resolve', arguments: { name: 'chovy.hacker' } })
     expect(resolved.content[0].text).toContain('dev.profullstack.com')
     const searched: any = await client.callTool({ name: 'search', arguments: { query: 'hqtui', limit: 3 } })
