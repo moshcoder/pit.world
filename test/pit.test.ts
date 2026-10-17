@@ -6,7 +6,7 @@ import { PitClient } from '../src/client.ts'
 import { esc } from '../src/html.ts'
 import { looksLikeName, MOSHPIT_ROOT_SHA256, Registry } from '../src/moshpit.ts'
 import { RateLimiter } from '../src/ratelimit.ts'
-import { Cache, cleanHits, parseSerper, search, SearchUnavailable } from '../src/search.ts'
+import { Cache, cleanHits, mergeResults, parseDataForSeo, parseSerper, search, SearchUnavailable } from '../src/search.ts'
 import { createApp } from '../src/server.ts'
 import { initialState, onKey } from '../src/tui.ts'
 
@@ -243,5 +243,66 @@ describe('CLI and TUI', () => {
     expect(onKey(state, { name: 'enter', key: 'enter' })).toBe('open')
     expect(onKey(state, { name: 'q', key: 'q', char: 'q' })).toBe('quit')
     expect(onKey(state, { name: 'c', key: 'ctrl+c' })).toBe('quit')
+  })
+})
+
+describe('Google + Bing', () => {
+  const serper = { organic: [{ title: 'Both', link: 'https://both.example/', snippet: 'g' }, { title: 'Google only', link: 'https://g.example/', snippet: 'g' }] }
+  const bing = {
+    status_code: 20000,
+    tasks: [{ status_code: 20000, result: [{ items: [
+      { type: 'organic', title: 'Bing only', url: 'https://b.example/', description: 'b' },
+      { type: 'organic', title: 'Both', url: 'https://www.both.example', description: 'a longer snippet from bing' },
+      { type: 'paid', title: 'Ad', url: 'https://ad.example/' },
+    ] }] }],
+  }
+  const fake = (options: { bingDelay?: number; bingFails?: boolean } = {}) =>
+    (async (input: any, init: any = {}) => {
+      const url = String(input)
+      if (url.startsWith('https://google.serper.dev')) return Response.json(serper)
+      if (url.startsWith('https://api.dataforseo.com')) {
+        expect(new Headers(init.headers).get('authorization')).toBe(`Basic ${Buffer.from('login:pw').toString('base64')}`)
+        if (options.bingDelay) await new Promise((r) => setTimeout(r, options.bingDelay))
+        return options.bingFails ? Response.json({ status_code: 40100, tasks: [{ status_code: 40100 }] }) : Response.json(bing)
+      }
+      return Response.json({ results: [{ name: 'L', url: 'https://linkup.example/' }] })
+    }) as typeof fetch
+
+  it('parses DataForSEO organic results only', () => {
+    expect(parseDataForSeo(bing).map((h) => h.url)).toEqual(['https://b.example/', 'https://www.both.example'])
+  })
+
+  it('merges both engines, puts agreement first, and tags the source', async () => {
+    const result = await search('q', { serper: 'K', bing: 'login:pw' }, { fetch: fake() })
+    expect(result.provider).toBe('serper+bing')
+    expect(result.hits[0]).toMatchObject({ title: 'Both', sources: ['serper', 'bing'], description: 'a longer snippet from bing' })
+    expect(result.hits.map((h) => h.title).sort()).toEqual(['Bing only', 'Both', 'Google only'])
+  })
+
+  it('serves Google alone when Bing fails, and does not cache the partial page', async () => {
+    const cache = new Cache()
+    const result = await search('q', { serper: 'K', bing: 'login:pw' }, { fetch: fake({ bingFails: true }), cache })
+    expect(result.provider).toBe('serper')
+    expect(result.failures[0]).toMatchObject({ provider: 'bing' })
+    expect(cache.get('10:q')).toBeNull()
+  })
+
+  it('does not wait long for a slow Bing', async () => {
+    const started = Date.now()
+    const result = await search('q', { serper: 'K', bing: 'login:pw' }, { fetch: fake({ bingDelay: 6_000 }) })
+    expect(result.provider).toBe('serper')
+    expect(Date.now() - started).toBeLessThan(4_000)
+  }, 10_000)
+
+  it('dedupes across www and trailing slashes', () => {
+    const merged = mergeResults(
+      [
+        { provider: 'serper', hits: [{ url: 'https://www.a.example/x/', title: 'A', description: '', host: 'a.example' }] },
+        { provider: 'bing', hits: [{ url: 'https://a.example/x', title: 'A', description: 'more', host: 'a.example' }] },
+      ],
+      10,
+    )
+    expect(merged).toHaveLength(1)
+    expect(merged[0]!.sources).toEqual(['serper', 'bing'])
   })
 })

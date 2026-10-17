@@ -4,7 +4,7 @@
  */
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
-import type { SearchResult } from './search.js'
+import { LABELS, type Provider, type SearchResult } from './search.js'
 
 export const SITE = 'https://pit.world'
 
@@ -166,7 +166,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
       .map(
         (h) => `<li>
       <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
-      <div class="url">${esc(h.host)}</div>
+      <div class="url">${esc(h.host)}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
       ${h.description ? `<p>${esc(h.description)}</p>` : ''}
     </li>`,
       )
@@ -174,7 +174,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
   </ol>
   ${!error && hits.length === 0 ? '<p class="notice">Nothing found. Try other words, or a bang like <code>!ddg</code>.</p>' : ''}
   <p class="elsewhere">Try this search on <a href="/search?q=${encodeURIComponent(`${query} !ddg`)}">DuckDuckGo</a>, <a href="/search?q=${encodeURIComponent(`${query} !b`)}">Brave</a> or <a href="/search?q=${encodeURIComponent(`${query} !g`)}">Google</a>, without a referrer.</p>
-  ${result?.provider ? `<p class="via">Results from the ${result.provider === 'serper' ? 'Google index' : result.provider} index, fetched by pit.world. Your IP address, browser and cookies were not sent.</p>` : ''}
+  ${result?.provider ? `<p class="via">Results from the ${result.provider.split('+').map((p) => LABELS[p as Provider] ?? p).join(' and ')} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
 </main>`
   return layout({ title: `${query} · pit.world`, description: `Private search results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true })
 }
@@ -199,7 +199,7 @@ export function privacyPage(): string {
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
-<li>pit.world asks one search provider for results (normally the Google index, through Serper). The provider receives the words from our server: not your IP, browser, cookies or referrer.</li>
+<li>pit.world asks the Google index (through Serper) and the Bing index (through DataForSEO) for results and merges them. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 </ol>

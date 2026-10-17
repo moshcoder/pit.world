@@ -20,7 +20,7 @@ claude mcp add pit -- pit mcp
 
 ## What it does
 
-- **Web search, privately.** Your browser talks only to pit.world. pit.world asks one search provider (the Google index through Serper, with Linkup, Exa and Perplexity as fallbacks) and sends it the words, never your IP, browser, cookies or referrer.
+- **Web search, privately.** Your browser talks only to pit.world. pit.world asks the Google index (through Serper) and the Bing index (through DataForSEO) at the same time, merges the two lists, and tags each result with the engine that found it. The providers get the words, never your IP, browser, cookies or referrer. Linkup, Exa and Perplexity are fallbacks if both fail.
 - **Moshpit names.** A query that looks like `label.ending` is checked against the Moshpit registry, and a registered name gets a card with where it points.
 - **Bangs.** `!gh hqtui`, `rust lifetimes !so`, `!pit chovy.hacker`: straight to that site's search, without a referrer. The full list is at [pit.world/about#bangs](https://pit.world/about#bangs).
 - **Default search engine.** OpenSearch description at `/opensearch.xml`, suggestions at `/suggest`, and `https://pit.world/search?q=%s` for any browser.
@@ -52,7 +52,7 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 
 | | |
 | --- | --- |
-| Web + API | `bun src/server.ts` (`PORT`, `HOST`; provider keys `SERPER_API_KEY`, `LINKUP_API_KEY`, `EXA_API_KEY`, `PERPLEXITY_API_KEY`) |
+| Web + API | `bun src/server.ts` (`PORT`, `HOST`; provider keys `SERPER_API_KEY`, `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` (Bing), `LINKUP_API_KEY`, `EXA_API_KEY`, `PERPLEXITY_API_KEY`) |
 | CLI | `pit search`, `pit resolve`, `pit network`, `pit open` |
 | TUI | `pit` |
 | MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network` |
