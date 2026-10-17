@@ -89,7 +89,7 @@ export async function runTui(client = new PitClient()): Promise<void> {
       p.text(`${state.query}${state.typing ? '▏' : ''}`, { fg: theme.text })
     })
     const mosh = state.result?.moshpit
-    if (mosh?.registered) {
+    if (mosh?.nameRegistered) {
       ui.panel({ title: 'Moshpit name', size: 3 }, (p: any) => p.text(`${mosh.name}${mosh.target ? ` → ${mosh.target}` : ''}   ${mosh.page}`, { fg: theme.accent }))
     }
     ui.panel({ title: state.busy ? 'Searching…' : state.result ? `Results via ${state.result.provider ?? '?'}${state.result.cached ? ' (cached)' : ''}` : 'Results' }, (p: any) => {

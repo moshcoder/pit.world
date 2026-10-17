@@ -21,7 +21,7 @@ export function createMcpServer(client = new PitClient()): McpServer {
     async ({ query, limit }: { query: string; limit?: number }) => {
       const result = await client.search(query, limit ?? 10)
       const lines = result.results.map((hit, i) => `${i + 1}. ${hit.title}\n   ${hit.url}${hit.description ? `\n   ${hit.description}` : ''}`)
-      const mosh = result.moshpit?.registered ? `Moshpit name ${result.moshpit.name} is registered${result.moshpit.target ? ` (points at ${result.moshpit.target})` : ''}: ${result.moshpit.page}\n\n` : ''
+      const mosh = result.moshpit?.nameRegistered ? `Moshpit name ${result.moshpit.name} is registered${result.moshpit.target ? ` (points at ${result.moshpit.target})` : ''}: ${result.moshpit.page}\n\n` : ''
       return { content: [{ type: 'text', text: `${mosh}${lines.join('\n') || 'No results.'}` }] }
     },
   )

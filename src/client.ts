@@ -9,7 +9,8 @@ import type { NetworkStats, Resolution } from './moshpit.js'
 export type ApiSearch = {
   query: string
   provider: string | null
-  cached: boolean
+  /** Older servers only; pit.world no longer says whether an answer came from its cache. */
+  cached?: boolean
   results: Hit[]
   moshpit: Resolution | null
 }

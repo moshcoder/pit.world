@@ -6,7 +6,7 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, connectPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, connectPage, errorPage, homePage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
@@ -29,7 +29,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'",
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
@@ -100,7 +100,9 @@ export function createApp(deps: Deps) {
   app.get('/connect', (c) => c.html(connectPage()))
   app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
-  app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n'))
+  app.get('/robots.txt', (c) =>
+    c.body('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
+  )
   app.get('/sitemap.xml', (c) =>
     c.body(
       `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/about', '/privacy']
@@ -149,10 +151,11 @@ export function createApp(deps: Deps) {
       c.header('retry-after', '30')
       return c.json({ error: 'rate limited' }, 429)
     }
-    const n = Number(c.req.query('n') ?? 10)
-    const [{ result, error }, resolution] = await Promise.all([runSearch(query, Number.isFinite(n) ? n : 10), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const raw = Math.trunc(Number(c.req.query('n') ?? 10))
+    const n = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 20) : 10
+    const [{ result, error }, resolution] = await Promise.all([runSearch(query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     if (!result) return c.json({ query, error, moshpit: resolution }, 503)
-    return c.json({ query: result.query, provider: result.provider, cached: result.cached, results: result.hits, moshpit: resolution })
+    return c.json({ query, provider: result.provider, results: result.hits, moshpit: resolution })
   })
 
   app.get('/api/resolve', async (c) => {
@@ -190,7 +193,15 @@ export function createApp(deps: Deps) {
     c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
   )
 
-  app.notFound((c) => c.html(homePage(null).replace('<p class="tag">', '<p class="tag">That page does not exist. '), 404))
+  app.notFound((c) =>
+    c.req.path.startsWith('/api/')
+      ? c.json({ error: 'not found' }, 404)
+      : c.html(homePage(null).replace('<p class="tag">', '<p class="tag">That page does not exist. ').replace(/<link rel="canonical"[^>]*>/, '<meta name="robots" content="noindex">'), 404),
+  )
+  // Nothing about the request is logged, the query least of all.
+  app.onError((_error, c) =>
+    c.req.path.startsWith('/api/') ? c.json({ error: 'Something went wrong.' }, 500) : c.html(errorPage(), 500),
+  )
   return app
 }
 

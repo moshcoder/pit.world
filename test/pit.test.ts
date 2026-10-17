@@ -32,7 +32,10 @@ function upstream(options: { serperFails?: boolean } = {}) {
     if (url.startsWith('https://api.linkup.so')) return json({ results: [{ name: 'From Linkup', url: 'https://linkup.example/', content: 'fallback' }] })
     if (url.includes('/api/moshpit/resolve')) {
       const name = new URL(url).searchParams.get('name')
-      return json(name === 'chovy.hacker' ? { name, registered: true, name_registered: true, target: 'dev.profullstack.com', mode: 'clearnet' } : { name, registered: false })
+      if (name === 'chovy.hacker') return json({ name, registered: true, name_registered: true, target: 'dev.profullstack.com', mode: 'clearnet' })
+      // The ending is claimed, the name under it is not.
+      if (name === 'free.eggs') return json({ name, registered: true, name_registered: false })
+      return json({ name, registered: false })
     }
     if (url.includes('/api/moshpit/tlds')) return json({ total: 17609, tlds: [] })
     if (url.includes('/api/moshpit/log')) {
@@ -102,6 +105,54 @@ describe('bangs and names', () => {
     expect(looksLikeName('seo.rank.')).toBe(true)
     expect(looksLikeName('what is moshpit')).toBe(false)
     expect(looksLikeName('localhost')).toBe(false)
+  })
+})
+
+describe('bug fixes (sweep 2026-10-17)', () => {
+  it('lets the search form follow a bang to another site', async () => {
+    const { request } = app()
+    expect((await request('/')).headers.get('content-security-policy')).toContain("form-action 'self' https:")
+  })
+
+  it('says a free name under a claimed ending is free, on the page and in the CLI', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=free.eggs')).text()
+    expect(html).toContain('Not registered yet')
+    expect(html).not.toContain('Registered on the Moshpit network')
+    const lines: string[] = []
+    const client = new PitClient('https://pit.world', ((url: any) => request(new URL(String(url)).pathname + new URL(String(url)).search)) as typeof fetch)
+    await main(['resolve', 'free.eggs'], { log: (t) => lines.push(t), error: (t) => lines.push(t) }, client)
+    expect(lines.join('')).toContain('is not registered')
+  })
+
+  it('never cuts a query inside an emoji (was a 500)', async () => {
+    const { request } = app()
+    const res = await request('/search?q=' + 'a'.repeat(511) + encodeURIComponent('🤘'))
+    expect(res.status).toBe(200)
+  })
+
+  it("answers a cache hit with the caller's own words, and does not say it was cached", async () => {
+    const { request } = app()
+    await request('/api/search?q=' + encodeURIComponent('Secret Phrase'))
+    const second = await (await request('/api/search?q=' + encodeURIComponent('secret PHRASE'), '198.51.100.20')).json()
+    expect(second.query).toBe('secret PHRASE')
+    expect(second).not.toHaveProperty('cached')
+  })
+
+  it('serves robots.txt as text, unknown API paths as JSON, and clamps n', async () => {
+    const { request } = app()
+    expect((await request('/robots.txt')).headers.get('content-type')).toContain('text/plain')
+    const missing = await request('/api/nope')
+    expect(missing.status).toBe(404)
+    expect(await missing.json()).toEqual({ error: 'not found' })
+    expect((await (await request('/api/search?q=x&n=0')).json()).results.length).toBeGreaterThan(0)
+  })
+
+  it('keeps -n on a bare-words search', async () => {
+    let asked = ''
+    const client = { search: async (_q: string, n: number) => ((asked = String(n)), { query: _q, provider: 'serper', results: [], moshpit: null }) } as unknown as PitClient
+    await main(['hello', 'world', '-n', '2'], { log: () => {}, error: () => {} }, client)
+    expect(asked).toBe('2')
   })
 })
 

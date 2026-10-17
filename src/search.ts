@@ -165,7 +165,7 @@ export class Cache {
 }
 
 export function normalizeQuery(query: string): string {
-  return query.replace(/\s+/g, ' ').trim().slice(0, MAX_QUERY)
+  return Array.from(query.replace(/\s+/g, ' ').trim()).slice(0, MAX_QUERY).join('').trim()
 }
 
 /** Normalized for de-duplication: scheme, www, trailing slash and fragment do not make a page different. */
@@ -240,7 +240,8 @@ export async function search(
   const limit = Math.min(20, Math.max(1, options.limit ?? 10))
   const cacheKey = `${limit}:${q.toLowerCase()}`
   const hit = options.cache?.get(cacheKey)
-  if (hit) return hit
+  // Answer with the caller's words: echoing the first asker's would tell this one what someone else searched.
+  if (hit) return { ...hit, query: q }
   const failures: SearchResult['failures'] = []
   const order = (options.order ?? ORDER).filter((p) => keys[p])
   if (!order.length) throw new SearchUnavailable('No search provider is configured.')

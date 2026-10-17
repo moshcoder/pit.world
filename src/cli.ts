@@ -62,7 +62,7 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
           out.log(JSON.stringify(result, null, 2))
           return 0
         }
-        if (result.moshpit?.registered) out.log(`◉ Moshpit: ${result.moshpit.name}${result.moshpit.target ? ` → ${result.moshpit.target}` : ''}  ${result.moshpit.page}\n`)
+        if (result.moshpit?.nameRegistered) out.log(`◉ Moshpit: ${result.moshpit.name}${result.moshpit.target ? ` → ${result.moshpit.target}` : ''}  ${result.moshpit.page}\n`)
         result.results.forEach((hit, i) => {
           out.log(`${String(i + 1).padStart(2)}. ${hit.title}\n    ${hit.url}${hit.description ? `\n    ${hit.description}` : ''}`)
         })
@@ -75,7 +75,7 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         if (!name) return usage(out, 'pit resolve NAME')
         const r = await client.resolve(name)
         if (json) out.log(JSON.stringify(r, null, 2))
-        else out.log(r.registered ? `${r.name} is on the Moshpit network${r.target ? `, pointing at ${r.target}` : ''}.\n${r.page}` : `${r.name} is not registered. Claim it: ${r.page}`)
+        else out.log(r.nameRegistered ? `${r.name} is on the Moshpit network${r.target ? `, pointing at ${r.target}` : ''}.\n${r.page}` : `${r.name} is not registered. Claim it: ${r.page}`)
         return 0
       }
       case 'subscribe': {
@@ -125,7 +125,7 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
       }
       default:
         // `pit some words` is a search.
-        return main(['search', ...rest, ...(json ? ['--json'] : [])], out, client)
+        return main(['search', ...rest, ...(nAt === -1 ? [] : ['-n', String(n)]), ...(json ? ['--json'] : [])], out, client)
     }
   } catch (error) {
     out.error(`pit: ${error instanceof Error ? error.message : String(error)}`)

@@ -153,7 +153,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
 }
 
 function moshpitCard(resolution: Resolution): string {
-  const live = resolution.nameRegistered || resolution.registered
+  const live = resolution.nameRegistered
   return `<aside class="card mosh">
   <p class="kicker">Moshpit name</p>
   <h2><a href="https://${esc(resolution.name)}/" rel="noreferrer noopener">${esc(resolution.name)}</a></h2>
@@ -172,7 +172,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
   ${searchForm(query)}
 </header>
 <main class="results">
-  ${resolution && (resolution.registered || resolution.nameRegistered) ? moshpitCard(resolution) : ''}
+  ${resolution?.registered ? moshpitCard(resolution) : ''}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a></p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   <ol class="hits">
@@ -457,6 +457,21 @@ export function newsletterPage(kind: 'check' | 'invalid' | 'undeliverable' | 'fa
 <h1>${esc(copy[0])}</h1>
 <p>${esc(copy[1])}</p>
 ${retry ? newsletterForm() : '<p><a class="btn" href="/">Back to search</a></p>'}
+</main>`,
+  })
+}
+
+export function errorPage(): string {
+  return layout({
+    title: 'Something went wrong · pit.world',
+    description: 'pit.world hit an error.',
+    path: '/',
+    bodyClass: 'doc',
+    noindex: true,
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<h1>Something went wrong</h1>
+<p>pit.world hit an error answering that. Nothing about your request was logged. Try again, or try other words.</p>
 </main>`,
   })
 }
