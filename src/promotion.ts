@@ -353,7 +353,7 @@ export class Promotion {
              suppressed = excluded.suppressed, contacts_out = excluded.contacts_out, contacts_in = excluded.contacts_in, last_contact_at = excluded.last_contact_at,
              upstream = excluded.upstream, source_order = excluded.source_order, seen_import = excluded.seen_import`,
           [
-            c.id, r.row.leadId, r.disposition === 'matched' || r.disposition === 'merged' ? r.domain : null, String(r.row.name ?? ''), String(r.row.title ?? ''), String(r.row.kind ?? ''),
+            c.id, r.row.leadId, r.domain, String(r.row.name ?? ''), String(r.row.title ?? ''), String(r.row.kind ?? ''),
             JSON.stringify((r.row.emails ?? []).map((e) => String(e).toLowerCase())), r.row.suppressed ? 1 : 0, r.row.contacts?.outbound ?? 0, r.row.contacts?.inbound ?? 0,
             r.row.contacts?.lastAt ?? null, JSON.stringify(r.row.campaigns ?? []), r.row.order ?? r.index + 1, importId,
           ],

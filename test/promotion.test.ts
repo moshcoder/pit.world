@@ -95,6 +95,9 @@ describe('promotion: import and reconciliation', () => {
     expect(rows.find((x) => x.lead_id === 'per_3')).toMatchObject({ disposition: 'matched', domain: 'bravo-homes.com' })
     const alpha = h.promo.member(h.campaign, 'alpha-build.com')
     expect(alpha.leads.map((l) => l.leadId)).toEqual(['per_1', 'per_2'])
+    // An excluded business still shows the leads it came from in the roster.
+    const dead = h.promo.roster(h.campaign).businesses.find((b) => b.website === 'https://dead-site.com/')!
+    expect(dead).toMatchObject({ leadIds: ['per_7'], verification: 'excluded', plannedAction: 'none: excluded' })
   })
 
   it('re-importing the same snapshot changes nothing (AC-03)', () => {
