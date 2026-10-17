@@ -144,12 +144,13 @@ export function newsletterForm(): string {
 export function homePage(stats: NetworkStats | null, options: { newsletter?: boolean } = {}): string {
   return layout({
     title: 'pit.world: private search, and the doorway to the Moshpit network',
-    description: 'Search the web without being the product. No logs, no cookies, no profile, no JavaScript required. And search the Moshpit network, the namespace ICANN didn\'t sell you.',
+    description: 'ICANN doesn\'t scale for the agentic web. Meet pit.world: search the web without being the product. No logs, no cookies, no profile, no JavaScript required. And search the Moshpit network, the namespace ICANN didn\'t sell you.',
     path: '/',
     bodyClass: 'home',
     body: `<main>
   <header class="hero">
     <a class="brand big" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
+    <p class="pitch">ICANN doesn't scale for the agentic web. <a href="#moshpit">Meet pit.world.</a></p>
     <p class="tag">Search like nobody's watching. Because nobody is.</p>
     ${searchForm('', true)}
     <ul class="promises">
