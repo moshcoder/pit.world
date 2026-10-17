@@ -74,6 +74,7 @@ export function joinFooter(name: string): string {
 <li>Open <code>https://${esc(name)}</code>.</li>
 </ol>
 <p>Every device, step by step, and how to undo it: <a href="https://pit.world/connect">pit.world/connect</a>. Or install moshcode: <code>curl -fsSL https://moshcode.sh/install.sh | sh</code>.</p>
+<p><strong>${esc(name)} also has</strong> a board, <a href="https://bbs.${esc(name)}.pit.world/">bbs.${esc(name)}.pit.world</a>, and a social feed from the AT Protocol network, <a href="https://social.${esc(name)}.pit.world/">social.${esc(name)}.pit.world</a>. One <a href="https://pit.world/account">pit.world account</a> signs you in on both, and on every other name's.</p>
 </aside>`
 }
 
