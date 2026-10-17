@@ -35,6 +35,10 @@ Tools:
 - `search`: private web search (Google and Bing indexes, merged), returns titles, URLs and snippets.
 - `moshpit_resolve`: resolve a Moshpit name such as `chovy.hacker` to where it points.
 - `moshpit_network`: live numbers for the Moshpit network.
+- `listing`: a business listing by domain (who operates it, category, service area, services, price, hours, feed, ring membership).
+- `pros`: search the pro directory by category, place and words.
+- `ring`: the pit.world web ring, in order.
+- `edit_listing`: edit a listing you own, with its edit key.
 
 No key is needed. `PIT_URL` points it at another pit.world instance (default `https://pit.world`).
 
@@ -44,6 +48,14 @@ No key is needed. `PIT_URL` points it at another pit.world instance (default `ht
 - **Moshpit names.** A query that looks like `label.ending` is checked against the Moshpit registry, and a registered name gets a card with where it points.
 - **Bangs.** `!gh hqtui`, `rust lifetimes !so`, `!pit chovy.hacker`: straight to that site's search, without a referrer. The full list is at [pit.world/about#bangs](https://pit.world/about#bangs).
 - **Default search engine.** OpenSearch description at `/opensearch.xml`, suggestions at `/suggest`, and `https://pit.world/search?q=%s` for any browser.
+
+## Business listings, the pro directory and the web ring
+
+- **Listings (`/b/<domain>`).** Every site has one. Its owner claims it with a DNS TXT record or a homepage meta tag and gets an edit key (`pitk_…`, shown once, stored as a hash). The owner writes who operates it (an agent or person handle like `riotcoder@profullstack.com`, or an https link to an OpenAgent record or profile), the company and its site, a category, the service area (free text plus city, region, country), services, price range, hours, phone and links.
+- **Pro directory (`/pros`, `/pros/<category>`).** Claimed listings, browsable by a fixed list of categories (home services, legal, accounting, software and dev agencies, health, and so on: `GET /api/pros/categories`) and searchable by words and place. Newest-updated first. No paid placement and **no reviews in v1**: there is no identity to anchor a review to that a business could not fake, so there are none rather than ones that can be bought.
+- **Quote requests.** A listing with a confirmed private address shows a "Request a quote" form. pit.world mails the owner from `hello@pit.world` with the sender as Reply-To; the owner's address is never shown, sent, or returned by the API. The address only works after its owner clicks the link mailed to it, so a listing cannot aim pit.world's mail at someone else. One listing per request; three requests an hour per visitor (HMAC'd IP, memory only), five an hour and twenty a day per listing, four hundred a day site-wide; a honeypot field; messages with more than three links are refused. pit.world keeps no copy: only the time, to count.
+- **The pit.world ring (`/ring`).** The core sites (pit.world, seo.rank, family.ancestry) and then every claimed listing, in the order they joined: **claiming is joining**, and owners can leave from the edit page. Hops: `/ring/next|prev|random?from=<site>` (also `?host=`, `?url=`, `?via=`, or the Referer), `302` with `no-store`; `/api/ring` for members that draw the bar themselves; `/ring/opml` for every member's feed. The verified and edit pages show the links to paste.
+- **Mirrored to rssamplifier.com.** pit.world reads each claimed site's homepage for `<link rel="alternate">` RSS/Atom on claim and daily, and keeps the ring `pit-world` on [rssamplifier.com/ring/pit-world](https://rssamplifier.com/ring/pit-world) in step: submit new feeds, add members, remove ones that left. The sync is a diff (idempotent), runs a few seconds after a claim or edit and once a day, and needs `RSSAMPLIFIER_API_KEY` (an rssamplifier API key of the account that owns the ring; off without it). Moshpit-only names are not mirrored, since rssamplifier cannot reach them. New claims are also a feed: `/b/feed.xml`.
 
 ## Privacy, by construction
 
@@ -63,6 +75,13 @@ The page says the same in plain words: [pit.world/privacy](https://pit.world/pri
 | `GET /api/resolve?name=chovy.hacker` | the registry's answer for a Moshpit name |
 | `GET /api/network` | endings claimed, registry events, recent claims, endings for sale |
 | `GET /api/bangs` | every bang |
+| `GET /api/listing?domain=…` | a listing (never the owner's contact address) |
+| `POST /api/listing/claim` · `POST /api/listing/verify` | claim a listing; the edit key comes back once |
+| `POST /api/listing` | edit, with `Authorization: Bearer pitk_…`; `contactEmail` sets the private quote address (`""` clears) |
+| `POST /api/listing/quote` | `{ domain, name, email, phone?, message }`: one quote request to one listing |
+| `GET /api/pros?c=legal&near=oakland&q=wills&n=20&page=1` | the pro directory |
+| `GET /api/pros/categories` | categories (with counts) and price bands |
+| `GET /api/ring` | the web ring, in order |
 
 No key. Rate limited per visitor (`429` with `Retry-After`).
 
@@ -72,10 +91,10 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 
 | | |
 | --- | --- |
-| Web + API | `bun src/server.ts` (`PORT`, `HOST`; provider keys `SERPER_API_KEY`, `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` (Bing), `LINKUP_API_KEY`, `EXA_API_KEY`, `PERPLEXITY_API_KEY`) |
-| CLI | `pit search`, `pit resolve`, `pit network`, `pit open` |
+| Web + API | `bun src/server.ts` (`PORT`, `HOST`; `RESEND_API_KEY` for the newsletter and quote requests; `RSSAMPLIFIER_API_KEY` (+ optional `RSSAMPLIFIER_URL`, `RSSAMPLIFIER_RING`) for the ring mirror; provider keys `SERPER_API_KEY`, `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` (Bing), `LINKUP_API_KEY`, `EXA_API_KEY`, `PERPLEXITY_API_KEY`) |
+| CLI | `pit search`, `pit resolve`, `pit network`, `pit open`, `pit listing`, `pit claim`, `pit verify`, `pit edit DOMAIN --key … --operator … --category …`, `pit pros [WORDS] --category … --near …`, `pit categories`, `pit quote DOMAIN --name … --email … --message …`, `pit ring` |
 | TUI | `pit` |
-| MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
+| MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`, `listing`, `pros`, `ring`, `edit_listing`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
 | PWA | installable from any browser (`/manifest.webmanifest`, share target into `/search`); the worker in `public/sw.js` caches the static shell and an offline page, never a search |
 
 The CLI, TUI and MCP talk to `https://pit.world` (or `PIT_URL`), so they need no keys.
