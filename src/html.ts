@@ -3,7 +3,7 @@
  * "Safest" included); /app.js only adds keyboard shortcuts.
  */
 import { BANGS } from './bangs.js'
-import { LINKS, type NetworkStats, type Resolution } from './moshpit.js'
+import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { SearchResult } from './search.js'
 
 export const SITE = 'https://pit.world'
@@ -45,6 +45,9 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <meta property="og:image" content="${SITE}/og.png">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="pit.world">
 <link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
 <link rel="stylesheet" href="/style.css">
 <script src="/app.js" defer></script>
@@ -54,6 +57,7 @@ ${options.body}
 <footer class="foot">
   <nav>
     <a href="/privacy">Privacy</a>
+    <a href="/connect">Connect to Moshpit</a>
     <a href="/about">How it works</a>
     <a href="/about#default">Make it your default</a>
     <a href="/about#bangs">Bangs</a>
@@ -99,7 +103,7 @@ function networkPanel(stats: NetworkStats | null): string {
   ${numbers}
   <div class="steps">
     <div><span>1</span><h4>Get on the network</h4><pre><code>${esc(LINKS.install)}
-${esc(LINKS.enable)}</code></pre><p>Or point your browser's secure DNS at <code>${esc(LINKS.doh)}</code>, no install at all.</p></div>
+${esc(LINKS.enable)}</code></pre><p>Or point your browser's secure DNS at <code>${esc(LINKS.doh)}</code>, no install at all.</p><p><a class="btn" href="/connect">Step by step, for every device →</a></p></div>
     <div><span>2</span><h4>Claim an ending</h4><p>Pick one nobody has, and it is yours: every name under it, forever, in a log anyone can audit.</p><p><a class="btn" href="${LINKS.claim}">Claim an ending →</a></p></div>
     <div><span>3</span><h4>Search it here</h4><p>Type a Moshpit name into pit.world and it resolves through the registry, next to your web results.</p></div>
   </div>
@@ -127,6 +131,7 @@ export function homePage(stats: NetworkStats | null): string {
       <li><b>No JavaScript</b> required</li>
     </ul>
     <p class="default"><a href="/about#default">Make pit.world your default search →</a></p>
+    <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
   </header>
   ${networkPanel(stats)}
 </main>`,
@@ -140,7 +145,7 @@ function moshpitCard(resolution: Resolution): string {
   <h2><a href="https://${esc(resolution.name)}/" rel="noreferrer noopener">${esc(resolution.name)}</a></h2>
   <p>${live ? `Registered on the Moshpit network${resolution.target ? `, pointing at <code>${esc(resolution.target)}</code>` : ''}.` : 'Not registered yet: it could be yours.'}</p>
   <p class="row"><a class="btn" href="${esc(resolution.page)}">${live ? 'Registry page' : 'Claim it'}</a>
-  <a href="/#moshpit">How to open Moshpit names →</a></p>
+  <a href="/connect">How to open Moshpit names →</a></p>
 </aside>`
 }
 
@@ -233,7 +238,7 @@ export function aboutPage(): string {
 <table class="bangs">${bangRows}</table>
 
 <h2 id="moshpit">Moshpit names</h2>
-<p>Search a name like <code>chovy.hacker</code> and pit.world asks the Moshpit registry about it. To open Moshpit names in your browser, get on the network: <code>${esc(LINKS.install)}</code> then <code>${esc(LINKS.enable)}</code>, or set your browser's secure DNS to <code>${esc(LINKS.doh)}</code>.</p>
+<p>Search a name like <code>chovy.hacker</code> and pit.world asks the Moshpit registry about it. To open Moshpit names in your browser, get on the network: <code>${esc(LINKS.install)}</code> then <code>${esc(LINKS.enable)}</code>, or set your browser's secure DNS to <code>${esc(LINKS.doh)}</code>. Every method, step by step: <a href="/connect">Connect to Moshpit</a>.</p>
 
 <h2 id="api">API, CLI, TUI and MCP</h2>
 <p>Everything the page does is an API, and the same API is a command, a terminal app and an MCP server for your agents.</p>
@@ -253,6 +258,227 @@ claude mcp add pit -- pit mcp</code></pre>
 <p>The API is rate limited per visitor, like the page. It answers <code>429</code> with <code>Retry-After</code> when you go over.</p>
 </main>`,
   })
+}
+
+export function connectPage(): string {
+  const doh = esc(LINKS.doh)
+  return layout({
+    title: 'Connect to the Moshpit network · pit.world',
+    description: 'Open Moshpit names like chovy.hacker on Linux, macOS, Windows, iPhone, iPad and Android: every method, step by step.',
+    path: '/connect',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<p class="kicker">The Moshpit network</p>
+<h1>Connect to Moshpit</h1>
+<p class="lede">Searching Moshpit names works on pit.world with nothing installed. To <i>open</i> them, so that <code>https://chovy.hacker</code> loads like any site, your device needs two things:</p>
+<ol>
+<li><b>A resolver that knows Moshpit names.</b> Ordinary DNS has never heard of <code>.hacker</code>. Moshpit's resolver at <code>${doh}</code> answers Moshpit names <i>and</i> every normal domain, so it can be your only DNS.</li>
+<li><b>Trust in the Moshpit Root CA.</b> The registry signs a real certificate for every name, under its own root. Until your device trusts that root, Moshpit sites open with a certificate warning.</li>
+</ol>
+<p>Pick the method that fits your device. Each one says which of the two it covers.</p>
+
+<table class="methods">
+<tr><th>Method</th><th>For</th><th>Names</th><th>HTTPS</th></tr>
+<tr><td><a href="#moshcode">moshcode</a></td><td>Linux, whole machine</td><td>✓</td><td>✓ automatic</td></tr>
+<tr><td><a href="#tron">TronBrowser</a></td><td>Linux, one browser</td><td>✓</td><td>✓ automatic</td></tr>
+<tr><td><a href="#browser">Browser secure DNS</a></td><td>Chrome, Edge, Brave, Firefox on any OS</td><td>✓</td><td><a href="#ca">install the root</a></td></tr>
+<tr><td><a href="#apple">Apple profile</a></td><td>iPhone, iPad, Mac</td><td>✓</td><td>✓ one extra switch</td></tr>
+<tr><td><a href="#windows">Windows DNS</a></td><td>Windows 11, whole machine</td><td>✓</td><td><a href="#ca">install the root</a></td></tr>
+<tr><td><a href="#android">Android</a></td><td>Android phones and tablets</td><td>✓ in the browser</td><td><a href="#ca">install the root</a></td></tr>
+</table>
+
+<h2 id="moshcode">1. moshcode (Linux, the whole machine)</h2>
+<p>The most complete setup: every app on the machine resolves Moshpit names, a local proxy handles HTTPS, and the root is trusted for you. Ordinary domains keep resolving the way they did before.</p>
+<ol>
+<li>Install moshcode:<pre><code>${esc(LINKS.install)}</code></pre></li>
+<li>Turn on Moshpit names. It asks for your password once, because it changes system DNS routing and the trust store. Run it as yourself; do not put <code>sudo</code> in front:<pre><code>${esc(LINKS.enable)}</code></pre></li>
+<li>Check it:<pre><code>moshcode dns status
+curl -I https://chovy.hacker</code></pre></li>
+<li>Already installed? Update first, then enable again:<pre><code>moshcode update
+${esc(LINKS.enable)}</code></pre></li>
+</ol>
+<p>Undo everything with <code>moshcode dns disable</code>. To trust the root without changing DNS, use <code>moshcode dns ca</code>.</p>
+
+<h2 id="tron">2. TronBrowser (Linux, one browser)</h2>
+<p>A privacy browser that carries the Moshpit root and a one-click switch. Nothing on the rest of the machine changes.</p>
+<ol>
+<li>Install it:<pre><code>${esc(LINKS.tronInstall)}</code></pre></li>
+<li>Start it with <code>tron</code>.</li>
+<li>Open the sidebar and click <b>🤘 Pit</b>. Moshpit names now open in TronBrowser, and normal sites still go direct.</li>
+<li>Visit <code>https://chovy.hacker</code> to check.</li>
+</ol>
+<p>The Pit and Tor are exclusive: turning one on turns the other off, so Tor lookups never leak. Already installed? Run <code>tron upgrade</code> first. More at <a href="${esc(LINKS.tron)}">tronbrowser.dev</a>.</p>
+
+<h2 id="browser">3. Browser secure DNS (any OS, nothing to install)</h2>
+<p>Point your browser's DNS-over-HTTPS setting at Moshpit. Only that browser changes. Then <a href="#ca">install the root</a> so Moshpit sites open without a warning.</p>
+<h3>Chrome, Edge, Brave, Vivaldi, Opera (desktop and Android)</h3>
+<ol>
+<li>Open <b>Settings → Privacy and security → Security</b>. (Edge: <b>Settings → Privacy, search, and services → Security</b>.)</li>
+<li>Turn on <b>Use secure DNS</b>.</li>
+<li>Choose <b>With: Custom</b> (or <b>Add custom DNS service provider</b>).</li>
+<li>Enter:<pre><code>${doh}</code></pre></li>
+</ol>
+<h3>Firefox (desktop)</h3>
+<ol>
+<li>Open <b>Settings → Privacy &amp; Security</b> and scroll to <b>DNS over HTTPS</b>.</li>
+<li>Choose <b>Max Protection</b>.</li>
+<li>Under <b>Choose provider</b>, pick <b>Custom</b> and enter:<pre><code>${doh}</code></pre></li>
+</ol>
+<h3>Firefox (Android)</h3>
+<ol>
+<li>Open <b>Settings → DNS over HTTPS</b>.</li>
+<li>Choose <b>Max Protection</b>, then <b>Custom</b>, and enter the same address.</li>
+</ol>
+
+<h2 id="apple">4. Apple profile (iPhone, iPad, Mac)</h2>
+<p>One download sets the Moshpit resolver for the whole device and carries the root certificate with it.</p>
+<h3>iPhone and iPad</h3>
+<ol>
+<li>Open this page in <b>Safari</b> and tap <a href="/moshpit.mobileconfig">Download the Moshpit profile</a>. Tap <b>Allow</b>.</li>
+<li>Open <b>Settings</b>. Tap <b>Profile Downloaded</b> near the top (or <b>General → VPN &amp; Device Management</b>), then <b>Install</b> and enter your passcode. It says "Not Verified" because the profile is not signed; the contents are what this page describes.</li>
+<li>Turn on the root: <b>Settings → General → About → Certificate Trust Settings</b>, switch on <b>Moshpit Root CA</b>. iOS asks for this extra step for every root you add yourself.</li>
+<li>Check it in <b>Settings → General → VPN &amp; Device Management → DNS</b>: Moshpit should be selected. Then open <code>https://chovy.hacker</code> in Safari.</li>
+</ol>
+<h3>Mac</h3>
+<ol>
+<li>Download <a href="/moshpit.mobileconfig">the Moshpit profile</a>.</li>
+<li>Open <b>System Settings → General → Device Management</b> (older macOS: <b>Privacy &amp; Security → Profiles</b>), double-click <b>Moshpit network</b> and choose <b>Install</b>.</li>
+<li>If Safari or Chrome still warns, open <b>Keychain Access</b>, find <b>Moshpit Root CA</b> under <b>System</b>, open <b>Trust</b> and set <b>When using this certificate</b> to <b>Always Trust</b>.</li>
+</ol>
+<p>Remove it any time from the same Device Management screen.</p>
+
+<h2 id="windows">5. Windows 11 (the whole machine)</h2>
+<ol>
+<li>Open <b>Settings → Network &amp; internet</b>, then <b>Wi-Fi</b> or <b>Ethernet</b>, then your connection's <b>Hardware properties</b>.</li>
+<li>Next to <b>DNS server assignment</b>, click <b>Edit</b> and choose <b>Manual</b>.</li>
+<li>Turn on <b>IPv4</b>. Set <b>Preferred DNS</b> to <code>23.95.228.174</code>.</li>
+<li>Set <b>DNS over HTTPS</b> to <b>On (manual template)</b> and enter:<pre><code>${doh}</code></pre></li>
+<li>Leave <b>Fallback to plaintext</b> off, and <b>Save</b>.</li>
+<li><a href="#ca">Install the root</a>.</li>
+</ol>
+<p>Undo by setting DNS server assignment back to <b>Automatic (DHCP)</b>.</p>
+
+<h2 id="android">6. Android</h2>
+<p>Android's system-wide <b>Private DNS</b> setting speaks DNS-over-TLS, which Moshpit does not offer yet. Use your browser's secure DNS instead, which covers browsing:</p>
+<ol>
+<li>In Chrome or Firefox, follow the <a href="#browser">browser steps</a> above.</li>
+<li>Download <a href="/moshpit-root-ca.crt">the Moshpit root</a>.</li>
+<li>Open <b>Settings → Security &amp; privacy → More security settings → Encryption &amp; credentials → Install a certificate → CA certificate</b> (the words differ a little between phone makers; search Settings for "CA certificate"), tap <b>Install anyway</b> and pick the file.</li>
+<li>Chrome trusts certificates installed this way. Firefox needs one more switch: <b>Settings → About Firefox</b>, tap the logo five times, then go back to <b>Settings → Secret Settings</b> and turn on <b>Use third party CA certificates</b>.</li>
+</ol>
+
+<h2 id="ca">Trust the Moshpit Root CA</h2>
+<p>Download it here, <a href="/moshpit-root-ca.crt">moshpit-root-ca.crt</a>, or from the registry at <a href="${esc(LINKS.ca)}">${esc(LINKS.ca)}</a>. Check the fingerprint before you trust it:</p>
+<pre><code>openssl x509 -in moshpit-root-ca.crt -noout -subject -fingerprint -sha256</code></pre>
+<p>It must say <code>CN = Moshpit Root CA, O = Moshpit</code> and SHA-256 <code class="fp">${MOSHPIT_ROOT_SHA256}</code>.</p>
+<p><b>What you are trusting.</b> A root you install can vouch for any name. The registry refuses to sign names under real top-level domains and publishes every certificate it issues, but that is a promise kept by the signer, not something your device can enforce. Install it only on devices where you want Moshpit, and remove it the same way if you change your mind.</p>
+<h3>Debian, Ubuntu</h3>
+<pre><code>sudo cp moshpit-root-ca.crt /usr/local/share/ca-certificates/
+sudo update-ca-certificates</code></pre>
+<h3>Fedora, RHEL, Arch</h3>
+<pre><code>sudo cp moshpit-root-ca.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust</code></pre>
+<p>On Arch the folder is <code>/etc/ca-certificates/trust-source/anchors/</code>; the command is the same.</p>
+<h3>Chrome and Chromium on Linux</h3>
+<p>They read their own store, not the system one:</p>
+<pre><code>certutil -d sql:$HOME/.pki/nssdb -A -t C,, -n "Moshpit Root CA" -i moshpit-root-ca.crt</code></pre>
+<h3>macOS</h3>
+<pre><code>sudo security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain moshpit-root-ca.crt</code></pre>
+<h3>Windows</h3>
+<p>In an administrator PowerShell or Command Prompt:</p>
+<pre><code>certutil -addstore -f Root moshpit-root-ca.crt</code></pre>
+<p>Or double-click the file, choose <b>Install Certificate → Local Machine</b>, then <b>Place all certificates in the following store → Trusted Root Certification Authorities</b>.</p>
+<h3>Firefox (any desktop)</h3>
+<ol>
+<li><b>Settings → Privacy &amp; Security → Certificates → View Certificates → Authorities → Import</b>.</li>
+<li>Pick the file and tick <b>Trust this CA to identify websites</b>.</li>
+</ol>
+
+<h2 id="check">Check that it works</h2>
+<ol>
+<li>Search <a href="/search?q=chovy.hacker">chovy.hacker</a> on pit.world: the Moshpit card shows where the name points.</li>
+<li>Open <a href="https://chovy.hacker/" rel="noreferrer noopener">https://chovy.hacker</a>. It should load with a padlock and no warning.</li>
+<li>Still a warning? The resolver works but the root is not trusted yet: see <a href="#ca">Trust the Moshpit Root CA</a>. "Site can't be reached"? The resolver is not in use: re-check your method's steps, and close and reopen the browser.</li>
+</ol>
+
+<h2 id="undo">Undo</h2>
+<ul>
+<li><b>moshcode:</b> <code>moshcode dns disable</code>.</li>
+<li><b>TronBrowser:</b> click <b>🤘 Pit</b> again.</li>
+<li><b>Browsers:</b> set secure DNS back to your previous provider or off.</li>
+<li><b>Apple:</b> remove the <b>Moshpit network</b> profile in Device Management.</li>
+<li><b>Windows:</b> DNS server assignment back to <b>Automatic (DHCP)</b>; remove the root in <code>certmgr.msc</code> → Trusted Root Certification Authorities.</li>
+<li><b>Root on Linux:</b> delete the file you copied and run the same update command; for Chrome, <code>certutil -d sql:$HOME/.pki/nssdb -D -n "Moshpit Root CA"</code>.</li>
+</ul>
+
+<h2 id="next">Next</h2>
+<p>On the network? <a href="${LINKS.claim}">Claim an ending</a> and put your own names on it, or browse what is already there in the <a href="${LINKS.registry}">registry</a>.</p>
+</main>`,
+  })
+}
+
+export function offlinePage(): string {
+  return layout({
+    title: 'Offline · pit.world',
+    description: 'pit.world needs the network to search.',
+    path: '/offline',
+    bodyClass: 'doc',
+    noindex: true,
+    body: `<main class="prose">
+<a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
+<h1>You're offline</h1>
+<p>pit.world searches live, so it needs the network. Nothing about your searches is stored on this device, so there is nothing to show until you are back online.</p>
+<p><a class="btn" href="/">Try again</a></p>
+</main>`,
+  })
+}
+
+/**
+ * An Apple configuration profile: Moshpit's DoH resolver for the whole device, plus the
+ * registry's root. Unsigned, so iOS and macOS show it as "Not Verified".
+ */
+export function mobileConfig(rootPem: string): string {
+  const der = rootPem.replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '')
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>PayloadContent</key>
+  <array>
+    <dict>
+      <key>PayloadType</key><string>com.apple.dnsSettings.managed</string>
+      <key>PayloadIdentifier</key><string>world.pit.moshpit.dns</string>
+      <key>PayloadUUID</key><string>6B0C2F43-4E0A-4C6B-9A63-2D7A5F1E9C01</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>Moshpit DNS</string>
+      <key>DNSSettings</key>
+      <dict>
+        <key>DNSProtocol</key><string>HTTPS</string>
+        <key>ServerURL</key><string>${esc(LINKS.doh)}</string>
+      </dict>
+    </dict>
+    <dict>
+      <key>PayloadType</key><string>com.apple.security.root</string>
+      <key>PayloadIdentifier</key><string>world.pit.moshpit.root</string>
+      <key>PayloadUUID</key><string>0E4D8B57-1F2C-4A39-8D61-7C3B9E2A5F02</string>
+      <key>PayloadVersion</key><integer>1</integer>
+      <key>PayloadDisplayName</key><string>Moshpit Root CA</string>
+      <key>PayloadCertificateFileName</key><string>moshpit-root-ca.crt</string>
+      <key>PayloadContent</key><data>${der}</data>
+    </dict>
+  </array>
+  <key>PayloadDisplayName</key><string>Moshpit network</string>
+  <key>PayloadDescription</key><string>Opens Moshpit names like chovy.hacker on this device: Moshpit's resolver (${esc(LINKS.doh)}) for DNS, and the Moshpit Root CA for HTTPS. See https://pit.world/connect</string>
+  <key>PayloadOrganization</key><string>pit.world</string>
+  <key>PayloadIdentifier</key><string>world.pit.moshpit</string>
+  <key>PayloadType</key><string>Configuration</string>
+  <key>PayloadUUID</key><string>A3F1C9D2-5B7E-4E80-B6D4-1C2E3F4A5B03</string>
+  <key>PayloadVersion</key><integer>1</integer>
+  <key>PayloadRemovalDisallowed</key><false/>
+</dict>
+</plist>
+`
 }
 
 export function openSearchXml(): string {

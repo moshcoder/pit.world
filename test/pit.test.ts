@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test'
+import { X509Certificate } from 'node:crypto'
 import { parseBang } from '../src/bangs.ts'
 import { main } from '../src/cli.ts'
 import { PitClient } from '../src/client.ts'
 import { esc } from '../src/html.ts'
-import { looksLikeName, Registry } from '../src/moshpit.ts'
+import { looksLikeName, MOSHPIT_ROOT_SHA256, Registry } from '../src/moshpit.ts'
 import { RateLimiter } from '../src/ratelimit.ts'
 import { Cache, cleanHits, parseSerper, search, SearchUnavailable } from '../src/search.ts'
 import { createApp } from '../src/server.ts'
@@ -161,6 +162,47 @@ describe('the web app', () => {
     const res = await request('/search?q=anything')
     expect(res.status).toBe(503)
     expect(await res.text()).toContain('unavailable for a moment')
+  })
+
+  it('is an installable PWA whose worker never stores a search', async () => {
+    const { request } = app()
+    const home = await (await request('/')).text()
+    expect(home).toContain('<link rel="manifest" href="/manifest.webmanifest">')
+    const manifest = await request('/manifest.webmanifest')
+    expect(manifest.headers.get('content-type')).toBe('application/manifest+json')
+    const json = await manifest.json()
+    expect(json).toMatchObject({ start_url: '/', display: 'standalone', share_target: { action: '/search', params: { text: 'q' } } })
+    for (const icon of json.icons) expect((await request(icon.src)).status).toBe(200)
+    const sw = await request('/sw.js')
+    expect(sw.headers.get('cache-control')).toBe('no-cache')
+    const code = await sw.text()
+    expect(code).not.toContain("'/search'")
+    expect(code).not.toContain('/api/')
+    expect(await (await request('/offline')).text()).toContain("You're offline")
+  })
+
+  it('explains every way onto the Moshpit network, linked from the home page', async () => {
+    const { request } = app()
+    expect(await (await request('/')).text()).toContain('href="/connect"')
+    const html = await (await request('/connect')).text()
+    for (const id of ['moshcode', 'tron', 'browser', 'apple', 'windows', 'android', 'ca', 'check', 'undo']) expect(html).toContain(`id="${id}"`)
+    expect(html).toContain('https://dns.moshcode.sh/dns-query')
+    expect(html).toContain(MOSHPIT_ROOT_SHA256)
+    expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/connect')
+  })
+
+  it('serves the Moshpit root it documents, and an Apple profile carrying it', async () => {
+    const { request } = app()
+    const pem = await (await request('/moshpit-root-ca.crt')).text()
+    const cert = new X509Certificate(pem)
+    expect(cert.fingerprint256).toBe(MOSHPIT_ROOT_SHA256)
+    expect(cert.subject).toContain('CN=Moshpit Root CA')
+    const profile = await request('/moshpit.mobileconfig')
+    expect(profile.headers.get('content-type')).toBe('application/x-apple-aspen-config')
+    const xml = await profile.text()
+    expect(xml).toContain('<string>https://dns.moshcode.sh/dns-query</string>')
+    const der = pem.replace(/-----(BEGIN|END) CERTIFICATE-----/g, '').replace(/\s+/g, '')
+    expect(xml).toContain(`<data>${der}</data>`)
   })
 
   it('escapes everything it echoes', () => {

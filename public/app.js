@@ -27,4 +27,6 @@
       focus(index - 1)
     }
   })
+  // Installable app + offline page. The worker caches the static shell only, never a search.
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
 })()

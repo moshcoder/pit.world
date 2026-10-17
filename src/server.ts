@@ -6,7 +6,7 @@
  */
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, homePage, openSearchXml, privacyPage, resultsPage } from './html.js'
+import { aboutPage, connectPage, homePage, mobileConfig, offlinePage, openSearchXml, privacyPage, resultsPage } from './html.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
@@ -60,11 +60,13 @@ export function createApp(deps: Deps) {
   app.get('/', async (c) => c.html(homePage(await registry.stats())))
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
+  app.get('/connect', (c) => c.html(connectPage()))
+  app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
   app.get('/robots.txt', (c) => c.text('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n'))
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/about', '/privacy']
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/about', '/privacy']
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,
@@ -137,8 +139,19 @@ export function createApp(deps: Deps) {
     const file = Bun.file(`${dir}${c.req.param('file')}`)
     if (!(await file.exists())) return c.notFound()
     const ext = c.req.param('file').split('.').pop()!
-    return c.body(await file.arrayBuffer(), 200, { 'content-type': TYPES[ext]!, 'cache-control': 'public, max-age=3600' })
+    // The service worker must be re-checked on every visit, or an old one lingers for an hour.
+    const cacheControl = c.req.param('file') === 'sw.js' ? 'no-cache' : 'public, max-age=3600'
+    return c.body(await file.arrayBuffer(), 200, { 'content-type': TYPES[ext]!, 'cache-control': cacheControl })
   })
+
+  // The Moshpit root, the same file the registry publishes, and an Apple profile that carries it.
+  const rootPem = () => Bun.file(`${dir}moshpit-root-ca.crt`).text()
+  app.get('/moshpit-root-ca.crt', async (c) =>
+    c.body(await rootPem(), 200, { 'content-type': 'application/x-x509-ca-cert', 'content-disposition': 'attachment; filename="moshpit-root-ca.crt"', 'cache-control': 'public, max-age=86400' }),
+  )
+  app.get('/moshpit.mobileconfig', async (c) =>
+    c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
+  )
 
   app.notFound((c) => c.html(homePage(null).replace('<p class="tag">', '<p class="tag">That page does not exist. '), 404))
   return app

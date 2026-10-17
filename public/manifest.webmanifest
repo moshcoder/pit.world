@@ -1,0 +1,27 @@
+{
+  "id": "/",
+  "name": "pit.world",
+  "short_name": "pit.world",
+  "description": "Private search, and the doorway to the Moshpit network. No logs, no cookies, no profile.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#050505",
+  "theme_color": "#050505",
+  "categories": ["utilities", "productivity"],
+  "icons": [
+    { "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Connect to Moshpit", "url": "/connect", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Bangs", "url": "/about#bangs", "icons": [{ "src": "/icon-192.png", "sizes": "192x192" }] }
+  ],
+  "share_target": {
+    "action": "/search",
+    "method": "GET",
+    "params": { "text": "q" }
+  }
+}

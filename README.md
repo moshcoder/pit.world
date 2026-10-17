@@ -56,6 +56,7 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 | CLI | `pit search`, `pit resolve`, `pit network`, `pit open` |
 | TUI | `pit` |
 | MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network` |
+| PWA | installable from any browser (`/manifest.webmanifest`, share target into `/search`); the worker in `public/sw.js` caches the static shell and an offline page, never a search |
 
 The CLI, TUI and MCP talk to `https://pit.world` (or `PIT_URL`), so they need no keys.
 
@@ -71,7 +72,7 @@ Production runs on bare metal with `bin/install.sh` ([OpenInstall](https://logic
 
 ## The Moshpit network
 
-Moshpit is a namespace beside ICANN's. Anyone can claim an ending (`.hacker`, `.eggs`, `.pit`), put names under it and point them anywhere; the registry is open and append-only, and it signs certificates, so the names are real HTTPS sites to anyone on the network. Get on it with [moshcode](https://moshcode.sh) (`curl -fsSL https://moshcoding.com/install.sh | sh`, then `moshcode dns enable`) or by setting your browser's secure DNS to `https://dns.moshcode.sh/dns-query`. Claim an ending at [pit.moshcode.sh](https://pit.moshcode.sh).
+Moshpit is a namespace beside ICANN's. Anyone can claim an ending (`.hacker`, `.eggs`, `.pit`), put names under it and point them anywhere; the registry is open and append-only, and it signs certificates, so the names are real HTTPS sites to anyone on the network. Get on it with [moshcode](https://moshcode.sh) (`curl -fsSL https://moshcoding.com/install.sh | sh`, then `moshcode dns enable`) or by setting your browser's secure DNS to `https://dns.moshcode.sh/dns-query`. Every method (moshcode, TronBrowser, browser DoH, an Apple profile, Windows, Android) and how to trust the Moshpit Root CA is at [pit.world/connect](https://pit.world/connect); pit.world serves the root at `/moshpit-root-ca.crt` and the Apple profile at `/moshpit.mobileconfig`. Claim an ending at [pit.moshcode.sh](https://pit.moshcode.sh).
 
 ## License
 

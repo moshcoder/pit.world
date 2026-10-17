@@ -19,7 +19,14 @@ export const LINKS = {
   install: 'curl -fsSL https://moshcoding.com/install.sh | sh',
   enable: 'moshcode dns enable',
   source: 'https://github.com/moshcoder',
+  tron: 'https://tronbrowser.dev',
+  tronInstall: 'curl -fsSL https://tronbrowser.dev/install.sh | sh',
+  /** The registry's root, as it publishes it; pit.world serves the same file at /moshpit-root-ca.crt. */
+  ca: 'https://pit.moshcode.sh/api/moshpit/ca.crt',
 }
+
+/** CN=Moshpit Root CA, O=Moshpit, valid to 2046-09-11. Anyone installing it should check this first. */
+export const MOSHPIT_ROOT_SHA256 = '4A:57:66:EC:8C:1F:10:F8:75:C9:89:65:FB:E8:DC:36:1A:32:C7:2B:C3:95:95:16:EA:7B:81:61:00:1E:15:57'
 
 export type Resolution = {
   name: string
