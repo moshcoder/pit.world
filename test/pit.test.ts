@@ -21,6 +21,17 @@ function upstream(options: { serperFails?: boolean } = {}) {
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
     if (url.startsWith('https://google.serper.dev')) {
       if (options.serperFails) return json({ message: 'nope' }, 500)
+      if (url.endsWith('/images'))
+        return json({
+          images: [
+            { title: 'A cat', link: 'https://cats.example/page', domain: 'cats.example', thumbnailUrl: 'https://encrypted-tbn0.gstatic.com/images?q=tbn:abc' },
+            { title: 'Tracker', link: 'https://x.example/', thumbnailUrl: 'https://tracker.example/pixel.gif' },
+          ],
+        })
+      if (url.endsWith('/videos'))
+        return json({
+          videos: [{ title: 'Cat video', link: 'https://www.youtube.com/watch?v=x', source: 'YouTube', channel: 'Cats', duration: '3:01', imageUrl: 'https://i.ytimg.com/vi/x/hq.jpg' }],
+        })
       return json({
         organic: [
           { title: 'Moshpit <b>network</b>', link: 'https://moshcode.sh/', snippet: 'An internet beside the internet' },
@@ -42,6 +53,12 @@ function upstream(options: { serperFails?: boolean } = {}) {
       const since = new URL(url).searchParams.get('since')
       return since ? json({ entries: [{ seq: 1, tld: 'eggs', action: 'register', at: Date.now() - 60_000 }] }) : json({ total: 19547, entries: [] })
     }
+    if (url.startsWith('https://pairux.com/api/live')) return json({ data: [{ join_code: 'abc123', subject: 'Cat stream', is_live: true, viewer_count: 4, channel_name: 'Chovy TV' }] })
+    if (url.startsWith('https://pairux.com/api/channels/directory'))
+      return json({ data: [{ handle: 'chovy', name: 'Chovy TV', is_live: false, subscriber_count: 12, description: 'Cats and code' }] })
+    if (url.startsWith('https://nixamp.com/api/directory'))
+      return json({ streams: [{ name: 'server1', url: 'https://server1.chovy.nixamp.com:4321/view/k', playing: true, nowPlaying: 'Cat radio', tracks: 5719, channels: ['CNN'] }] })
+    if (url.startsWith('https://i.ytimg.com/')) return new Response(new Uint8Array([0xff, 0xd8, 0xff]), { headers: { 'content-type': 'image/jpeg' } })
     if (url.includes('/api/moshpit/market')) return json({ tlds: [{ tld: 'stations', price_usd: 2, for_sale: true }] })
     return json({}, 404)
   }) as typeof fetch
@@ -272,6 +289,73 @@ describe('the web app', () => {
 
   it('escapes everything it echoes', () => {
     expect(esc('<script>"\'&')).toBe('&lt;script&gt;&quot;&#39;&amp;')
+  })
+})
+
+describe('categories: images, videos, music, live', () => {
+  it('shows the tabs on every results page and keeps the tab on a new search', async () => {
+    const { request } = app()
+    const web = await (await request('/search?q=cats')).text()
+    expect(web).toContain('<nav class="tabs"')
+    expect(web).toContain('href="/search?q=cats&t=images"')
+    const images = await (await request('/search?q=cats&t=images')).text()
+    expect(images).toContain('<a href="/search?q=cats&t=images" aria-current="page">Images</a>')
+    expect(images).toContain('<input type="hidden" name="t" value="images">')
+  })
+
+  it('shows images with thumbnails loaded through pit.world, never straight from Google', async () => {
+    const { request, calls } = app()
+    const html = await (await request('/search?q=cats&t=images')).text()
+    expect(calls.some((c) => c.url === 'https://google.serper.dev/images')).toBe(true)
+    expect(html).toContain('src="/img?u=https%3A%2F%2Fencrypted-tbn0.gstatic.com%2Fimages%3Fq%3Dtbn%3Aabc"')
+    // A thumbnail host outside the allowlist gets no <img> at all.
+    expect(html).not.toContain('tracker.example/pixel')
+    expect(html).not.toMatch(/src="https:\/\//)
+  })
+
+  it('puts PairUX first, then nixamp, above live results', async () => {
+    const { request, calls } = app()
+    const html = await (await request('/search?q=cats&t=live')).text()
+    expect(calls.find((c) => c.url === 'https://google.serper.dev/videos')?.body).toContain('cats live stream')
+    const pairux = html.indexOf('pairux.com/l/abc123')
+    const nixamp = html.indexOf('server1.chovy.nixamp.com')
+    const web = html.indexOf('youtube.com/watch')
+    expect(pairux).toBeGreaterThan(0)
+    expect(pairux).toBeLessThan(nixamp)
+    expect(nixamp).toBeLessThan(web)
+    expect(html).toContain('https://pairux.com/@chovy')
+  })
+
+  it('keeps music to music sites and to nixamp', async () => {
+    const { request, calls } = app()
+    const html = await (await request('/search?q=cats&t=music')).text()
+    expect(calls.find((c) => c.url === 'https://google.serper.dev/search')?.body).toContain('site:bandcamp.com')
+    expect(html).toContain('Listen on nixamp')
+    expect(html).not.toContain('pairux.com/l/abc123')
+  })
+
+  it('serves the same through the API', async () => {
+    const { request } = app()
+    const json: any = await (await request('/api/search?q=cats&t=videos')).json()
+    expect(json.type).toBe('videos')
+    expect(json.results[0]).toMatchObject({ url: 'https://www.youtube.com/watch?v=x', duration: '3:01' })
+    expect(json.promoted[0].url).toContain('pairux.com')
+  })
+
+  it('proxies only allowlisted thumbnail hosts', async () => {
+    const { request } = app()
+    const ok = await request(`/img?u=${encodeURIComponent('https://i.ytimg.com/vi/x/hq.jpg')}`)
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('content-type')).toBe('image/jpeg')
+    for (const bad of ['https://tracker.example/x.png', 'http://i.ytimg.com/vi/x.jpg', 'https://127.0.0.1/x', 'https://i.ytimg.com:8443/x', 'nope']) {
+      expect((await request(`/img?u=${encodeURIComponent(bad)}`)).status).toBe(400)
+    }
+  })
+
+  it('treats an unknown tab as All', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=cats&t=evil')).text()
+    expect(html).toContain('aria-current="page">All</a>')
   })
 })
 

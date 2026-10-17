@@ -162,6 +162,21 @@ export class Cache {
     if (this.entries.size >= this.max) this.entries.delete(this.entries.keys().next().value!)
     this.entries.set(key, { at: Date.now(), value })
   }
+  // The Images/Videos/Music/Live tabs (verticals.ts), under the same rules.
+  private media = new Map<string, { at: number; value: unknown }>()
+  getMedia<T>(key: string): T | null {
+    const entry = this.media.get(key)
+    if (!entry) return null
+    if (Date.now() - entry.at > this.ttlMs) {
+      this.media.delete(key)
+      return null
+    }
+    return entry.value as T
+  }
+  setMedia(key: string, value: unknown): void {
+    if (this.media.size >= this.max) this.media.delete(this.media.keys().next().value!)
+    this.media.set(key, { at: Date.now(), value })
+  }
 }
 
 export function normalizeQuery(query: string): string {

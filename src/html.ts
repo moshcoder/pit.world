@@ -6,7 +6,9 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
+import type { Promo } from './promoted.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
+import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 
 export const SITE = 'https://pit.world'
 
@@ -84,9 +86,9 @@ ${options.body}
 </html>`
 }
 
-function searchForm(query = '', autofocus = false): string {
+function searchForm(query = '', autofocus = false, vertical: Vertical = 'web'): string {
   return `<form class="search" action="/search" method="get" role="search">
-  <input name="q" type="search" value="${esc(query)}" placeholder="Search privately, or try chovy.hacker" aria-label="Search" autocomplete="off" spellcheck="false"${autofocus ? ' autofocus' : ''} maxlength="512" required>
+  <input name="q" type="search" value="${esc(query)}" placeholder="Search privately, or try chovy.hacker" aria-label="Search" autocomplete="off" spellcheck="false"${autofocus ? ' autofocus' : ''} maxlength="512" required>${vertical === 'web' ? '' : `\n  <input type="hidden" name="t" value="${vertical}">`}
   <button type="submit" aria-label="Search">Search</button>
 </form>`
 }
@@ -177,6 +179,81 @@ function moshpitCard(resolution: Resolution): string {
 </aside>`
 }
 
+/** All · Images · Videos · Music · Live, each the same query in another index. */
+function tabs(query: string, active: Vertical): string {
+  return `<nav class="tabs" aria-label="Search type">${VERTICALS.map((v) => {
+    const href = `/search?q=${encodeURIComponent(query)}${v.id === 'web' ? '' : `&t=${v.id}`}`
+    return v.id === active ? `<a href="${href}" aria-current="page">${v.label}</a>` : `<a href="${href}">${v.label}</a>`
+  }).join('')}</nav>`
+}
+
+/** PairUX channels and nixamp streams, ours, ahead of everything else. */
+function promoStrip(promos: Promo[], vertical: Vertical): string {
+  if (!promos.length) return ''
+  const label = vertical === 'live' ? 'Live on PairUX and nixamp' : vertical === 'music' ? 'Listen on nixamp' : 'Watch on PairUX and nixamp'
+  return `<section class="promo" aria-label="${label}">
+  <p class="kicker">${label}</p>
+  <ul>${promos
+    .map(
+      (p) => `<li${p.live ? ' class="live"' : ''}>
+    <a href="${esc(p.url)}" rel="noreferrer noopener"><span class="from">${p.source === 'pairux' ? 'PairUX' : 'nixamp'}</span>${p.live ? '<span class="dot">LIVE</span>' : ''}<b>${esc(p.title)}</b>${p.line ? `<small>${esc(p.line)}</small>` : ''}</a>
+  </li>`,
+    )
+    .join('')}</ul>
+</section>`
+}
+
+function thumb(m: Media, cls = 'thumb'): string {
+  const src = thumbSrc(m.thumbnail)
+  return src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : `<span class="${cls} none" aria-hidden="true"></span>`
+}
+
+function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
+  if (vertical === 'images') {
+    return `<ul class="images">${hits
+      .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a></li>`)
+      .join('')}</ul>`
+  }
+  if (vertical === 'music') {
+    return `<ol class="hits">${hits
+      .map(
+        (m) => `<li>
+      <a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
+      <div class="url">${esc(m.host)}</div>
+      ${m.description ? `<p>${esc(m.description)}</p>` : ''}
+    </li>`,
+      )
+      .join('')}</ol>`
+  }
+  return `<ol class="videos">${hits
+    .map(
+      (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}${m.duration ? `<span class="dur">${esc(m.duration)}</span>` : ''}</a>
+    <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
+    <div class="url">${esc([m.host, m.channel, m.date].filter(Boolean).join(' · '))}</div>
+    ${m.description ? `<p>${esc(m.description)}</p>` : ''}</div></li>`,
+    )
+    .join('')}</ol>`
+}
+
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null }): string {
+  const { query, vertical, result, promos, error } = options
+  const hits = result?.hits ?? []
+  const label = VERTICALS.find((v) => v.id === vertical)!.label
+  const body = `<header class="bar">
+  <a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
+  ${searchForm(query, false, vertical)}
+</header>
+${tabs(query, vertical)}
+<main class="results ${vertical}">
+  ${promoStrip(promos, vertical)}
+  ${error ? `<p class="notice">${esc(error)}</p>` : ''}
+  ${hits.length ? mediaList(vertical, hits) : ''}
+  ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
+  ${result ? `<p class="via">${label} from the Google index, fetched by pit.world. Thumbnails are loaded through pit.world too, so Google and YouTube never see your IP address, browser or cookies.</p>` : ''}
+</main>`
+  return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true })
+}
+
 export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null }): string {
   const { query, result, resolution, error } = options
   const hits = result?.hits ?? []
@@ -185,6 +262,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
   <a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
   ${searchForm(query)}
 </header>
+${tabs(query, 'web')}
 <main class="results">
   ${resolution?.registered ? moshpitCard(resolution) : ''}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a></p>` : ''}
