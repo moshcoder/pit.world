@@ -8,6 +8,7 @@ import { looksLikeName, MOSHPIT_ROOT_SHA256, Registry } from '../src/moshpit.ts'
 import { RateLimiter } from '../src/ratelimit.ts'
 import { Cache, cleanHits, mergeResults, parseDataForSeo, parseSerper, search, SearchUnavailable } from '../src/search.ts'
 import { pick } from '../src/promoted.ts'
+import { neighbors, randomSite, RING, siteHref } from '../src/ring.ts'
 import { createApp } from '../src/server.ts'
 import { initialState, onKey } from '../src/tui.ts'
 
@@ -477,5 +478,46 @@ describe('/build', () => {
     expect(html).toContain('$2')
     expect(await (await request('/')).text()).toContain('href="/build"')
     expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/build')
+  })
+})
+
+describe('the Moshpit ring', () => {
+  it('walks the ring both ways, wrapping round, and never picks the current site at random', () => {
+    expect(neighbors('seo.rank').prev.name).toBe('pit.world')
+    expect(neighbors('seo.rank').next.name).toBe('family.ancestry')
+    expect(neighbors('family.ancestry').next.name).toBe('pit.world')
+    expect(neighbors('pit.world').prev.name).toBe('family.ancestry')
+    expect(neighbors('WWW.SEO.RANK.').next.name).toBe('family.ancestry')
+    for (const r of [0, 0.5, 0.99]) expect(randomSite('seo.rank', () => r).name).not.toBe('seo.rank')
+  })
+
+  it('links a Moshpit name through the gateway unless the visitor is on Moshpit DNS', () => {
+    const seo = RING.find((s) => s.name === 'seo.rank')!
+    expect(siteHref(seo, false)).toBe('https://pit.moshcode.sh/n/seo.rank')
+    expect(siteHref(seo, true)).toBe('https://seo.rank/')
+    expect(siteHref(RING.find((s) => s.name === 'pit.world')!, false)).toBe('https://pit.world/')
+  })
+
+  it('puts the bar on every page, with pit.world marked current', async () => {
+    const { request } = app()
+    for (const path of ['/', '/about', '/ring']) {
+      const html = await (await request(path)).text()
+      expect(html).toContain('<nav class="ring-bar"')
+      expect(html).toContain('<a href="https://pit.world/" aria-current="page"')
+      expect(html).toContain('href="https://pit.moshcode.sh/n/seo.rank"')
+    }
+  })
+
+  it('serves /api/ring with direct and gateway URLs, and redirects /ring/next|prev|random', async () => {
+    const { request } = app()
+    const res = await request('/api/ring')
+    expect(res.headers.get('access-control-allow-origin')).toBe('*')
+    const body = (await res.json()) as { sites: Array<{ name: string; url: string; gatewayUrl: string }> }
+    expect(body.sites.find((s) => s.name === 'seo.rank')).toMatchObject({ url: 'https://seo.rank/', gatewayUrl: 'https://pit.moshcode.sh/n/seo.rank' })
+    expect((await request('/ring/next?from=pit.world')).headers.get('location')).toBe('https://pit.moshcode.sh/n/seo.rank')
+    expect((await request('/ring/next?from=pit.world&direct=1')).headers.get('location')).toBe('https://seo.rank/')
+    expect((await request('/ring/prev?from=seo.rank')).headers.get('location')).toBe('https://pit.world/')
+    expect((await request('/ring/random?from=seo.rank')).status).toBe(302)
+    expect((await request('/ring/sideways')).status).toBe(404)
   })
 })
