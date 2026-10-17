@@ -317,6 +317,20 @@ describe('promotion: measurement', () => {
     expect(h.promo.placements(h.campaign, { state: 'verified' }).placements.map((p) => p.kind)).toEqual(['roundup'])
   })
 
+  it('leases due posts before re-checking scheduled ones, and rotates the re-checks', async () => {
+    const h = setup()
+    await launched(h)
+    const all = h.promo.placements(h.campaign).placements
+    const [first, second] = all.filter((p) => p.kind === 'spotlight')
+    // The announcement sits in myna's queue for weeks: it is re-checked, but never ahead of a due post.
+    const announce = all.find((p) => p.kind === 'announcement')!
+    h.promo.lease(h.campaign, 'w', 1)
+    h.promo.report(announce.id, { state: 'scheduled', queueId: 'q' })
+    h.clock.t = second!.plannedAt + 1
+    const leased = h.promo.lease(h.campaign, 'w', 2).placements.map((p) => p.id)
+    expect(leased).toEqual([first!.id, second!.id])
+  })
+
   it('records gaps and reports them', async () => {
     const h = setup()
     await launched(h)

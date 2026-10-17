@@ -181,7 +181,7 @@ export function mountPromotion(app: Hono<Env>, d: PromotionDeps) {
   app.get(`${V}/placements/:id`, api((c) => promo.placement(c.req.param('id')!)))
   app.post(`${V}/campaigns/:id/lease`, api(async (c) => {
     const b = await body(c)
-    return promo.lease(c.req.param('id')!, String(b.owner ?? 'worker').slice(0, 60), Math.min(20, Number(b.max ?? 5) || 5))
+    return promo.lease(c.req.param('id')!, String(b.owner ?? 'worker').slice(0, 60), Math.min(50, Number(b.max ?? 20) || 20))
   }))
   app.post(`${V}/placements/:id/report`, api(async (c) => promo.report(c.req.param('id')!, (await body(c)) as any, actor(c))))
   app.post(`${V}/placements/:id/retry`, api((c) => promo.retry(c.req.param('id')!, actor(c))))
