@@ -7,7 +7,7 @@ import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
-import { ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
+import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 
@@ -178,11 +178,16 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
 
 function moshpitCard(resolution: Resolution): string {
   const live = resolution.nameRegistered
+  // A name with a server opens for everyone through our relay (<name>.pit.world): that is the link we lead with,
+  // because most people searching have no Moshpit DNS. The bare name is for those who do.
+  const served = live && Boolean(resolution.target)
+  const web = proxyUrl(resolution.name)
   return `<aside class="card mosh">
   <p class="kicker">Moshpit name</p>
-  <h2><a href="https://${esc(resolution.name)}/" rel="noreferrer noopener">${esc(resolution.name)}</a></h2>
-  <p>${live ? `Registered on the Moshpit network${resolution.target ? `, pointing at <code>${esc(resolution.target)}</code>` : ''}.` : 'Not registered yet: it could be yours.'}</p>
-  <p class="row"><a class="btn" href="${esc(resolution.page)}">${live ? 'Registry page' : 'Claim it'}</a>
+  <h2><a href="${esc(served ? web : `https://${resolution.name}/`)}" rel="noreferrer noopener">${esc(resolution.name)}</a></h2>
+  ${served ? `<p class="url"><a href="${esc(web)}" rel="noreferrer noopener">${esc(web.replace(/\/$/, ''))}</a></p>` : ''}
+  <p>${live ? `Registered on the Moshpit network${resolution.target ? `, pointing at <code>${esc(resolution.target)}</code>` : ''}.${served ? ' Opens in any browser through pit.world, no setup needed.' : ''}` : 'Not registered yet: it could be yours.'}</p>
+  <p class="row">${served ? `<a class="btn" href="${esc(web)}" rel="noreferrer noopener">Open ${esc(resolution.name)}</a> <a href="https://${esc(resolution.name)}/" rel="noreferrer noopener">On Moshpit DNS</a> · ` : ''}<a${served ? '' : ' class="btn"'} href="${esc(resolution.page)}">${live ? 'Registry page' : 'Claim it'}</a>
   <a href="/connect">How to open Moshpit names →</a></p>
 </aside>`
 }
