@@ -12,7 +12,7 @@ import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
-import { liveCerts, proxiedName, proxyRequest } from './proxy.js'
+import { liveCerts, proxiedName, proxyRequest, registrySweep } from './proxy.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
@@ -359,6 +359,18 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   setInterval(daily, 24 * 3600 * 1000).unref()
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts() }
+  // Certificates for every reachable name before its first visit (HSTS browsers never make the http one).
+  if (env.PIT_CERT_SWEEP !== 'off') {
+    const sweep = registrySweep(proxyDeps.access, proxyDeps.certs)
+    const run = () =>
+      sweep()
+        .then((r) => {
+          if (r.missing.length) console.log(`cert sweep: ${r.names} names, missing ${r.missing.join(' ')}, asked ${r.asked.length}`)
+        })
+        .catch((err) => console.error(`cert sweep failed: ${(err as Error).message}`))
+    setTimeout(run, 20_000).unref()
+    setInterval(run, 15 * 60_000).unref()
+  }
   const serviceDeps = {
     ...proxyDeps,
     socialUrl: env.PIT_SOCIAL_URL === 'off' ? null : (env.PIT_SOCIAL_URL ?? 'http://127.0.0.1:8794'),

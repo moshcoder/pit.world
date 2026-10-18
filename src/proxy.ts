@@ -150,6 +150,66 @@ async function targetFor(name: string, access: MoshpitAccess): Promise<Target | 
   return value
 }
 
+/** `label.ending` names in the registry's sitemap (`/n/<name>` URLs); bare endings are skipped. */
+export function namesFromSitemap(xml: string): string[] {
+  const names = new Set<string>()
+  // One flat class (no nested quantifiers, so no backtracking); proxiedName() decides what is a label.ending name.
+  for (const m of xml.matchAll(/\/n\/([a-z0-9.-]{1,253})<\/loc>/gi)) {
+    const name = m[1]!.toLowerCase()
+    if (proxiedName(`${name}${PROXY_SUFFIX}`) === name) names.add(name)
+  }
+  return [...names]
+}
+
+export type SweepDeps = {
+  certs: Certs
+  /** The registry's sitemap XML. */
+  sitemap: () => Promise<string>
+  /** Whether the relay can reach the name (the same check a visit makes). */
+  reachable: (name: string) => Promise<boolean>
+}
+
+/**
+ * Make certificates before anyone visits. pit.world sends HSTS with
+ * includeSubDomains, so a browser that has seen pit.world goes straight to
+ * https://<name>.pit.world and never makes the plain-http visit that used to
+ * trigger issuance: a name with no certificate failed its TLS handshake for
+ * every such visitor (live.streaming, 2026-10-18). This walks every name the
+ * registry lists and asks for the ones the relay can serve; certs.issue keeps
+ * the weekly cap and the once-an-hour-per-host guard.
+ */
+export async function sweepCerts(deps: SweepDeps): Promise<{ names: number; missing: string[]; asked: string[] }> {
+  const names = namesFromSitemap(await deps.sitemap())
+  const missing: string[] = []
+  const asked: string[] = []
+  for (const name of names) {
+    const host = `${name}${PROXY_SUFFIX}`
+    if (deps.certs.has(host)) continue
+    if (!(await deps.reachable(name).catch(() => false))) continue
+    missing.push(host)
+    if (deps.certs.issue(host)) asked.push(host)
+  }
+  return { names: names.length, missing, asked }
+}
+
+/** The sweep against the live registry, as serve() runs it. */
+export function registrySweep(
+  access: MoshpitAccess,
+  certs: Certs,
+  registry = 'https://pit.moshcode.sh',
+): () => Promise<{ names: number; missing: string[]; asked: string[] }> {
+  return () =>
+    sweepCerts({
+      certs,
+      sitemap: async () => {
+        const res = await fetch(`${registry}/sitemap.xml`, { signal: AbortSignal.timeout(15_000) })
+        if (!res.ok) throw new Error(`registry sitemap ${res.status}`)
+        return res.text()
+      },
+      reachable: async (name) => (await targetFor(name, access)) !== null,
+    })
+}
+
 const page = (status: number, title: string, body: string, extra: Record<string, string> = {}) =>
   new Response(
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><title>${esc(title)}</title><link rel="stylesheet" href="${ASSET}"></head><body><main class="pit-proxy"><h1>${esc(title)}</h1>${body}</main></body></html>`,
