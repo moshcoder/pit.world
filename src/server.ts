@@ -23,6 +23,8 @@ import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './a
 import { SESSION_COOKIE } from './accounts.js'
 import { Promotion } from './promotion.js'
 import { mountPromotion } from './promotion-routes.js'
+import { Promoters } from './promoters.js'
+import { mountPromote } from './promoters-routes.js'
 import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
@@ -47,6 +49,8 @@ export type Deps = {
   accounts?: AccountDeps
   /** Promotion campaigns over the listings (needs listings); unset means off. */
   promotion?: Promotion
+  /** Promoter/affiliate program (needs accounts); unset means off. */
+  promoters?: Promoters
   /** Addresses whose visits are ours, excluded from promotion measurement. */
   internalIps?: string[]
 }
@@ -137,6 +141,7 @@ export function createApp(deps: Deps) {
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
   app.get('/build', (c) => c.html(buildPage()))
+  // /promote and its sub-routes are mounted by mountPromote when accounts are on.
 
   // --- the pit.world ring ----------------------------------------------------------
   useListings(deps.listings ? () => deps.listings!.ringMembers() : null)
@@ -161,7 +166,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', '/ring', '/pros', '/b', '/about', '/privacy', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/about', '/privacy', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,
@@ -280,6 +285,7 @@ export function createApp(deps: Deps) {
   )
 
   if (deps.accounts) mountAccounts(app, deps.accounts)
+  if (deps.promoters && deps.accounts) mountPromote(app, { promoters: deps.promoters, accounts: deps.accounts.accounts, site: deps.accounts.site })
   const promoHooks =
     deps.listings && deps.promotion
       ? mountPromotion(app, {
@@ -340,8 +346,9 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     admins: (env.PIT_ADMIN_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   }
   const promotion = new Promotion(listings, site)
+  const promoters = new Promoters(env.PIT_PROMOTERS_DB ?? `${dataDir}/promoters.db`)
   const internalIps = (env.PIT_INTERNAL_IPS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, promotion, internalIps, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, promotion, promoters, internalIps, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
