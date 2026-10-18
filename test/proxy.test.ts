@@ -1,5 +1,59 @@
 import { describe, expect, it } from 'bun:test'
-import { decorate, joinFooter, proxiedName, rewriteCookie, rewriteUrls, unrewriteUrl } from '../src/proxy.ts'
+import { decorate, joinFooter, namesFromSitemap, proxiedName, rewriteCookie, rewriteUrls, sweepCerts, unrewriteUrl, type Certs } from '../src/proxy.ts'
+
+describe('certificate sweep', () => {
+  const sitemap = `<?xml version="1.0"?><urlset>
+  <url><loc>https://pit.moshcode.sh/pit</loc></url>
+  <url><loc>https://pit.moshcode.sh/n/streaming</loc></url>
+  <url><loc>https://pit.moshcode.sh/n/live.streaming</loc></url>
+  <url><loc>https://pit.moshcode.sh/n/family.ancestry</loc></url>
+  <url><loc>https://pit.moshcode.sh/n/kathleen.ettinger</loc></url>
+  <url><loc>https://pit.moshcode.sh/n/www.x</loc></url>
+  <url><loc>https://pit.moshcode.sh/n/live.streaming</loc></url>
+</urlset>`
+
+  it('reads label.ending names from the registry sitemap, not bare endings or junk', () => {
+    expect(namesFromSitemap(sitemap).sort()).toEqual(['family.ancestry', 'kathleen.ettinger', 'live.streaming'])
+  })
+
+  function fakeCerts(have: string[], refuse: string[] = []) {
+    const issued: string[] = []
+    const certs: Certs = {
+      has: (h) => have.includes(h),
+      issue: (h) => {
+        if (refuse.includes(h)) return false
+        issued.push(h)
+        return true
+      },
+    }
+    return { certs, issued }
+  }
+
+  it('asks for a certificate for every reachable name that has none, before any visit', async () => {
+    const { certs, issued } = fakeCerts(['family.ancestry.pit.world'])
+    const r = await sweepCerts({
+      certs,
+      sitemap: async () => sitemap,
+      // kathleen.ettinger points at another Moshpit name, which the relay cannot reach.
+      reachable: async (n) => n !== 'kathleen.ettinger',
+    })
+    expect(issued).toEqual(['live.streaming.pit.world'])
+    expect(r).toEqual({ names: 3, missing: ['live.streaming.pit.world'], asked: ['live.streaming.pit.world'] })
+  })
+
+  it('reports a name it could not ask for (cap or recently asked) as missing', async () => {
+    const { certs } = fakeCerts([], ['live.streaming.pit.world'])
+    const r = await sweepCerts({ certs, sitemap: async () => sitemap, reachable: async () => true })
+    expect(r.missing).toContain('live.streaming.pit.world')
+    expect(r.asked).not.toContain('live.streaming.pit.world')
+  })
+
+  it('skips a name whose reachability check throws', async () => {
+    const { certs, issued } = fakeCerts([])
+    await sweepCerts({ certs, sitemap: async () => sitemap, reachable: async () => { throw new Error('dns') } })
+    expect(issued).toEqual([])
+  })
+})
 
 describe('<name>.pit.world', () => {
   it('maps hosts to Moshpit names, and leaves pit.world itself alone', () => {
