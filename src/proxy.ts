@@ -153,7 +153,8 @@ async function targetFor(name: string, access: MoshpitAccess): Promise<Target | 
 /** `label.ending` names in the registry's sitemap (`/n/<name>` URLs); bare endings are skipped. */
 export function namesFromSitemap(xml: string): string[] {
   const names = new Set<string>()
-  for (const m of xml.matchAll(/<loc>[^<]*\/n\/([a-z0-9-]+(?:\.[a-z0-9-]+)+)<\/loc>/gi)) {
+  // One flat class (no nested quantifiers, so no backtracking); proxiedName() decides what is a label.ending name.
+  for (const m of xml.matchAll(/\/n\/([a-z0-9.-]{1,253})<\/loc>/gi)) {
     const name = m[1]!.toLowerCase()
     if (proxiedName(`${name}${PROXY_SUFFIX}`) === name) names.add(name)
   }
