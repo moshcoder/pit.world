@@ -77,6 +77,7 @@ ${options.body}
     <a href="/privacy">Privacy</a>
     <a href="/connect">Connect to Moshpit</a>
     <a href="/build">Build an app</a>
+    <a href="/promote">Promoter program</a>
     <a href="/ring">Web ring</a>
     <a href="/pros">Find a pro</a>
     <a href="/b">Claim your listing</a>
