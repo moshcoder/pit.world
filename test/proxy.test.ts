@@ -85,6 +85,11 @@ describe('<name>.pit.world', () => {
     expect(html.indexOf('class="pit-proxy"')).toBeLessThan(html.indexOf('</body>'))
     expect(html).toContain('https://dns.moshcode.sh/dns-query')
     expect(html).toContain('https://pit.world/connect')
+    // The steps sit in a popover behind one button, not in the page.
+    expect(html).toContain('popovertarget="pit-proxy-howto">How do I use this?</button>')
+    expect(html).toContain('id="pit-proxy-howto" class="pit-proxy-modal" popover')
+    expect(html).toContain('>Publish here</a>')
+    expect(html).not.toContain('<script')
     expect(decorate('bare', 'a.b', 'a.b.pit.world')).toContain('class="pit-proxy"')
     expect(joinFooter('x<y.z')).not.toContain('x<y')
   })
