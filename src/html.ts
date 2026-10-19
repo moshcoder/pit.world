@@ -28,6 +28,17 @@ export const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (
 
 const fmt = (n: number) => n.toLocaleString('en-US')
 
+/**
+ * crawlproof analytics and ads, on pit.world's own pages only: the *.pit.world relay
+ * (proxy.ts) serves other people's sites and never gets either. Neither runs on search
+ * results, whose URL is the query. Ads are a cross-origin sandboxed iframe, so
+ * the ad sees pit.world's origin and nothing else. CRAWLPROOF_AD_SLOT=off turns ads off.
+ */
+const TRACKER_SITE = '81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05'
+export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '782907b4-bf27-44bf-b202-df196c4b207e'
+export const adUnit = (format: 'banner_300x250' | 'text_link' = 'banner_300x250') =>
+  AD_SLOT === 'off' ? '' : `<div class="ad-unit ad-${format}"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
+
 function ago(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000)
   if (s < 90) return 'just now'
@@ -39,7 +50,7 @@ function ago(ms: number): string {
 // A wink: nobody's watching, and we're in on it.
 const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 18.5c2.5 5.5 11.5 5.5 14 0" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M9 12.6h5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="20.5" cy="12.5" r="2.2" fill="currentColor"/></svg>`
 
-function layout(options: { title: string; description: string; path: string; body: string; bodyClass?: string; noindex?: boolean }): string {
+function layout(options: { title: string; description: string; path: string; body: string; bodyClass?: string; noindex?: boolean; track?: boolean }): string {
   const url = `${SITE}${options.path}`
   return `<!doctype html>
 <html lang="en">
@@ -67,6 +78,7 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <link rel="alternate" type="application/atom+xml" title="New on pit.world" href="/b/feed.xml">
 <link rel="stylesheet" href="${STYLE_URL}">
 <script src="${APP_URL}" defer></script>
+${options.track === false ? '' : `<script data-site="${TRACKER_SITE}" src="https://crawlproof.com/stats.js" async></script>`}
 </head>
 <body class="${options.bodyClass ?? ''}">
 ${ringBar('pit.world', false)}
@@ -89,6 +101,7 @@ ${options.body}
     <a href="${LINKS.moshcode}">moshcode</a>
   </nav>
   <p>No logs. No profile. No cookies unless you <a href="/account">sign in</a>. Part of the <a href="/#moshpit">Moshpit network</a>.</p>
+  ${options.track === false ? '' : adUnit('text_link')}
 </footer>
 </body>
 </html>`
@@ -171,6 +184,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
     <p class="default"><a href="/build">Build an app: $49, then $2 a month →</a></p>
   </header>
+  ${adUnit()}
   ${networkPanel(stats)}
   ${options.newsletter ? newsletterForm() : ''}
 </main>`,
@@ -265,7 +279,7 @@ ${tabs(query, vertical)}
   ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
   ${result ? `<p class="via">${label} from the Google index, fetched by pit.world. Thumbnails are loaded through pit.world too, so Google and YouTube never see your IP address, browser or cookies.</p>` : ''}
 </main>`
-  return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true })
+  return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
 }
 
 export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string }): string {
@@ -297,7 +311,7 @@ ${tabs(query, 'web')}
   <p class="elsewhere">Try this search on <a href="/search?q=${encodeURIComponent(`${query} !ddg`)}">DuckDuckGo</a>, <a href="/search?q=${encodeURIComponent(`${query} !b`)}">Brave</a> or <a href="/search?q=${encodeURIComponent(`${query} !g`)}">Google</a>, without a referrer.</p>
   ${result?.provider ? `<p class="via">Results from the ${result.provider.split('+').map((p) => LABELS[p as Provider] ?? p).join(' and ')} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
 </main>`
-  return layout({ title: `${query} · pit.world`, description: `Private search results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true })
+  return layout({ title: `${query} · pit.world`, description: `Private search results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
 }
 
 export function privacyPage(): string {
@@ -315,8 +329,10 @@ export function privacyPage(): string {
 <li><b>Your searches.</b> The web server does not write access logs for pit.world, and the application logs no queries.</li>
 <li><b>Your IP address.</b> It is not stored anywhere. Rate limiting uses a keyed hash of it, held in memory, under a random key that is thrown away every hour, so the counters cannot be turned back into addresses or linked across hours.</li>
 <li><b>Cookies, to search.</b> Searching sets none and reads none. The only cookie pit.world ever sets is the sign-in one, and only after you press Sign in (below).</li>
-<li><b>Trackers, analytics, ads, third-party scripts or fonts.</b> None. Every byte comes from pit.world.</li>
+<li><b>Your searches, to anyone else.</b> Search results pages load nothing from a third party.</li>
 </ul>
+<h2 id="analytics">Analytics and ads, outside search</h2>
+<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); neither one runs on search results, so neither ever sees a query. The ad frame is told only that it is on pit.world. Fonts and every other script still come from pit.world.</p>
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
@@ -350,7 +366,7 @@ export function aboutPage(): string {
     body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
 <main class="prose">
 <h1>How pit.world works</h1>
-<p>A private front end to the web's search indexes, and a search engine for the Moshpit network. One search box, no account, no tracking.</p>
+<p>A private front end to the web's search indexes, and a search engine for the Moshpit network. One search box, no account, and nothing that tracks what you search.</p>
 
 <h2 id="default">Make it your default</h2>
 <ul>
@@ -383,6 +399,7 @@ pit                          # the TUI
 # MCP, for Claude Code and other agents
 claude mcp add pit -- pit mcp</code></pre>
 <p>The API is rate limited per visitor, like the page. It answers <code>429</code> with <code>Retry-After</code> when you go over.</p>
+${adUnit()}
 </main>`,
   })
 }

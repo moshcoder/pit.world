@@ -127,6 +127,28 @@ describe('bangs and names', () => {
   })
 })
 
+describe('crawlproof analytics and ads', () => {
+  it('tracks pit.world pages and shows ads, with the CSP to match', async () => {
+    const { request } = app()
+    const res = await request('/')
+    const html = await res.text()
+    expect(html).toContain('<script data-site="81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05" src="https://crawlproof.com/stats.js" async></script>')
+    expect(html).toContain('https://crawlproof.com/api/ads/frame?slot=782907b4-bf27-44bf-b202-df196c4b207e&amp;format=banner_300x250')
+    expect(html).toContain('format=text_link')
+    const csp = res.headers.get('content-security-policy')!
+    expect(csp).toContain("script-src 'self' https://crawlproof.com;")
+    expect(csp).toContain("connect-src 'self' https://crawlproof.com;")
+    expect(csp).toContain('frame-src https://crawlproof.com;')
+    expect(csp).toContain("frame-ancestors 'none'")
+  })
+
+  it('never runs on search results, whose URL is the query', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=moshpit+network')).text()
+    expect(html).not.toContain('crawlproof.com')
+  })
+})
+
 describe('bug fixes (sweep 2026-10-17)', () => {
   it('lets the search form follow a bang to another site', async () => {
     const { request } = app()
