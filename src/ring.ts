@@ -47,6 +47,7 @@ export const RING: RingSite[] = [
   { name: 'family.ancestry', about: 'Your family tree, on your own name. Import GEDCOM, share by link.', moshpit: true },
   { name: 'pay.agent', about: 'Get paid in crypto with one link. Sign in with CoinPay; people and agents pay you by name.', moshpit: true },
   { name: 'built.indie', about: 'Launch your indie product with one URL. We fetch the rest; people upvote; you get a badge.', moshpit: true, feed: 'https://built.indie.pit.world/feed.xml' },
+  { name: 'ad.network.pit.world', about: 'Run ads, or earn from your site, in crypto. Paste a link and a budget, or one tag and a wallet.', moshpit: false },
 ]
 
 let source: (() => ListingMember[]) | null = null
