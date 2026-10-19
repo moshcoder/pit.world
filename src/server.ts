@@ -12,7 +12,7 @@ import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
-import { footerSite, footerSnippet } from './footer.js'
+import { footerSite, footerSnippet, onPit } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
 import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
@@ -168,7 +168,8 @@ export function createApp(deps: Deps) {
   app.get('/snippets/:file{footer\\.(html|tmpl)}', (c) => {
     const site = footerSite(c.req.query('site'))
     if (!site) return c.text('?site=<your host> is required', 400)
-    return c.body(footerSnippet(site), 200, { 'content-type': 'text/html; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=3600' })
+    // Not a pit.world or Moshpit site: an empty body, which every caller renders as nothing.
+    return c.body(onPit(c.req.query('site')) ? footerSnippet(site) : '', 200, { 'content-type': 'text/html; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=3600' })
   })
 
   // --- the pit.world ring ----------------------------------------------------------

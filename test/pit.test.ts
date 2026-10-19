@@ -593,12 +593,15 @@ describe('the Moshpit ring', () => {
 
   it('serves the global footer at /snippets/footer.html for any fleet site', async () => {
     const { request } = app()
-    const res = await request('/snippets/footer.html?site=ugig.net')
-    expect(res.status).toBe(200)
+    // A plain ICANN domain is not on pit.world: an empty 200, so the site renders nothing.
+    const icann = await request('/snippets/footer.html?site=hqterm.sh')
+    expect(icann.status).toBe(200)
+    expect(await icann.text()).toBe('')
+    const res = await request('/snippets/footer.html?site=pit.world')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const html = await res.text()
     expect(html.startsWith('<style>')).toBe(true)
-    expect(html).toContain('<b>ugig.net</b> is part of the pit.world network')
+    expect(html).toContain('<b>pit.world</b> is part of the pit.world network')
     expect(html).toContain('data-pit-footer')
     expect(html).not.toContain('How do I use this?')
     expect(html).not.toContain('<script')
@@ -611,7 +614,7 @@ describe('the Moshpit ring', () => {
     expect(await (await request('/snippets/footer.html?site=ad.network.pit.world')).text()).toContain('<b>ad.network.pit.world</b> is part of')
     expect((await request('/snippets/footer.html?site=%3Cx%3E')).status).toBe(400)
     expect((await request('/snippets/footer.html')).status).toBe(400)
-    expect((await request('/snippets/footer.tmpl?site=a.b')).status).toBe(200)
+    expect((await request('/snippets/footer.tmpl?site=a.b.pit.world')).status).toBe(200)
   })
 
   it('serves /api/ring with direct and gateway URLs, and redirects /ring/next|prev|random', async () => {
