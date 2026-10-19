@@ -665,14 +665,17 @@ export function startPage(): string {
 <p>Pick a name on <a href="${LINKS.claim}">${esc(LINKS.claim.replace('https://', ''))}</a>, under an ending someone already runs or one of your own (<code>shop.yourname</code>, <code>blog.yourname</code>). One server serves every name you point at it.</p>
 
 <h2>3. Build the site</h2>
-<p>Anything that speaks HTTP: a folder of HTML, a Node or Bun app, a static site generator. The open source <a href="${LINKS.stack}">Profullstack stack</a> gives you auth, payments and a database ready-made. Rather not build it yourself? <a href="/build">Have AI agents build it</a> for $49.</p>
+<p>A folder of files: hand-written HTML, or what a static site generator or a frontend build puts out. The open source <a href="${LINKS.stack}">Profullstack stack</a> gives you auth, payments and a database ready-made. Rather not build it yourself? <a href="/build">Have AI agents build it</a> for $49.</p>
 
 <h2>4. Deploy it to a Moshpit server</h2>
 <ol>
-<li><b>Pay $5 for the month.</b> On Moshpit DNS, use <a href="${pay}">pay.agent/profullstack</a>; on the clearnet, pay through <a href="${LINKS.payClearnet}">coinpayportal.com</a>. In the note, list the names you want served.</li>
-<li><b>Get your server.</b> We set it up, point your names at it in the registry and send you its SSH login.</li>
-<li><b>Push your site.</b> Copy the files or <code>git pull</code> on the server; each name is its own site. The HTTPS certificate for <code>name.pit.world</code> is issued on the first visit.</li>
-<li><b>Add more.</b> Claim another name, point it at the same server, deploy. No extra charge.</li>
+<li><b>Pay $5 for the month.</b> On Moshpit DNS, use <a href="${pay}">pay.agent/profullstack</a>; on the clearnet, pay through <a href="${LINKS.payClearnet}">coinpayportal.com</a>. In the note, put the names you want served, the username you want, and your SSH public key (<code>cat ~/.ssh/id_ed25519.pub</code>).</li>
+<li><b>We set up your account</b> on the Moshpit server and point each name at it, with its certificate. You get a reply when it is ready.</li>
+<li><b>Deploy from your machine</b>, from the folder with your site in it:
+<pre><code>moshcode deploy shop.yourname --user yourname</code></pre>
+It uploads the folder and prints where it is live: <code>https://shop.yourname/</code> on Moshpit DNS and <code>https://shop.yourname.pit.world/</code> everywhere else. Deploy again whenever you change something. Already have moshcode? <code>moshcode upgrade self</code> first.</li>
+<li><b>Need a build step?</b> Put your output in <code>public/</code> and a <code>deploy.sh</code> beside it: it runs on the server after each upload, in the queue that keeps builds three at a time.</li>
+<li><b>Add more.</b> Claim another name, ask us to add it, deploy. No extra charge. See one live: <a href="https://demo.indie.pit.world/">demo.indie</a>.</li>
 </ol>
 
 <h2>5. Join the ring</h2>
