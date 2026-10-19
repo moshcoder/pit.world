@@ -145,6 +145,9 @@ pre code { background: none; padding: 0; }
 .idea label { font-weight: 700; }
 .idea textarea { width: 100%; box-sizing: border-box; resize: vertical; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: 16px/1.5 var(--sans); padding: 12px 14px; }
 .idea textarea:focus { outline: none; border-color: var(--accent); }
+.idea input { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: 16px/1.5 var(--sans); padding: 10px 14px; }
+.idea input:focus { outline: none; border-color: var(--accent); }
+.build .note.error { border: 1px solid #e5484d; border-radius: 10px; padding: 10px 14px; }
 .idea .btn { justify-self: start; border: 0; cursor: pointer; }
 .small { color: var(--muted); font-size: 13px; margin: 0; }
 .prices { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 8px 0; }

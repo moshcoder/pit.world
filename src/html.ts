@@ -589,17 +589,18 @@ ${retry ? newsletterForm() : '<p><a class="btn" href="/">Back to search</a></p>'
   })
 }
 
-export function buildPage(): string {
+export function buildPage(o: { invoicing?: boolean; error?: string; values?: Record<string, string> } = {}): string {
+  const v = o.values ?? {}
   return layout({
-    title: 'Build an app: $49, then $2 a month to keep it online · pit.world',
-    description: 'Describe an app in plain words. AI agents build it on the open source Profullstack stack, you approve it, and it stays online for $2 a month. Paid in crypto through CoinPay.',
+    title: 'We build it. We host it. $49, then $2 a month · pit.world',
+    description: 'Describe the app in plain words. An AI product team plans it, builds it on the open source Profullstack stack and shows you it working. $49 to build, including the first 30 days, then $2 a month to keep it online. Paid in crypto through CoinPay.',
     path: '/build',
     bodyClass: 'doc',
     body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
 <main class="prose build">
 <p class="kicker">Build an app</p>
-<h1>Describe it. We build it. $2 a month keeps it online.</h1>
-<p class="lede">Tell an AI product team what you want, in your own words. It writes a plan you can argue with, builds the app on the open source <a href="${LINKS.stack}">Profullstack stack</a>, and shows you it working before anything launches. Then it stays online for $2 a month.</p>
+<h1>We build it. We host it.</h1>
+<p class="lede">Describe the app in plain words. An AI product team writes a plan you can argue with, builds it on the open source <a href="${LINKS.stack}">Profullstack stack</a>, and shows you it working before anything launches. $49 to build, including the first 30 days, then $2 a month to keep it online. Paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>.</p>
 
 <form class="idea" action="${LINKS.chovyStart}" method="get">
   <label for="idea">What should it do?</label>
@@ -607,14 +608,28 @@ export function buildPage(): string {
   <input type="hidden" name="plan" value="starter">
   <input type="hidden" name="ref" value="pitworld">
   <button class="btn" type="submit">Start building →</button>
-  <p class="small">You continue on chovy.com, where the agents work. Your idea is sent there, not kept here.</p>
+  <p class="small">You continue on chovy.com, where the agents work and you pay at checkout. Your idea is sent there, not kept here.</p>
 </form>
 
 <div class="prices">
-  <div><b>$49</b><span>once, to build it</span><p>One small app: pages, a database, sign-in and payments where it needs them, on your own subdomain.</p></div>
-  <div><b>$2</b><span>a month, to keep it online</span><p>Hosting for that one app. Stop paying and it is paused, not deleted; pay again and it is back.</p></div>
+  <div><b>$49</b><span>to build it, including the first 30 days</span><p>One small app: pages, a database, sign-in and payments where it needs them, on your own subdomain, online for its first month.</p></div>
+  <div><b>$2</b><span>a month after that, to keep it online</span><p>Hosting for that one app. Stop paying and it is paused, not deleted; pay again and it is back.</p></div>
 </div>
 <p>Both are paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>. No card, no account with a payment company.</p>
+${o.invoicing ? `
+<h2 id="invoice">Rather pay by invoice?</h2>
+<p>We send you two invoices through <a href="https://pay.agent.pit.world/">pay.agent</a>: $49 now, and $2 a month from day 31, which CoinPay sends each month by itself. A person on our team starts your build when the first one is paid.</p>
+${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
+<form class="idea" action="/build/invoice" method="post">
+  <label for="inv-idea">What should it do?</label>
+  <textarea id="inv-idea" name="idea" rows="4" maxlength="2000" required>${esc(v.idea ?? '')}</textarea>
+  <label for="inv-email">Email for the invoices</label>
+  <input id="inv-email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(v.email ?? '')}">
+  <label for="inv-name">Your name <span class="small">(optional)</span></label>
+  <input id="inv-name" name="name" maxlength="80" autocomplete="name" value="${esc(v.name ?? '')}">
+  <button class="btn" type="submit">Send me the invoice →</button>
+  <p class="small">Your idea and email go to pay.agent (for the invoices) and to the builder. Nothing is kept on pit.world.</p>
+</form>` : ''}
 
 <h2>What you get</h2>
 <ul>
@@ -629,6 +644,8 @@ export function buildPage(): string {
 <p>No. Describe what you want the way you would to a friend. The agents ask when something is unclear.</p>
 <h3>What does "small app" mean?</h3>
 <p>One focused product: a booking page, a shop for a few items, a directory, a tool for your team. Bigger builds are possible on chovy.com and priced there.</p>
+<h3>What does the $49 cover?</h3>
+<p>The build, and the first 30 days online. The $2 a month starts on day 31.</p>
 <h3>What happens if I stop paying the $2?</h3>
 <p>The app is paused, not deleted. Pay again and it comes back as it was.</p>
 <h3>Who builds it?</h3>
