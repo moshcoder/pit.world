@@ -4,6 +4,7 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
+import { startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
 import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
@@ -419,5 +420,6 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
 
 if (import.meta.main) {
   const server = serve()
+  startRingFooterRefresh()
   console.log(`pit.world listening on http://${server.hostname}:${server.port}`)
 }
