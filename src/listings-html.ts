@@ -1,7 +1,7 @@
 /** Pages for business listings (/b) and the pro directory (/pros). Every value is escaped; links carry no referrer. */
 import { docPage, esc } from './html.js'
 import type { ClaimStart, ContactStatus, Listing } from './listings.js'
-import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel } from './pros.js'
+import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel, ringEligible } from './pros.js'
 import { proxyUrl, ringSnippet, RSS_RING } from './ring.js'
 import { openProfilePath } from './listing-openprofile.js'
 
@@ -194,11 +194,11 @@ export function verifyFailedPage(domain: string, c: ClaimStart | null): string {
 
 function ringBlock(domain: string): string {
   return `<h2>You're in the pit.world ring</h2>
-<p>Every claimed listing joins the <a href="/ring">pit.world web ring</a>: visitors walk from one member's site to the next. Paste these links anywhere on your site (a footer is good) so people can walk on from yours. If your homepage has an RSS or Atom feed, the ring also carries it on <a href="${RSS_RING}" rel="noreferrer noopener">rssamplifier.com</a>. Rather not? Choose "Leave the ring" on the edit page.</p>
+<p>Every claimed *.pit.world site and Moshpit name joins the <a href="/ring">pit.world web ring</a>: visitors walk from one member's site to the next. Paste these links anywhere on your site (a footer is good) so people can walk on from yours. If your homepage has an RSS or Atom feed, the ring also carries it on <a href="${RSS_RING}" rel="noreferrer noopener">rssamplifier.com</a>. Rather not? Choose "Leave the ring" on the edit page.</p>
 <pre><code>${esc(ringSnippet(domain))}</code></pre>`
 }
 
-export function verifiedPage(domain: string, editKey: string, method: 'dns' | 'meta'): string {
+export function verifiedPage(domain: string, editKey: string, method: 'dns' | 'meta', inRing = false): string {
   return docPage({
     title: `${domain} is yours · pit.world`,
     description: `Listing claimed.`,
@@ -210,7 +210,7 @@ export function verifiedPage(domain: string, editKey: string, method: 'dns' | 'm
 <pre><code class="fp">${esc(editKey)}</code></pre>
 <p>Lost it? Claim the listing again; the new key replaces the old one. You can remove the DNS record or tag now.</p>
 <p><a class="btn" href="/b/${p(domain)}/edit">Write your listing →</a></p>
-${ringBlock(domain)}`,
+${inRing ? ringBlock(domain) : ''}`,
   })
 }
 
@@ -263,8 +263,8 @@ ${l.claimed ? '' : `<p class="notice">This listing is not claimed yet. <a href="
   <h2>Pro directory listing</h2>
   <label for="listed">In the <a href="/pros">pro directory</a></label><select id="listed" name="listed"><option value="in"${l.listed || !l.claimed ? ' selected' : ''}>Listed</option><option value="out"${l.claimed && !l.listed ? ' selected' : ''}>Take it out of the directory</option></select>
   <p class="small">Out of the directory, this page still answers at pit.world/b/${esc(l.domain)}.</p>
-  <h2>Web ring</h2>
-  <label for="ring">The pit.world ring</label><select id="ring" name="ring"><option value="in"${l.ring || !l.claimed ? ' selected' : ''}>In the ring</option><option value="out"${l.claimed && !l.ring ? ' selected' : ''}>Leave the ring</option></select>
+${ringEligible(l.domain, l.moshpitOnly) ? `  <h2>Web ring</h2>
+  <label for="ring">The pit.world ring</label><select id="ring" name="ring"><option value="in"${l.ring || !l.claimed ? ' selected' : ''}>In the ring</option><option value="out"${l.claimed && !l.ring ? ' selected' : ''}>Leave the ring</option></select>` : ''}
   <button class="btn" type="submit">Save</button>
 </form>
 ${l.claimed && l.ring ? ringBlock(l.domain) : ''}`,

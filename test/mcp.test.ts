@@ -43,7 +43,8 @@ it('lists the tools and answers search and moshpit_resolve', async () => {
     const pros: any = await client.callTool({ name: 'pros', arguments: { category: 'home-services', near: 'oakland' } })
     expect(pros.content[0].text).toContain('Acme Plumbing')
     const ring: any = await client.callTool({ name: 'ring', arguments: {} })
-    expect(ring.content[0].text).toContain('acme-plumbing.com')
+    // A claimed .com is in the pro directory, not the ring (*.pit.world sites only).
+    expect(ring.content[0].text).not.toContain('acme-plumbing.com')
     const resolved: any = await client.callTool({ name: 'moshpit_resolve', arguments: { name: 'chovy.hacker' } })
     expect(resolved.content[0].text).toContain('dev.profullstack.com')
     const searched: any = await client.callTool({ name: 'search', arguments: { query: 'hqtui', limit: 3 } })
