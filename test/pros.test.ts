@@ -258,7 +258,7 @@ describe('the pit.world ring: claimed listings join it', () => {
     const key = await h.claim('acme-plumbing.com')
     const ring = await (await h.request('/api/ring')).json()
     const names = ring.sites.map((s: any) => s.name)
-    expect(names.slice(0, 6)).toEqual(['pit.world', 'seo.rank', 'family.ancestry', 'pay.agent', 'built.indie', 'ad.network.pit.world'])
+    expect(names.slice(0, 7)).toEqual(['pit.world', 'seo.rank', 'family.ancestry', 'pay.agent', 'built.indie', 'search.peptides', 'ad.network.pit.world'])
     expect(ring.sites.at(-1)).toMatchObject({ name: 'acme-plumbing.com', listing: true, moshpit: false, feed: 'https://acme-plumbing.com/rss.xml' })
     expect((await h.request('/ring/next?from=https%3A%2F%2Fad.network.pit.world%2F&direct=1')).headers.get('location')).toBe('https://acme-plumbing.com/')
     expect((await h.request('/ring/next?from=acme-plumbing.com')).headers.get('location')).toBe('https://pit.world/')
