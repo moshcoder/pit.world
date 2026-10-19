@@ -1,6 +1,9 @@
 /**
  * The pit.world global footer: one quiet line every fleet site ends with.
  *
+ * Only pit.world, *.pit.world hosts and Moshpit names carry it (Anthony, 2026-10-19: "hqterm.sh is not a
+ * pit.world moshpit domain"). Any other ?site= gets an empty body, so a plain ICANN site renders nothing.
+ *
  * pit.world is the source of truth. A site fetches /snippets/footer.html?site=<its host> server-side
  * (cache it an hour, drop it on any error) and prints the fragment as the last thing in <body>. The
  * fragment carries its own <style> and no script, so it needs no CSP exception beyond inline styles;
@@ -15,6 +18,13 @@ const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"
 const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
 
 const PUBLISH = 'https://pit.moshcode.sh'
+
+/** Whether a ?site= value may carry the footer: pit.world itself, a *.pit.world host, or a Moshpit name. */
+export function onPit(value: string | null | undefined): boolean {
+  const host = hostOf(value)
+  const site = footerSite(value)
+  return !!site && (site.moshpit || host === 'pit.world' || host.endsWith('.pit.world'))
+}
 
 /** Which site a ?site= value names, and whether it is a Moshpit name (family.ancestry, or family.ancestry.pit.world). */
 export function footerSite(value: string | null | undefined): { name: string; moshpit: boolean } | null {
