@@ -26,6 +26,9 @@ export const LINKS = {
   /** Where /build hands an app idea: chovy.com's start flow, Starter plan, credited to pit.world. */
   chovyStart: 'https://chovy.com/start',
   stack: 'https://profullstack.com/stack',
+  /** Where /start takes the $5 a month for a Moshpit server: pay.agent on Moshpit DNS, CoinPay on the clearnet. */
+  payAgent: 'https://pay.agent/profullstack',
+  payClearnet: 'https://coinpayportal.com',
 }
 
 /** CN=Moshpit Root CA, O=Moshpit, valid to 2046-09-11. Anyone installing it should check this first. */

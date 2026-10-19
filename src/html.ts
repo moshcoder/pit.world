@@ -27,6 +27,7 @@ setRingFooterOptions(
     { label: 'Account', href: '/account' },
     { label: 'Privacy', href: '/privacy' },
     { label: 'Connect to Moshpit', href: '/connect' },
+    { label: 'Start building', href: '/start' },
     { label: 'Build an app', href: '/build' },
     { label: 'Promoter program', href: '/promote' },
     { label: 'Find a pro', href: '/pros' },
@@ -632,6 +633,50 @@ export function buildPage(): string {
 <p>The app is paused, not deleted. Pay again and it comes back as it was.</p>
 <h3>Who builds it?</h3>
 <p><a href="https://chovy.com">Chovy</a>, an AI product team by Profullstack, Inc., the people behind pit.world.</p>
+</main>`,
+  })
+}
+
+/** /start, the ring bar's "Start building here…": from nothing to your own sites on a Moshpit server. */
+export function startPage(): string {
+  const pay = `${LINKS.payAgent}?amount=5&amp;note=${encodeURIComponent('Moshpit server, 1 month')}`
+  return layout({
+    title: 'Start building here: your sites on a Moshpit server, $5 a month · pit.world',
+    description: 'Claim a Moshpit name, build your site, and deploy it to a Moshpit server: $5 a month for unlimited sites, paid in crypto through pay.agent or CoinPay.',
+    path: '/start',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose build">
+<p class="kicker">Start building here</p>
+<h1>Your name, your sites, one server. $5 a month.</h1>
+<p class="lede">A Moshpit server hosts as many sites as you put on it for $5 a month. Every one opens at its own Moshpit name, and at <code>name.pit.world</code> for everyone else, with nothing to install.</p>
+
+<div class="prices">
+  <div><b>$5</b><span>a month, per server</span><p>Unlimited sites. Stop paying and the server is paused, not deleted.</p></div>
+  <div><b>Crypto</b><span>no card</span><p>Pay through <a href="${LINKS.payAgent}">pay.agent</a> on Moshpit, or <a href="${LINKS.payClearnet}">CoinPay</a> on the clearnet.</p></div>
+</div>
+
+<h2>1. Get on Moshpit</h2>
+<p>Install moshcode, the command line for the network:</p>
+<pre><code>${esc(LINKS.install)}</code></pre>
+<p>To open Moshpit names directly in your browser, follow <a href="/connect">Connect to Moshpit</a>. You can skip it: every name also works at <code>name.pit.world</code>.</p>
+
+<h2>2. Claim a name</h2>
+<p>Pick a name on <a href="${LINKS.claim}">${esc(LINKS.claim.replace('https://', ''))}</a>, under an ending someone already runs or one of your own (<code>shop.yourname</code>, <code>blog.yourname</code>). One server serves every name you point at it.</p>
+
+<h2>3. Build the site</h2>
+<p>Anything that speaks HTTP: a folder of HTML, a Node or Bun app, a static site generator. The open source <a href="${LINKS.stack}">Profullstack stack</a> gives you auth, payments and a database ready-made. Rather not build it yourself? <a href="/build">Have AI agents build it</a> for $49.</p>
+
+<h2>4. Deploy it to a Moshpit server</h2>
+<ol>
+<li><b>Pay $5 for the month.</b> On Moshpit DNS, use <a href="${pay}">pay.agent/profullstack</a>; on the clearnet, pay through <a href="${LINKS.payClearnet}">coinpayportal.com</a>. In the note, list the names you want served.</li>
+<li><b>Get your server.</b> We set it up, point your names at it in the registry and send you its SSH login.</li>
+<li><b>Push your site.</b> Copy the files or <code>git pull</code> on the server; each name is its own site. The HTTPS certificate for <code>name.pit.world</code> is issued on the first visit.</li>
+<li><b>Add more.</b> Claim another name, point it at the same server, deploy. No extra charge.</li>
+</ol>
+
+<h2>5. Join the ring</h2>
+<p><a href="/b">Claim your site's listing</a> and it joins the <a href="/ring">pit.world ring</a>, so visitors walk to you from every other member.</p>
 </main>`,
   })
 }

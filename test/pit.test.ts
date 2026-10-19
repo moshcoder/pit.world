@@ -534,7 +534,22 @@ describe('the Moshpit ring', () => {
       expect(html).toContain('<nav class="ring-bar"')
       expect(html).toContain('<a href="https://pit.world/" aria-current="page"')
       expect(html).toContain('href="https://seo.rank.pit.world/"')
+      // Only the current site between the arrows: the rest of the ring is on /ring.
+      expect(html).toMatch(/<span class="ring-sites"><a href="https:\/\/pit.world\/" aria-current="page"[^>]*>pit.world<\/a><\/span>/)
+      expect(html).not.toContain('more</a>')
+      expect(html).toContain('<a class="ring-start" href="https://pit.world/start">Start building here…</a>')
     }
+  })
+
+  it('serves /start: claim, build, deploy to a $5 Moshpit server paid via pay.agent or CoinPay', async () => {
+    const { request } = app()
+    const res = await request('/start')
+    expect(res.status).toBe(200)
+    const html = await res.text()
+    expect(html).toContain('$5')
+    expect(html).toContain('https://pay.agent/profullstack?amount=5&amp;note=')
+    expect(html).toContain('href="https://coinpayportal.com"')
+    expect(html).toContain('curl -fsSL https://moshcoding.com/install.sh | sh')
   })
 
   it('serves the global footer at /snippets/footer.html for any fleet site', async () => {

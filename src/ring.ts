@@ -124,12 +124,13 @@ export function ringJson() {
   }
 }
 
-/** How many sites the bar names between its arrows; the rest are one click away on /ring. */
-const BAR_SITES = 5
+/** Where "Start building here…" goes: how to claim a name, build, and deploy to a Moshpit server. */
+export const START_URL = 'https://pit.world/start'
 
 /**
- * The bar itself. `from` marks the current site; `direct` says whether this
- * visitor reached Moshpit names on their own (see siteHref).
+ * The bar itself: the ring, the site you are on between its neighbours, random, and the way in for a
+ * builder. The rest of the ring is one click away on /ring. `from` marks the current site; `direct`
+ * says whether this visitor reached Moshpit names on their own (see siteHref).
  */
 export function ringBar(from: string, direct: boolean): string {
   const sites = ringSites()
@@ -138,14 +139,14 @@ export function ringBar(from: string, direct: boolean): string {
   const link = (s: RingSite, text = s.name) =>
     `<a href="${esc(siteHref(s, direct))}"${s === current ? ' aria-current="page"' : ''} title="${esc(s.about)}">${esc(text)}</a>`
   const random = `${RING_HOME}/random?from=${encodeURIComponent(current?.name ?? '')}${direct ? '&direct=1' : ''}`
-  const shown = sites.slice(0, BAR_SITES).map((s) => link(s))
-  if (sites.length > BAR_SITES) shown.push(`<a href="${RING_HOME}">+${sites.length - BAR_SITES} more</a>`)
+  const here = current ? link(current) : `<span aria-current="page">${esc(hostOf(from))}</span>`
   return `<nav class="ring-bar" aria-label="pit.world ring">
   <a class="ring-home" href="${RING_HOME}">◉ <span>pit.world </span>ring</a>
   ${link(prev, `‹ ${prev.name}`)}
-  <span class="ring-sites">${shown.join('')}</span>
+  <span class="ring-sites">${here}</span>
   ${link(next, `${next.name} ›`)}
   <a href="${esc(random)}">random</a>
+  <a class="ring-start" href="${START_URL}">Start building here…</a>
 </nav>`
 }
 
