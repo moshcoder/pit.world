@@ -7,6 +7,7 @@ import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
+import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
@@ -20,6 +21,23 @@ const asset = (name: string) => {
   const body = readFileSync(new URL(`../public/${name}`, import.meta.url))
   return `/${name}?v=${createHash('sha256').update(body).digest('hex').slice(0, 10)}`
 }
+// The footer's own links; the ring nav and copyright come from @profullstack/footer.
+setRingFooterOptions(
+  ringFooterOptions([
+    { label: 'Account', href: '/account' },
+    { label: 'Privacy', href: '/privacy' },
+    { label: 'Connect to Moshpit', href: '/connect' },
+    { label: 'Build an app', href: '/build' },
+    { label: 'Promoter program', href: '/promote' },
+    { label: 'Find a pro', href: '/pros' },
+    { label: 'Claim your listing', href: '/b' },
+    { label: 'How it works', href: '/about' },
+    { label: 'API · CLI · MCP', href: '/about#api' },
+    { label: 'Web ring', href: '/ring' },
+    { label: 'Moshpit registry', href: LINKS.registry },
+  ]),
+)
+
 const STYLE_URL = asset('style.css')
 const APP_URL = asset('app.js')
 
@@ -83,26 +101,7 @@ ${options.track === false ? '' : `<script data-site="${TRACKER_SITE}" src="https
 <body class="${options.bodyClass ?? ''}">
 ${ringBar('pit.world', false)}
 ${options.body}
-<footer class="foot">
-  <nav>
-    <a href="/account">Account</a>
-    <a href="/privacy">Privacy</a>
-    <a href="/connect">Connect to Moshpit</a>
-    <a href="/build">Build an app</a>
-    <a href="/promote">Promoter program</a>
-    <a href="/ring">Web ring</a>
-    <a href="/pros">Find a pro</a>
-    <a href="/b">Claim your listing</a>
-    <a href="/about">How it works</a>
-    <a href="/about#default">Make it your default</a>
-    <a href="/about#bangs">Bangs</a>
-    <a href="/about#api">API · CLI · MCP</a>
-    <a href="${LINKS.registry}">Moshpit registry</a>
-    <a href="${LINKS.moshcode}">moshcode</a>
-  </nav>
-  <p>No logs. No profile. No cookies unless you <a href="/account">sign in</a>. Part of the <a href="/#moshpit">Moshpit network</a>.</p>
-  ${options.track === false ? '' : adUnit('text_link')}
-</footer>
+${ringFooter()}
 </body>
 </html>`
 }

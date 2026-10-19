@@ -134,7 +134,10 @@ describe('crawlproof analytics and ads', () => {
     const html = await res.text()
     expect(html).toContain('<script data-site="81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05" src="https://crawlproof.com/stats.js" async></script>')
     expect(html).toContain('https://crawlproof.com/api/ads/frame?slot=782907b4-bf27-44bf-b202-df196c4b207e&amp;format=banner_300x250')
-    expect(html).toContain('format=text_link')
+    // No ads in or against the footer (fleet rule); the footer links the Profullstack ring.
+    const footer = html.slice(html.indexOf('<footer'))
+    expect(footer).not.toContain('crawlproof.com/api/ads')
+    expect(footer).toContain('https://rssamplifier.com/ring/profullstack/next?from=https%3A%2F%2Fpit.world%2F')
     const csp = res.headers.get('content-security-policy')!
     expect(csp).toContain("script-src 'self' https://crawlproof.com;")
     expect(csp).toContain("connect-src 'self' https://crawlproof.com;")

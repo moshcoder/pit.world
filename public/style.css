@@ -177,9 +177,16 @@ pre code { background: none; padding: 0; }
 .ring-list h3 { margin: 12px 0 4px; font-family: var(--mono); }
 .ring-list .muted { color: var(--muted); font-size: 14px; }
 
-.foot { border-top: 1px solid var(--line); padding: 22px 16px 30px; text-align: center; color: var(--muted); font-size: 14px; }
-.foot nav { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; margin-bottom: 8px; }
-.foot a { color: var(--muted); }
+/* @profullstack/footer (src/ring-footer.ts renders it with css:false: our CSP has no inline styles).
+   Two rows: the links, then the ring nav beside the copyright. */
+.pfs-footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; line-height: 1.5; }
+.pfs-footer__inner { max-width: 72rem; margin: 0 auto; padding: 22px 16px 30px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px 18px; text-align: center; }
+.pfs-footer a { color: var(--muted); text-decoration: none; }
+.pfs-footer a:hover, .pfs-footer a:focus-visible { color: var(--text); text-decoration: underline; }
+.pfs-footer__links { flex-basis: 100%; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; }
+.pfs-footer__ring { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .6rem; }
+.pfs-footer__copy { margin: 0; }
+.pfs-footer__copy a { color: inherit; }
 .ad-unit { margin: 24px auto; display: flex; justify-content: center; }
 .ad-unit iframe { border: 0; display: block; background: transparent; }
 .ad-text_link { max-width: 960px; margin: 12px auto 0; }
