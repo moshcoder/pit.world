@@ -10,6 +10,7 @@ import { aboutPage, buildPage, connectPage, errorPage, homePage, mediaPage, mobi
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
+import { footerSite, footerSnippet } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
 import { liveCerts, proxiedName, proxyRequest, registrySweep } from './proxy.js'
@@ -142,6 +143,13 @@ export function createApp(deps: Deps) {
   app.get('/connect', (c) => c.html(connectPage()))
   app.get('/build', (c) => c.html(buildPage()))
   // /promote and its sub-routes are mounted by mountPromote when accounts are on.
+
+  // The global footer every fleet site fetches server-side and prints last in <body> (footer.ts).
+  app.get('/snippets/:file{footer\\.(html|tmpl)}', (c) => {
+    const site = footerSite(c.req.query('site'))
+    if (!site) return c.text('?site=<your host> is required', 400)
+    return c.body(footerSnippet(site), 200, { 'content-type': 'text/html; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=3600' })
+  })
 
   // --- the pit.world ring ----------------------------------------------------------
   useListings(deps.listings ? () => deps.listings!.ringMembers() : null)

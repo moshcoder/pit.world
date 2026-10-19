@@ -12,8 +12,8 @@
  * Location headers, cookie Domain attributes, absolute links in HTML, and the Origin
  * and Referer the browser sends back (so the site's own CSRF checks still pass).
  *
- * Every proxied page ends with one quiet footer line; "How do I use this?" opens the
- * steps for opening the name directly.
+ * Every proxied page ends with the pit.world global footer (footer.ts) unless the site
+ * already prints it; "How do I use this?" opens the steps for opening the name directly.
  *
  * Certificates: a TLS wildcard covers one label, and these hosts have at least two
  * (family.ancestry.pit.world), so each name gets its own Let's Encrypt certificate.
@@ -27,6 +27,7 @@ import { isIP } from 'node:net'
 import { Readable } from 'node:stream'
 import { spawn } from 'node:child_process'
 import { isPublicAddress, normalizeDomain, type MoshpitAccess } from './listings.js'
+import { FOOTER_CSS, footerMarkup } from './footer.js'
 
 export const PROXY_SUFFIX = '.pit.world'
 const ASSET = '/.pit/proxy.css'
@@ -63,28 +64,9 @@ export function rewriteCookie(cookie: string): string {
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
 
-/**
- * The footer every proxied page ends with: one quiet line. The how-to lives in a popover,
- * which needs no script, so it works under whatever CSP the proxied site sends.
- */
+/** The footer every proxied page ends with: the pit.world global footer (footer.ts). */
 export function joinFooter(name: string): string {
-  const n = esc(name)
-  return `<aside class="pit-proxy" aria-label="About this address">
-<span><b>${n}</b> is a Moshpit name, shown through pit.world</span>
-<nav><button type="button" popovertarget="pit-proxy-howto">How do I use this?</button><a href="https://bbs.${n}.pit.world/">Board</a><a href="https://social.${n}.pit.world/">Social</a><a href="https://pit.moshcode.sh">Publish here</a></nav>
-<div id="pit-proxy-howto" class="pit-proxy-modal" popover role="dialog" aria-label="How to use ${n}">
-<button type="button" class="pit-proxy-x" popovertarget="pit-proxy-howto" popovertargetaction="hide" aria-label="Close">&times;</button>
-<h2>Open ${n} directly</h2>
-<p class="pit-proxy-lede">${n} is a Moshpit name, on a namespace where anyone can own an ending like <code>.${esc(name.split('.').pop())}</code>. This pit.world copy works in any browser. To open <code>https://${n}</code> itself takes about two minutes:</p>
-<ol class="pit-proxy-steps">
-<li><b>Turn on secure DNS</b> with <code>https://dns.moshcode.sh/dns-query</code><small>Chrome, Edge, Brave: Settings › Privacy and security › Use secure DNS › Custom. Firefox: Settings › Privacy &amp; Security › DNS over HTTPS.</small></li>
-<li><b>Install the certificate</b> so the padlock shows: <a href="https://pit.world/moshpit-root-ca.crt">moshpit-root-ca.crt</a></li>
-<li><b>Open</b> <code>https://${n}</code></li>
-</ol>
-<p class="pit-proxy-alt">Every device and how to undo it: <a href="https://pit.world/connect">pit.world/connect</a>. Or in a terminal: <code>curl -fsSL https://moshcode.sh/install.sh | sh</code></p>
-<nav class="pit-proxy-more"><a href="https://bbs.${n}.pit.world/">Board</a><a href="https://social.${n}.pit.world/">Social feed</a><a href="https://pit.world/account">pit.world account</a><a href="https://pit.moshcode.sh">Claim your own name</a><a href="https://pit.world/build">Have us build it</a></nav>
-</div>
-</aside>`
+  return footerMarkup({ name, moshpit: true })
 }
 
 /** Link our stylesheet and add the footer; both survive pages with no </head> or </body>. */
@@ -92,41 +74,21 @@ export function decorate(html: string, name: string, proxyHost: string): string 
   let out = rewriteUrls(html, name, proxyHost)
   const link = `<link rel="stylesheet" href="${ASSET}">`
   out = /<\/head>/i.test(out) ? out.replace(/<\/head>/i, `${link}\n</head>`) : `${link}\n${out}`
+  // A site that already prints the global footer itself keeps its own copy.
+  if (/\bdata-pit-footer\b/.test(out)) return out
   const footer = joinFooter(name)
   const at = out.search(/<\/body>(?![\s\S]*<\/body>)/i)
   return at >= 0 ? `${out.slice(0, at)}${footer}\n${out.slice(at)}` : `${out}\n${footer}`
 }
 
-export const PROXY_CSS = `.pit-proxy,.pit-proxy-modal{all:initial;box-sizing:border-box;font:13px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#4a5544}
+/** The info pages services.ts serves (a .pit-proxy panel), then the global footer. */
+export const PROXY_CSS = `.pit-proxy{all:initial;display:block;box-sizing:border-box;margin:32px auto 0;padding:18px 20px 20px;max-width:760px;border-top:2px solid #4d8a00;font:14px/1.55 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#2a3324;background:#f4f8ee}
 .pit-proxy *{box-sizing:border-box;font:inherit;color:inherit}
-.pit-proxy{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 16px;margin:24px auto 0;padding:10px 16px;max-width:960px;border-top:1px solid #d6dfcc;text-align:center}
-.pit-proxy b{font-weight:600;color:#2a3324}
-.pit-proxy nav{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 14px}
-.pit-proxy a,.pit-proxy nav button{all:unset;cursor:pointer;color:#2f6b00;text-decoration:none}
-.pit-proxy a:hover,.pit-proxy nav button:hover{text-decoration:underline}
-.pit-proxy a:focus-visible,.pit-proxy button:focus-visible{outline:2px solid #4d8a00;outline-offset:2px;border-radius:2px}
-.pit-proxy,.pit-proxy-modal{color-scheme:inherit}
-.pit-proxy{color:#4a5544;color:light-dark(#4a5544,#a9b5a0);border-top-color:light-dark(#d6dfcc,#2a3324)}
-.pit-proxy b{color:light-dark(#2a3324,#dfe8d8)}
-.pit-proxy a,.pit-proxy nav button{color:light-dark(#2f6b00,#c4ff6b)}
-.pit-proxy-modal{position:fixed;inset:0;margin:auto;width:min(480px,calc(100vw - 32px));height:fit-content;max-height:calc(100vh - 32px);overflow:auto;padding:20px 20px 14px;border:1px solid #d6dfcc;border:1px solid light-dark(#d6dfcc,#2a3324);border-radius:14px;background:#fff;background:light-dark(#fff,#12160f);color:#2a3324;color:light-dark(#2a3324,#dfe8d8);font-size:13.5px;line-height:1.5;text-align:left;box-shadow:0 24px 64px rgba(0,0,0,.35)}
-.pit-proxy-modal:not(:popover-open){display:none}
-.pit-proxy-modal::backdrop{background:rgba(6,8,5,.6);backdrop-filter:blur(2px)}
-.pit-proxy-modal h2{display:block;margin:0 28px 6px 0;font-size:16px;font-weight:700;letter-spacing:-.01em}
-.pit-proxy-modal p{display:block;margin:0 0 12px}
-.pit-proxy-modal .pit-proxy-lede{color:light-dark(#4a5544,#a9b5a0)}
-.pit-proxy-modal b{font-weight:600}
-.pit-proxy-modal a{color:#2f6b00;color:light-dark(#2f6b00,#c4ff6b);text-decoration:none;cursor:pointer}.pit-proxy-modal a:hover{text-decoration:underline}
-.pit-proxy-modal code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.88em;background:#eef3e7;background:light-dark(#eef3e7,#1e2519);padding:.1em .35em;border-radius:4px;overflow-wrap:anywhere}
-.pit-proxy-steps{display:block;margin:0 0 12px;padding:0;list-style:none;counter-reset:pit}
-.pit-proxy-steps li{display:block;position:relative;margin:0;padding:8px 0 8px 30px;border-top:1px solid light-dark(#e6ecdf,#20271b);counter-increment:pit}
-.pit-proxy-steps li::before{content:counter(pit);position:absolute;left:0;top:8px;width:20px;height:20px;border-radius:50%;background:light-dark(#2f6b00,#c4ff6b);color:light-dark(#fff,#12160f);font:700 11px/20px system-ui,sans-serif;text-align:center}
-.pit-proxy-steps code{white-space:nowrap}
-.pit-proxy-steps small{display:block;margin-top:2px;font-size:12px;color:light-dark(#6b7563,#8a9682)}
-.pit-proxy-alt{font-size:12.5px;color:light-dark(#6b7563,#8a9682)}
-.pit-proxy-modal .pit-proxy-more{display:flex;flex-wrap:wrap;justify-content:flex-start;gap:4px 14px;padding-top:10px;border-top:1px solid light-dark(#e6ecdf,#20271b);font-size:12.5px}
-.pit-proxy-x{all:unset;position:absolute;top:10px;right:12px;font-size:20px;line-height:1;padding:4px 6px;border-radius:6px;cursor:pointer;color:light-dark(#6b7563,#a9b5a0)}.pit-proxy-x:hover{background:light-dark(#eef3e7,#1e2519)}
-.pit-proxy-x:focus-visible,.pit-proxy-modal a:focus-visible{outline:2px solid #4d8a00;outline-offset:2px}`
+.pit-proxy p,.pit-proxy ol{margin:0 0 8px;display:block}.pit-proxy ol{padding-left:22px}.pit-proxy li{display:list-item;margin:2px 0}
+.pit-proxy strong{font-weight:700}.pit-proxy a{color:#2f6b00;text-decoration:underline}
+.pit-proxy code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.92em;background:#e4eed8;padding:.05em .3em;border-radius:4px;overflow-wrap:anywhere}
+@media (prefers-color-scheme:dark){.pit-proxy{color:#dfe8d8;background:#10140d;border-top-color:#a6ff1a}.pit-proxy a{color:#c4ff6b}.pit-proxy code{background:#1d2419}}
+${FOOTER_CSS}`
 
 export type Certs = {
   /** True when nginx has a certificate for this host. */
