@@ -60,7 +60,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'",
+    "default-src 'none'; script-src 'self' https://crawlproof.com; style-src 'self'; img-src 'self' data:; connect-src 'self' https://crawlproof.com; frame-src https://crawlproof.com; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'",
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',

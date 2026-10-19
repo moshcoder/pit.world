@@ -180,6 +180,12 @@ pre code { background: none; padding: 0; }
 .foot { border-top: 1px solid var(--line); padding: 22px 16px 30px; text-align: center; color: var(--muted); font-size: 14px; }
 .foot nav { display: flex; flex-wrap: wrap; gap: 8px 18px; justify-content: center; margin-bottom: 8px; }
 .foot a { color: var(--muted); }
+.ad-unit { margin: 24px auto; display: flex; justify-content: center; }
+.ad-unit iframe { border: 0; display: block; background: transparent; }
+.ad-text_link { max-width: 960px; margin: 12px auto 0; }
+.ad-text_link iframe { width: 100%; height: 28px; }
+.ad-banner_300x250 iframe { width: 300px; height: 250px; }
+@media (max-width: 340px) { .ad-banner_300x250 { margin-inline: calc(50% - 50vw); } }
 
 /* tabs: All · Images · Videos · Music · Live */
 .tabs { display: flex; gap: 4px; padding: 0 clamp(16px, 4vw, 40px); margin-left: clamp(0px, 8vw, 168px); border-bottom: 1px solid var(--line); overflow-x: auto; scrollbar-width: none; }
