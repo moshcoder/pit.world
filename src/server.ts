@@ -13,7 +13,7 @@ import { RateLimiter } from './ratelimit.js'
 import { footerSite, footerSnippet } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
-import { liveCerts, proxiedName, proxyRequest, registrySweep } from './proxy.js'
+import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
@@ -373,10 +373,11 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   setTimeout(daily, 60_000).unref()
   setInterval(daily, 24 * 3600 * 1000).unref()
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
-  const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts() }
+  // Last good target per name, on disk: the relay keeps serving names while the registry is down.
+  const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts(), targets: new Targets(`${dataDir}/relay-targets.json`) }
   // Certificates for every reachable name before its first visit (HSTS browsers never make the http one).
   if (env.PIT_CERT_SWEEP !== 'off') {
-    const sweep = registrySweep(proxyDeps.access, proxyDeps.certs)
+    const sweep = registrySweep(proxyDeps.access, proxyDeps.certs, undefined, proxyDeps.targets)
     const run = () =>
       sweep()
         .then((r) => {
