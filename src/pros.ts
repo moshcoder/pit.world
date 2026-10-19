@@ -103,3 +103,10 @@ export function normalizeOperator(value: unknown): string | null {
 export function operatorHref(operator: string): string | null {
   return /^https?:\/\//.test(operator) ? operator : null
 }
+
+/**
+ * The pit.world ring is for *.pit.world sites only: a pit.world subdomain, or a Moshpit name, which
+ * pit.world relays at <name>.pit.world. A business on its own ICANN domain can claim a listing and be
+ * in /pros, but it is not a ring member.
+ */
+export const ringEligible = (domain: string, moshpitOnly: boolean) => moshpitOnly || domain.endsWith('.pit.world')

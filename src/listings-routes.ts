@@ -153,7 +153,7 @@ export function mountListings(
     const result = await listings.verify(claimId)
     if (result.ok) {
       ringChanged()
-      return c.html(verifiedPage(domain, result.editKey, result.method), 200, { 'cache-control': 'no-store' })
+      return c.html(verifiedPage(domain, result.editKey, result.method, listings.claimedOnly(domain)?.ring ?? false), 200, { 'cache-control': 'no-store' })
     }
     return c.html(verifyFailedPage(domain, rebuild(listings, claimId)), result.reason === 'unknown-claim' ? 410 : 400)
   })

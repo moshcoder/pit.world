@@ -104,7 +104,7 @@ describe('pros: listing fields', () => {
     expect(html).toContain('$$ · moderate')
     expect(html).toContain('&lt;script&gt;x&lt;/script&gt;')
     const api = await (await h.request('/api/listing?domain=acme-plumbing.com')).json()
-    expect(api).toMatchObject({ operator: 'riotcoder@profullstack.com', company: 'Profullstack, Inc.', companyUrl: 'https://profullstack.com/', category: 'home-services', services: ['Leak repair', 'Drain cleaning', '<script>x</script>'], price: '$$', ring: true, quotes: false })
+    expect(api).toMatchObject({ operator: 'riotcoder@profullstack.com', company: 'Profullstack, Inc.', companyUrl: 'https://profullstack.com/', category: 'home-services', services: ['Leak repair', 'Drain cleaning', '<script>x</script>'], price: '$$', ring: false, quotes: false })
   })
 
   it('drops values that are not allowed rather than storing them', async () => {
@@ -253,23 +253,28 @@ describe('pros: the directory', () => {
 })
 
 describe('the pit.world ring: claimed listings join it', () => {
-  it('a claim joins the ring, after the core sites; opting out leaves it', async () => {
-    const h = harness({ pages: { 'acme-plumbing.com': '<link rel="alternate" type="application/rss+xml" href="/rss.xml">' } })
-    const key = await h.claim('acme-plumbing.com')
+  it('a *.pit.world claim joins the ring, after the core sites; opting out leaves it', async () => {
+    const h = harness({ pages: { 'acme.pit.world': '<link rel="alternate" type="application/rss+xml" href="/rss.xml">' } })
+    const key = await h.claim('acme.pit.world')
+    await h.claim('acme-plumbing.com')
     const ring = await (await h.request('/api/ring')).json()
     const names = ring.sites.map((s: any) => s.name)
-    expect(names.slice(0, 7)).toEqual(['pit.world', 'seo.rank', 'family.ancestry', 'pay.agent', 'built.indie', 'search.peptides', 'ad.network.pit.world'])
-    expect(ring.sites.at(-1)).toMatchObject({ name: 'acme-plumbing.com', listing: true, moshpit: false, feed: 'https://acme-plumbing.com/rss.xml' })
-    expect((await h.request('/ring/next?from=https%3A%2F%2Fad.network.pit.world%2F&direct=1')).headers.get('location')).toBe('https://acme-plumbing.com/')
-    expect((await h.request('/ring/next?from=acme-plumbing.com')).headers.get('location')).toBe('https://pit.world/')
-    expect((await h.request('/ring/prev', { headers: { referer: 'https://www.acme-plumbing.com/about' } })).headers.get('location')).toBe('https://ad.network.pit.world/')
-    expect((await h.request('/ring/random?from=acme-plumbing.com')).headers.get('cache-control')).toBe('no-store')
-    const page = await (await h.request('/ring')).text()
-    expect(page).toContain('href="/b/acme-plumbing.com"')
-    expect(await (await h.request('/ring/opml')).text()).toContain('xmlUrl="https://acme-plumbing.com/rss.xml"')
-    h.listings.edit('acme-plumbing.com', key, { ring: 'out' as never }, looksLikeName)
-    expect(ringSites().map((s) => s.name)).not.toContain('acme-plumbing.com')
+    // Its own .com is in /pros, never in the ring.
+    expect(names).not.toContain('acme-plumbing.com')
     expect((await h.listings.get('acme-plumbing.com'))!.ring).toBe(false)
+    expect(await (await h.request('/b/acme-plumbing.com/edit')).text()).not.toContain('Leave the ring')
+    expect(names.slice(0, 7)).toEqual(['pit.world', 'seo.rank', 'family.ancestry', 'pay.agent', 'built.indie', 'search.peptides', 'ad.network.pit.world'])
+    expect(ring.sites.at(-1)).toMatchObject({ name: 'acme.pit.world', listing: true, moshpit: false, feed: 'https://acme.pit.world/rss.xml' })
+    expect((await h.request('/ring/next?from=https%3A%2F%2Fad.network.pit.world%2F&direct=1')).headers.get('location')).toBe('https://acme.pit.world/')
+    expect((await h.request('/ring/next?from=acme.pit.world')).headers.get('location')).toBe('https://pit.world/')
+    expect((await h.request('/ring/prev', { headers: { referer: 'https://www.acme.pit.world/about' } })).headers.get('location')).toBe('https://ad.network.pit.world/')
+    expect((await h.request('/ring/random?from=acme.pit.world')).headers.get('cache-control')).toBe('no-store')
+    const page = await (await h.request('/ring')).text()
+    expect(page).toContain('href="/b/acme.pit.world"')
+    expect(await (await h.request('/ring/opml')).text()).toContain('xmlUrl="https://acme.pit.world/rss.xml"')
+    h.listings.edit('acme.pit.world', key, { ring: 'out' as never }, looksLikeName)
+    expect(ringSites().map((s) => s.name)).not.toContain('acme.pit.world')
+    expect((await h.listings.get('acme.pit.world'))!.ring).toBe(false)
   })
 
   it('a Moshpit-only name links through the pit.world proxy; the verified page hands out the links', async () => {
@@ -291,12 +296,12 @@ describe('listings: the schema grows in place', () => {
     rmSync(path, { force: true })
     const old = new Database(path, { create: true })
     old.run(`CREATE TABLE listings (domain TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', hours TEXT NOT NULL DEFAULT '', address TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL DEFAULT '', links TEXT NOT NULL DEFAULT '[]', moshpit TEXT NOT NULL DEFAULT '', edit_key_hash TEXT, claimed_at INTEGER, updated_at INTEGER, meta_at INTEGER)`)
-    old.run("INSERT INTO listings (domain, name, claimed_at, updated_at) VALUES ('seo.rank', 'seo.rank', 1, 1)")
+    old.run("INSERT INTO listings (domain, name, claimed_at, updated_at) VALUES ('shop.pit.world', 'shop.pit.world', 1, 1)")
     old.close()
     try {
       const l = new Listings(path, { txt: async () => [], homepage: async () => null })
-      expect(l.claimedOnly('seo.rank')).toMatchObject({ name: 'seo.rank', operator: '', ring: true, services: [] })
-      expect(l.ringMembers().map((m) => m.domain)).toEqual(['seo.rank'])
+      expect(l.claimedOnly('shop.pit.world')).toMatchObject({ name: 'shop.pit.world', operator: '', ring: true, services: [] })
+      expect(l.ringMembers().map((m) => m.domain)).toEqual(['shop.pit.world'])
     } finally {
       for (const suffix of ['', '-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
     }

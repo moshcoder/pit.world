@@ -13,7 +13,7 @@ import { isIP } from 'node:net'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { dnsMx, normalizeEmail, type Mailer, type MxLookup } from './newsletter.js'
-import { PRICES, categoryOf, cleanServices, normalizeOperator, normalizeWebUrl } from './pros.js'
+import { PRICES, categoryOf, cleanServices, normalizeOperator, normalizeWebUrl, ringEligible } from './pros.js'
 import { ensurePromotionSchema } from './promotion-schema.js'
 
 export type Listing = {
@@ -381,7 +381,7 @@ export class Listings {
       services: row?.services ? JSON.parse(row.services) : [],
       price: row?.price ?? '',
       quotes: Boolean(row?.claimed_at && row?.contact_email),
-      ring: Boolean(row?.claimed_at && !row?.ring_opt_out),
+      ring: Boolean(row?.claimed_at && !row?.ring_opt_out && ringEligible(domain, Boolean(row?.moshpit_only))),
       listed: Boolean((row?.claimed_at || row?.seeded_at) && !row?.directory_opt_out),
       feed: row?.feed_url ?? '',
       moshpitOnly: Boolean(row?.moshpit_only),
@@ -661,10 +661,10 @@ export class Listings {
     return Object.fromEntries(rows.map((r) => [r.category, r.n]))
   }
 
-  /** The pit.world web ring: every claimed listing that has not opted out, in the order they joined. */
+  /** The pit.world web ring: every claimed *.pit.world or Moshpit listing that has not opted out, in the order they joined. */
   ringMembers(): RingMember[] {
     const rows = this.db
-      .query('SELECT domain, name, description, moshpit_only, feed_url, ring_joined_at FROM listings WHERE claimed_at IS NOT NULL AND ring_opt_out = 0 ORDER BY ring_joined_at, domain')
+      .query(`SELECT domain, name, description, moshpit_only, feed_url, ring_joined_at FROM listings WHERE claimed_at IS NOT NULL AND ring_opt_out = 0 AND (moshpit_only = 1 OR domain LIKE '%.pit.world') ORDER BY ring_joined_at, domain`)
       .all() as any[]
     return rows.map((r) => ({ domain: r.domain, name: r.name || r.domain, description: r.description, moshpitOnly: Boolean(r.moshpit_only), feed: r.feed_url, joinedAt: r.ring_joined_at ?? 0 }))
   }
