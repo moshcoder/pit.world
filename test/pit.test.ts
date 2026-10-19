@@ -550,6 +550,7 @@ describe('the Moshpit ring', () => {
     expect(html).toContain('https://pay.agent/profullstack?amount=5&amp;note=')
     expect(html).toContain('href="https://coinpayportal.com"')
     expect(html).toContain('curl -fsSL https://moshcoding.com/install.sh | sh')
+    expect(html).toContain('moshcode deploy shop.yourname --user yourname')
   })
 
   it('serves the global footer at /snippets/footer.html for any fleet site', async () => {
