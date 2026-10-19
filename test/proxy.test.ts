@@ -82,15 +82,18 @@ describe('<name>.pit.world', () => {
   it('adds the stylesheet and the join-Moshpit footer to every page, escaped', () => {
     const html = decorate('<html><head><title>x</title></head><body><p>hi</p></body></html>', 'family.ancestry', 'family.ancestry.pit.world')
     expect(html).toContain('<link rel="stylesheet" href="/.pit/proxy.css">\n</head>')
-    expect(html.indexOf('class="pit-proxy"')).toBeLessThan(html.indexOf('</body>'))
+    expect(html.indexOf('class="pit-foot"')).toBeLessThan(html.indexOf('</body>'))
     expect(html).toContain('https://dns.moshcode.sh/dns-query')
     expect(html).toContain('https://pit.world/connect')
     // The steps sit in a popover behind one button, not in the page.
-    expect(html).toContain('popovertarget="pit-proxy-howto">How do I use this?</button>')
-    expect(html).toContain('id="pit-proxy-howto" class="pit-proxy-modal" popover')
+    expect(html).toContain('popovertarget="pit-foot-howto">How do I use this?</button>')
+    expect(html).toContain('id="pit-foot-howto" class="pit-foot-modal" popover')
     expect(html).toContain('>Publish here</a>')
     expect(html).not.toContain('<script')
-    expect(decorate('bare', 'a.b', 'a.b.pit.world')).toContain('class="pit-proxy"')
+    expect(decorate('bare', 'a.b', 'a.b.pit.world')).toContain('class="pit-foot"')
     expect(joinFooter('x<y.z')).not.toContain('x<y')
+    // A site that prints the global footer itself is left alone.
+    const own = '<html><body><nav class="pit-foot" data-pit-footer></nav></body></html>'
+    expect(decorate(own, 'a.b', 'a.b.pit.world').match(/data-pit-footer/g)?.length).toBe(1)
   })
 })
