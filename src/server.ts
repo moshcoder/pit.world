@@ -9,6 +9,7 @@ import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
 import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
+import { orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { footerSite, footerSnippet } from './footer.js'
@@ -53,6 +54,8 @@ export type Deps = {
   promotion?: Promotion
   /** Promoter/affiliate program (needs accounts); unset means off. */
   promoters?: Promoters
+  /** /build by pay.agent invoice; unset means only the chovy.com checkout. */
+  buildInvoicing?: BuildInvoicing
   /** Addresses whose visits are ours, excluded from promotion measurement. */
   internalIps?: string[]
 }
@@ -142,7 +145,22 @@ export function createApp(deps: Deps) {
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
-  app.get('/build', (c) => c.html(buildPage()))
+  app.get('/build', (c) => c.html(buildPage({ invoicing: Boolean(deps.buildInvoicing) })))
+  // /build by invoice: two pay.agent invoices ($49 now, $2 a month from day 31), then the buyer sees the first.
+  const orderLimit = new RateLimiter(3, 0.2)
+  app.post('/build/invoice', async (c) => {
+    const cfg = deps.buildInvoicing
+    if (!cfg) return c.redirect('/build')
+    const form = (await c.req.parseBody()) as Record<string, string>
+    const again = (error: string, status: 400 | 429 | 502) => c.html(buildPage({ invoicing: true, error, values: form }), status)
+    if (!orderLimit.take(c.env?.ip || 'unknown')) return again('Too many orders from you just now. Try again in a few minutes.', 429)
+    try {
+      const { build } = await orderByInvoice(cfg, readOrder(form))
+      return c.redirect(build.url)
+    } catch (e) {
+      return again(e instanceof Error ? e.message : String(e), e instanceof OrderError && !e.message.startsWith('pay.agent') ? 400 : 502)
+    }
+  })
   app.get('/start', (c) => c.html(startPage()))
   // /promote and its sub-routes are mounted by mountPromote when accounts are on.
 
@@ -358,7 +376,10 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const promotion = new Promotion(listings, site)
   const promoters = new Promoters(env.PIT_PROMOTERS_DB ?? `${dataDir}/promoters.db`)
   const internalIps = (env.PIT_INTERNAL_IPS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
-  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, promotion, promoters, internalIps, ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const buildInvoicing: BuildInvoicing | undefined = env.PIT_PAYAGENT_KEY
+    ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
+    : undefined
+  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, promotion, promoters, internalIps, ...(buildInvoicing ? { buildInvoicing } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

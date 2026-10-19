@@ -503,6 +503,44 @@ describe('/build', () => {
     expect(html).toContain('$2')
     expect(await (await request('/')).text()).toContain('href="/build"')
     expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/build')
+    expect(html).toContain('We build it. We host it.')
+    expect(html).toContain('$49 to build, including the first 30 days, then $2 a month to keep it online.')
+    expect(html).not.toContain('action="/build/invoice"')
+  })
+
+  it('bills by pay.agent invoice: $49 now, $2 monthly from day 31, the builder hears, the buyer lands on the invoice', async () => {
+    const sent: any[] = []
+    const mails: any[] = []
+    const payAgent = (async (url: string | URL, init: RequestInit = {}) => {
+      expect(String(url)).toBe('https://pa.test/api/v1/invoices')
+      expect(new Headers(init.headers).get('authorization')).toBe('Bearer pa_test')
+      const body = JSON.parse(String(init.body))
+      sent.push(body)
+      const id = `inv-${sent.length}`
+      return new Response(JSON.stringify({ id, number: `INV-00${sent.length}`, url: `https://pa.test/i/${id}` }), { status: 201 })
+    }) as typeof fetch
+    const instance = createApp({
+      keys: {},
+      buildInvoicing: { payAgentUrl: 'https://pa.test/', key: 'pa_test', fetch: payAgent, notifyTo: 'builder@example.com', mailer: async (m) => void mails.push(m) },
+    })
+    const post = (form: Record<string, string>) =>
+      instance.request('/build/invoice', { method: 'POST', body: new URLSearchParams(form).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded' } }, { ip: '203.0.113.9' })
+
+    expect(await (await instance.request('/build', {}, { ip: '203.0.113.9' })).text()).toContain('action="/build/invoice"')
+    const bad = await post({ idea: 'A booking page for my shop', email: 'nope' })
+    expect(bad.status).toBe(400)
+    expect(await bad.text()).toContain('A booking page for my shop')
+    expect(sent).toHaveLength(0)
+
+    const ok = await post({ idea: 'A booking page for my barbershop\nwith reminders', email: 'Pat@Example.com', name: 'Pat' })
+    expect(ok.status).toBe(302)
+    expect(ok.headers.get('location')).toBe('https://pa.test/i/inv-1')
+    expect(sent[0]).toMatchObject({ to_email: 'pat@example.com', to_name: 'Pat', amount_usd: 49, description: 'App build, including the first 30 days online: A booking page for my barbershop' })
+    expect(sent[0].recurrence).toBeUndefined()
+    expect(sent[1]).toMatchObject({ amount_usd: 2, recurrence: 'monthly' })
+    expect(new Date(sent[1].due_date).getTime() - new Date(sent[0].due_date).getTime()).toBe(30 * 86_400_000)
+    expect(mails[0]).toMatchObject({ to: 'builder@example.com', replyTo: 'pat@example.com' })
+    expect(mails[0].text).toContain('https://pa.test/i/inv-2')
   })
 })
 

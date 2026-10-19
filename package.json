@@ -1,6 +1,6 @@
 {
   "name": "pitworld",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "mcpName": "world.pit/pit",
   "description": "pit.world MCP server: private web search and Moshpit name lookups for AI agents (stdio, no API key). Also a web app, API, CLI and TUI.",
   "license": "MIT",
