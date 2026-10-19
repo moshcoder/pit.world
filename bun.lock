@@ -8,6 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.17.0",
         "@profullstack/bridges": "0.2.0",
         "@profullstack/hqtui": "^0.10.3",
+        "@profullstack/openprofile": "0.2.0",
         "hono": "^4.8.0",
         "zod": "^3.25.0",
       },
@@ -25,6 +26,8 @@
     "@profullstack/bridges": ["@profullstack/bridges@0.2.0", "", { "bin": { "bridges": "bin/bridges.js" } }, "sha512-ai74Zl1mQN2WZDVb93qiwfpqjCDCg/TZkxgFHFn4Rb/Cxdgg2kUst9ep0B609WoulnNjsXN3IU4IMhpzmypg7w=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.10.3", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-Z2jaDqmiaGyrMy4JXOoPGCyEkei8l3tHoCbmT3/1gAWDl72ynPvMuHcUj+U97KgsF/CFIpZzzBYnYqcOq5e46g=="],
+
+    "@profullstack/openprofile": ["@profullstack/openprofile@0.2.0", "", {}, "sha512-cdFsBbfRXurvy5KqHDNcKXxurK2s/YlfVgnILFRpVl2hq3860rExqDee8IfsFGxw5cPdqGv2fxUxtek1Xy2U5Q=="],
 
     "@types/bun": ["@types/bun@1.4.3", "", { "dependencies": { "bun-types": "1.4.3" } }, "sha512-N67Pqy8JXbAY/j0tNraS3V5mubGvc6rrrNDmDCtZLlFzccbUJPDb0tvgUBC5q4m8ybkP93Jcn1QB+RYQ6PvBhw=="],
 

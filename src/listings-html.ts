@@ -3,6 +3,7 @@ import { docPage, esc } from './html.js'
 import type { ClaimStart, ContactStatus, Listing } from './listings.js'
 import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel } from './pros.js'
 import { proxyUrl, ringSnippet, RSS_RING } from './ring.js'
+import { openProfilePath } from './listing-openprofile.js'
 
 const p = (s: string) => encodeURIComponent(s)
 const ext = (href: string, text: string) => `<a href="${esc(href)}" rel="noreferrer noopener">${esc(text)}</a>`
@@ -113,6 +114,9 @@ function websiteHref(l: Listing, via: string): string {
   return `/b/${p(l.domain)}/go${via ? `?via=${p(via)}` : ''}`
 }
 
+/** Directory listings (claimed or listed by pit.world, and not taken out) publish an OpenProfile. */
+export const hasOpenProfile = (l: Listing) => l.listed
+
 export function listingPage(l: Listing, options: { quote?: QuoteState; via?: string } = {}): string {
   const title = l.name || l.domain
   const via = options.via ?? ''
@@ -134,6 +138,7 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
     description: l.description || `${l.domain} on pit.world`,
     path: `/b/${p(l.domain)}`,
     noindex: !l.claimed && !l.seeded,
+    ...(hasOpenProfile(l) ? { head: `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n` } : {}),
     body: `<p class="kicker">Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
 <p><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a></p>
