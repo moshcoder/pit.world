@@ -171,7 +171,8 @@ pre code { background: none; padding: 0; }
 .ring-bar .ring-home, .ring-bar .ring-home:visited { color: var(--accent); font-weight: 700; }
 .ring-bar .ring-sites { display: inline-flex; gap: 12px; padding: 0 12px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
 .ring-bar [aria-current='page'], .ring-bar [aria-current='page']:visited { color: var(--text); }
-@media (max-width: 640px) { .ring-bar .ring-sites, .ring-bar .ring-home span { display: none; } }
+.ring-bar .ring-start, .ring-bar .ring-start:visited { margin-left: auto; color: var(--accent); font-weight: 700; }
+@media (max-width: 640px) { .ring-bar .ring-home span { display: none; } }
 .ring-list { list-style: none; padding: 0; }
 .ring-list li { border: 1px solid var(--line); border-radius: 10px; padding: 4px 18px; margin: 12px 0; background: var(--panel); }
 .ring-list h3 { margin: 12px 0 4px; font-family: var(--mono); }
