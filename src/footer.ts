@@ -1,8 +1,9 @@
 /**
  * The pit.world global footer: one quiet line every fleet site ends with.
  *
- * Only pit.world, *.pit.world hosts and Moshpit names carry it (Anthony, 2026-10-19: "hqterm.sh is not a
- * pit.world moshpit domain"). Any other ?site= gets an empty body, so a plain ICANN site renders nothing.
+ * Two templates (Anthony, 2026-10-19: "have one for pit.world and one for clearnet"). pit.world, *.pit.world
+ * hosts and Moshpit names get the pit.world footer; any other ?site= (a plain ICANN domain such as hqterm.sh,
+ * "not a pit.world moshpit domain") gets the clearnet footer, which never mentions pit.world or Moshpit.
  *
  * pit.world is the source of truth. A site fetches /snippets/footer.html?site=<its host> server-side
  * (cache it an hour, drop it on any error) and prints the fragment as the last thing in <body>. The
@@ -74,6 +75,28 @@ export function footerSnippet(site: { name: string; moshpit: boolean }): string 
   return `<style>${FOOTER_CSS}</style>\n${footerMarkup(site)}\n`
 }
 
+const PROFULLSTACK = 'https://profullstack.com'
+
+/** The clearnet footer markup, for ICANN sites: the Profullstack network, no pit.world or Moshpit. */
+export function clearnetMarkup(site: { name: string }): string {
+  return `<nav class="net-foot" aria-label="The Profullstack network" data-pit-footer data-net-footer>
+<span><b>${esc(site.name)}</b> is part of the Profullstack network</span>
+<span class="net-foot-links"><a href="${PROFULLSTACK}/list">All sites</a><a href="${PROFULLSTACK}/">Profullstack</a><a href="${PROFULLSTACK}/contact">Contact</a></span>
+</nav>`
+}
+
+/** The clearnet /snippets/footer.html body. */
+export function clearnetSnippet(site: { name: string }): string {
+  return `<style>${CLEARNET_CSS}</style>\n${clearnetMarkup(site)}\n`
+}
+
+/** The fragment a ?site= gets: the pit.world footer on pit.world and Moshpit sites, the clearnet one elsewhere. */
+export function snippetFor(value: string | null | undefined): string | null {
+  const site = footerSite(value)
+  if (!site) return null
+  return onPit(value) ? footerSnippet(site) : clearnetSnippet(site)
+}
+
 // all:initial keeps the host page's CSS out; it also drops the UA popover rules, hence height:fit-content
 // and the :not(:popover-open) line.
 export const FOOTER_CSS = `.pit-foot,.pit-foot-modal{all:initial;box-sizing:border-box;font:13px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#5b6555}
@@ -93,4 +116,15 @@ export const FOOTER_CSS = `.pit-foot,.pit-foot-modal{all:initial;box-sizing:bord
 .pit-foot-modal code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;background:#eef3e7;padding:.05em .3em;border-radius:4px;overflow-wrap:anywhere}
 .pit-foot-x{all:unset;position:absolute;top:8px;right:12px;font-size:22px;line-height:1;padding:4px 6px;cursor:pointer;color:#6b7563}
 @media (prefers-color-scheme:dark){.pit-foot{color:#a9b5a0}.pit-foot b{color:#dfe8d8}.pit-foot-links>a,.pit-foot-links>button{color:#c4ff6b}.pit-foot-modal{background:#151a11;color:#dfe8d8}.pit-foot-modal a{color:#c4ff6b}.pit-foot-modal code{background:#222a1c}.pit-foot-x{color:#a9b5a0}}
+`
+
+// Neutral, inherits the host page's colors: a clearnet site is not dressed in pit.world green.
+export const CLEARNET_CSS = `.net-foot{all:initial;box-sizing:border-box;display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 16px;margin:0 auto;padding:12px 16px;max-width:960px;text-align:center;font:13px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#5f6368}
+.net-foot *{box-sizing:border-box;font:inherit;color:inherit}
+.net-foot b{font-weight:600;color:#202124}
+.net-foot-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 14px}
+.net-foot-links>a{all:unset;cursor:pointer;color:#1a5fb4}
+.net-foot-links>a:hover{text-decoration:underline}
+.net-foot a:focus-visible{outline:2px solid #1a5fb4;outline-offset:2px;border-radius:2px}
+@media (prefers-color-scheme:dark){.net-foot{color:#9aa0a6}.net-foot b{color:#e8eaed}.net-foot-links>a,.net-foot a:focus-visible{color:#8ab4f8;outline-color:#8ab4f8}}
 `

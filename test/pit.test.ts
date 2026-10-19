@@ -593,10 +593,14 @@ describe('the Moshpit ring', () => {
 
   it('serves the global footer at /snippets/footer.html for any fleet site', async () => {
     const { request } = app()
-    // A plain ICANN domain is not on pit.world: an empty 200, so the site renders nothing.
+    // A plain ICANN domain is not on pit.world: it gets the clearnet footer, with no pit.world or Moshpit in it.
     const icann = await request('/snippets/footer.html?site=hqterm.sh')
     expect(icann.status).toBe(200)
-    expect(await icann.text()).toBe('')
+    const clear = await icann.text()
+    expect(clear).toContain('<b>hqterm.sh</b> is part of the Profullstack network')
+    expect(clear).toContain('data-net-footer')
+    expect(clear).not.toMatch(/pit\.world|moshpit|moshcode/i)
+    expect(clear).not.toContain('<script')
     const res = await request('/snippets/footer.html?site=pit.world')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const html = await res.text()
