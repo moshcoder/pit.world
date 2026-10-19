@@ -20,7 +20,7 @@
  * nginx picks it by SNI. A name without one is issued on its first plain-http visit,
  * capped well under Let's Encrypt's 50 a week for pit.world.
  */
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { lookup } from 'node:dns/promises'
 import { request as httpsRequest } from 'node:https'
 import { isIP } from 'node:net'
@@ -125,24 +125,75 @@ export function liveCerts(options: { dir?: string; served?: string; command?: st
 }
 
 type Target = { address: string }
-const targets = new Map<string, { at: number; value: Target | null }>()
 
-/** Where a name lives: the registry's target, every address public. Cached a minute. */
-async function targetFor(name: string, access: MoshpitAccess): Promise<Target | null> {
-  const hit = targets.get(name)
-  if (hit && Date.now() - hit.at < 60_000) return hit.value
-  let value: Target | null = null
-  const r = await access.resolve(name).catch(() => null)
-  const raw = r?.nameRegistered ? String(r.target ?? '').trim().toLowerCase() : ''
-  if (raw && isIP(raw)) value = isPublicAddress(raw) ? { address: raw } : null
-  else if (raw) {
-    const host = normalizeDomain(raw)
-    const addresses = host ? await lookup(host, { all: true }).catch(() => []) : []
-    if (addresses.length && addresses.every((a) => isPublicAddress(a.address))) value = { address: addresses[0]!.address }
+/** What the relay knows about a name: where it lives, that it does not exist, or that nobody could say just now. */
+export type Lookup = { state: 'live'; target: Target; stale?: boolean } | { state: 'missing' } | { state: 'unreachable' }
+
+/**
+ * Where names live: the registry's target, every address public, cached a minute.
+ *
+ * The registry going down (its database restarting, a deploy) is not the names going
+ * away. Every name ever resolved keeps its last good address, on disk when `file` is
+ * given so a relay restarted mid-outage still has it, and is served from there while
+ * the registry does not answer. Only the registry saying "not registered" is a 404.
+ */
+export class Targets {
+  private fresh = new Map<string, { at: number; value: Target | null }>()
+  private known: Record<string, { address: string; at: number }> = {}
+
+  constructor(
+    private readonly file?: string,
+    private readonly resolveHost: (host: string) => Promise<{ address: string }[]> = (host) => lookup(host, { all: true }),
+    private readonly now = () => Date.now(),
+  ) {
+    try {
+      if (file && existsSync(file)) this.known = JSON.parse(readFileSync(file, 'utf8')) ?? {}
+    } catch (e) {
+      console.error(`relay targets: could not read ${file}: ${(e as Error).message}`)
+    }
   }
-  targets.set(name, { at: Date.now(), value })
-  return value
+
+  async get(name: string, access: MoshpitAccess): Promise<Lookup> {
+    const hit = this.fresh.get(name)
+    if (hit && this.now() - hit.at < 60_000) return hit.value ? { state: 'live', target: hit.value } : { state: 'missing' }
+    const r = await access.resolve(name).catch(() => null)
+    // No answer is not "no such name": serve what we last knew, and ask again next time.
+    if (!r) return this.lastKnown(name)
+    const raw = r.nameRegistered ? String(r.target ?? '').trim().toLowerCase() : ''
+    let value: Target | null = null
+    if (raw && isIP(raw)) value = isPublicAddress(raw) ? { address: raw } : null
+    else if (raw) {
+      const host = normalizeDomain(raw)
+      const addresses = host ? await this.resolveHost(host).catch(() => null) : []
+      // The target's own DNS failing is an outage too, not a verdict on the name.
+      if (addresses === null) return this.lastKnown(name)
+      if (addresses.length && addresses.every((a) => isPublicAddress(a.address))) value = { address: addresses[0]!.address }
+    }
+    this.fresh.set(name, { at: this.now(), value })
+    this.remember(name, value)
+    return value ? { state: 'live', target: value } : { state: 'missing' }
+  }
+
+  private lastKnown(name: string): Lookup {
+    const k = this.known[name]
+    return k ? { state: 'live', target: { address: k.address }, stale: true } : { state: 'unreachable' }
+  }
+
+  private remember(name: string, value: Target | null): void {
+    const before = this.known[name]?.address ?? null
+    if (value) this.known[name] = { address: value.address, at: this.now() }
+    else delete this.known[name]
+    if (!this.file || (value?.address ?? null) === before) return
+    try {
+      writeFileSync(`${this.file}.tmp`, JSON.stringify(this.known))
+      renameSync(`${this.file}.tmp`, this.file)
+    } catch (e) {
+      console.error(`relay targets: could not write ${this.file}: ${(e as Error).message}`)
+    }
+  }
 }
+
+const defaultTargets = new Targets()
 
 /** `label.ending` names in the registry's sitemap (`/n/<name>` URLs); bare endings are skipped. */
 export function namesFromSitemap(xml: string): string[] {
@@ -191,6 +242,7 @@ export function registrySweep(
   access: MoshpitAccess,
   certs: Certs,
   registry = 'https://pit.moshcode.sh',
+  targets: Targets = defaultTargets,
 ): () => Promise<{ names: number; missing: string[]; asked: string[] }> {
   return () =>
     sweepCerts({
@@ -200,7 +252,7 @@ export function registrySweep(
         if (!res.ok) throw new Error(`registry sitemap ${res.status}`)
         return res.text()
       },
-      reachable: async (name) => (await targetFor(name, access)) !== null,
+      reachable: async (name) => (await targets.get(name, access)).state === 'live',
     })
 }
 
@@ -210,7 +262,7 @@ const page = (status: number, title: string, body: string, extra: Record<string,
     { status, headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'referrer-policy': 'no-referrer', ...extra } },
   )
 
-export type ProxyDeps = { access: MoshpitAccess; certs: Certs }
+export type ProxyDeps = { access: MoshpitAccess; certs: Certs; targets?: Targets }
 
 /** Answer a request for <name>.pit.world. `proto` is the scheme the visitor used, as nginx reports it. */
 export async function proxyRequest(request: Request, name: string, ip: string, proto: string, deps: ProxyDeps): Promise<Response> {
@@ -218,9 +270,12 @@ export async function proxyRequest(request: Request, name: string, ip: string, p
   const proxyHost = `${name}${PROXY_SUFFIX}`
   if (url.pathname === ASSET) return new Response(PROXY_CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' } })
 
-  const target = await targetFor(name, deps.access)
-  if (!target)
+  const found = await (deps.targets ?? defaultTargets).get(name, deps.access)
+  if (found.state === 'unreachable')
+    return page(503, 'Moshpit is catching its breath', `<p>The Moshpit registry is not answering right now, so pit.world cannot look up <code>${esc(name)}</code>. This page tries again on its own.</p>`, { refresh: '30', 'retry-after': '30' })
+  if (found.state === 'missing')
     return page(404, `${name} is not on Moshpit`, `<p>No Moshpit name <code>${esc(name)}</code> points anywhere yet. Claim it, or look around: <a href="https://pit.world/">pit.world</a>.</p>`)
+  const target = found.target
 
   // Plain http: send the visitor to https, making the certificate first if this name has none yet.
   if (proto !== 'https') {

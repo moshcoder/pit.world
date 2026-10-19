@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import { decorate, joinFooter, namesFromSitemap, proxiedName, rewriteCookie, rewriteUrls, sweepCerts, unrewriteUrl, type Certs } from '../src/proxy.ts'
+import { mkdtempSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { decorate, joinFooter, namesFromSitemap, proxiedName, proxyRequest, rewriteCookie, rewriteUrls, sweepCerts, Targets, unrewriteUrl, type Certs } from '../src/proxy.ts'
 
 describe('certificate sweep', () => {
   const sitemap = `<?xml version="1.0"?><urlset>
@@ -95,5 +98,67 @@ describe('<name>.pit.world', () => {
     // A site that prints the global footer itself is left alone.
     const own = '<html><body><nav class="pit-foot" data-pit-footer></nav></body></html>'
     expect(decorate(own, 'a.b', 'a.b.pit.world').match(/data-pit-footer/g)?.length).toBe(1)
+  })
+})
+
+describe('the registry going down is not the names going away', () => {
+  const tmp = () => join(mkdtempSync(join(tmpdir(), 'pit-targets-')), 'relay-targets.json')
+  // A registry we can switch off: resolve() answers null when it is down, like Registry.resolve on a 503 or a timeout.
+  const registry = (names: Record<string, string>) => {
+    const r = { up: true, asked: 0, access: { rootPem: '', resolve: async (name: string) => (r.asked++, r.up ? { nameRegistered: name in names, target: names[name] ?? null } : null) } }
+    return r
+  }
+
+  it('serves the last good address while the registry does not answer, and says "try again" for a name it never saw', async () => {
+    let clock = 0
+    const reg = registry({ 'built.indie': '23.95.228.174' })
+    const targets = new Targets(undefined, async () => [], () => clock)
+    expect(await targets.get('built.indie', reg.access)).toEqual({ state: 'live', target: { address: '23.95.228.174' } })
+    reg.up = false
+    clock += 61_000
+    expect(await targets.get('built.indie', reg.access)).toEqual({ state: 'live', target: { address: '23.95.228.174' }, stale: true })
+    expect(await targets.get('never.seen', reg.access)).toEqual({ state: 'unreachable' })
+    // Failures are not cached: the registry is asked again on the next request.
+    const before = reg.asked
+    await targets.get('never.seen', reg.access)
+    expect(reg.asked).toBe(before + 1)
+  })
+
+  it('only the registry saying "not registered" is a 404, and it forgets the old address', async () => {
+    let clock = 0
+    const names: Record<string, string> = { 'gone.name': '23.95.228.174' }
+    const reg = registry(names)
+    const targets = new Targets(undefined, async () => [], () => clock)
+    expect((await targets.get('gone.name', reg.access)).state).toBe('live')
+    delete names['gone.name']
+    clock += 61_000
+    expect(await targets.get('gone.name', reg.access)).toEqual({ state: 'missing' })
+    reg.up = false
+    clock += 61_000
+    expect(await targets.get('gone.name', reg.access)).toEqual({ state: 'unreachable' })
+  })
+
+  it('keeps the addresses on disk, so a relay restarted mid-outage still serves them', async () => {
+    const file = tmp()
+    const reg = registry({ 'seo.rank': 'seo.example' })
+    await new Targets(file, async () => [{ address: '23.95.228.174' }]).get('seo.rank', reg.access)
+    reg.up = false
+    expect(await new Targets(file).get('seo.rank', reg.access)).toEqual({ state: 'live', target: { address: '23.95.228.174' }, stale: true })
+    // The target host's own DNS failing is an outage too.
+    reg.up = true
+    expect(await new Targets(file, async () => { throw new Error('SERVFAIL') }).get('seo.rank', reg.access)).toMatchObject({ state: 'live', stale: true })
+  })
+
+  it('the relay answers 503 "try again" while the registry is down, not "not on Moshpit"', async () => {
+    const reg = registry({})
+    reg.up = false
+    const certs: Certs = { has: () => true, issue: () => false }
+    const res = await proxyRequest(new Request('https://never.seen.pit.world/'), 'never.seen', '1.2.3.4', 'https', { access: reg.access, certs, targets: new Targets() })
+    expect(res.status).toBe(503)
+    expect(res.headers.get('retry-after')).toBe('30')
+    expect(await res.text()).not.toContain('is not on Moshpit')
+    reg.up = true
+    const missing = await proxyRequest(new Request('https://never.seen.pit.world/'), 'never.seen', '1.2.3.4', 'https', { access: reg.access, certs, targets: new Targets() })
+    expect(missing.status).toBe(404)
   })
 })
