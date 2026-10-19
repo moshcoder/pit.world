@@ -50,7 +50,7 @@ function ago(ms: number): string {
 // A wink: nobody's watching, and we're in on it.
 const LOGO = `<svg class="mark" viewBox="0 0 32 32" aria-hidden="true"><circle cx="16" cy="16" r="15" fill="none" stroke="currentColor" stroke-width="2"/><path d="M9 18.5c2.5 5.5 11.5 5.5 14 0" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><path d="M9 12.6h5" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><circle cx="20.5" cy="12.5" r="2.2" fill="currentColor"/></svg>`
 
-function layout(options: { title: string; description: string; path: string; body: string; bodyClass?: string; noindex?: boolean; track?: boolean }): string {
+function layout(options: { title: string; description: string; path: string; body: string; bodyClass?: string; noindex?: boolean; track?: boolean; head?: string }): string {
   const url = `${SITE}${options.path}`
   return `<!doctype html>
 <html lang="en">
@@ -76,7 +76,7 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <meta name="apple-mobile-web-app-title" content="pit.world">
 <link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
 <link rel="alternate" type="application/atom+xml" title="New on pit.world" href="/b/feed.xml">
-<link rel="stylesheet" href="${STYLE_URL}">
+${options.head ?? ''}<link rel="stylesheet" href="${STYLE_URL}">
 <script src="${APP_URL}" defer></script>
 ${options.track === false ? '' : `<script data-site="${TRACKER_SITE}" src="https://crawlproof.com/stats.js" async></script>`}
 </head>
@@ -638,13 +638,14 @@ export function buildPage(): string {
 }
 
 /** A plain document page (header bar + prose column), for modules that render their own pages. */
-export function docPage(options: { title: string; description: string; path: string; body: string; noindex?: boolean; query?: string }): string {
+export function docPage(options: { title: string; description: string; path: string; body: string; noindex?: boolean; query?: string; head?: string }): string {
   return layout({
     title: options.title,
     description: options.description,
     path: options.path,
     bodyClass: 'doc',
     ...(options.noindex ? { noindex: true } : {}),
+    ...(options.head ? { head: options.head } : {}),
     body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm(options.query ?? '')}</header>
 <main class="prose">
 ${options.body}

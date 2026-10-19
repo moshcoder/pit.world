@@ -1,10 +1,11 @@
 /** Routes for business listings (/b, /pros, /api/listing, /api/pros). Mounted by createApp when a Listings store is given. */
 import type { Context, Hono } from 'hono'
 import {
-  claimPage, contactConfirmedPage, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, siteUrl, verifiedPage, verifyFailedPage, type QuoteState,
+  claimPage, contactConfirmedPage, hasOpenProfile, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, siteUrl, verifiedPage, verifyFailedPage, type QuoteState,
 } from './listings-html.js'
 import { EDIT_FIELDS, normalizeDomain, type ClaimStart, type ContactResult, type ListingEdit, type Listings } from './listings.js'
 import { CATEGORIES, categoryOf, PRICES } from './pros.js'
+import { listingOpenProfile, openProfilePath, openProfileUrl } from './listing-openprofile.js'
 import { RateLimiter } from './ratelimit.js'
 
 type Env = { Bindings: { ip?: string } }
@@ -106,7 +107,16 @@ export function mountListings(
     if (listing.domain !== c.req.param('domain')) return c.redirect(`/b/${encodeURIComponent(listing.domain)}`, 301)
     if (c.req.method === 'GET' && isPerson(c.req.header('user-agent'))) listings.view(listing.domain)
     if (c.req.method === 'GET') hooks.viewed?.(c, listing.domain)
+    if (hasOpenProfile(listing)) c.header('link', `<${openProfilePath(listing.domain)}>; rel="openprofile"; type="text/markdown"`)
     return c.html(listingPage(listing, { via: viaOf(c) }))
+  })
+
+  // The listing as an OpenProfile.md (Kind organization), for directory listings only: a bare unclaimed
+  // page is just the homepage's own title, nothing pit.world vouches for. Not a view.
+  app.get('/b/:domain/openprofile.md', (c) => {
+    const listing = listings.toPublic(c.req.param('domain'))
+    if (!listing) return c.notFound()
+    return c.body(listingOpenProfile(listing), 200, { 'content-type': 'text/markdown; charset=utf-8', 'cache-control': 'public, max-age=900', 'access-control-allow-origin': '*' })
   })
 
   // A directory listing's website link. The destination is the listing's own site, never a parameter,
@@ -253,7 +263,7 @@ export function mountListings(
     const category = c.req.query('c') ?? c.req.query('category') ?? ''
     if (category && !categoryOf(category)) return c.json({ error: 'unknown category; see GET /api/pros/categories' }, 400)
     const { total, listings: results } = listings.directory({ category, q: c.req.query('q'), near: c.req.query('near'), limit: n, offset: (page - 1) * n })
-    return c.json({ total, page, results })
+    return c.json({ total, page, results: results.map((l) => ({ ...l, openprofile: openProfileUrl(l.domain) })) })
   })
 
   app.get('/api/pros/categories', (c) => {

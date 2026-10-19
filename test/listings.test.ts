@@ -256,3 +256,40 @@ describe('listings: website link', () => {
     expect((await h.request('/b/not-listed.example/go')).status).toBe(404)
   })
 })
+
+describe('listings: OpenProfile', () => {
+  it('serves a directory listing as an OpenProfile.md, Kind organization, found from the page', async () => {
+    const { parseOpenProfile, kindOf, web, identityValue, topics } = await import('@profullstack/openprofile')
+    const h = harness()
+    h.listings.seed({ domain: 'acme-builders.com', name: 'Acme Builders, Inc.', description: 'Custom homes in Los Gatos.', phone: '(408) 555-0100', category: 'construction', area: 'Los Gatos and the South Bay', city: 'Los Gatos', region: 'CA', country: 'USA', services: ['Custom homes', 'Remodels'], license: 'CSLB #123456 (B - General Building)', licenseCheckedAt: Date.UTC(2026, 9, 17) })
+    const page = await h.request('/b/acme-builders.com')
+    expect(page.headers.get('link')).toBe('</b/acme-builders.com/openprofile.md>; rel="openprofile"; type="text/markdown"')
+    expect(await page.text()).toContain('<link rel="openprofile" type="text/markdown" href="/b/acme-builders.com/openprofile.md">')
+
+    const res = await h.request('/b/acme-builders.com/openprofile.md')
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('text/markdown')
+    const doc = parseOpenProfile(await res.text())
+    expect(doc.name).toBe('Acme Builders, Inc.')
+    expect(kindOf(doc)).toBe('organization')
+    expect(web(doc)).toBe('https://acme-builders.com/')
+    expect(doc.headline).toBe('Custom homes in Los Gatos.')
+    expect(identityValue(doc, 'Location')).toBe('Los Gatos, CA, USA')
+    expect(identityValue(doc, 'Phone')).toBe('(408) 555-0100')
+    expect(identityValue(doc, 'Status')).toContain('unclaimed')
+    expect(identityValue(doc, 'License')).toContain('2026-10-17')
+    expect(topics(doc)).toContain('construction & remodeling')
+    expect(h.listings.toPublic('acme-builders.com')!.views).toBe(0)
+
+    const api = (await (await h.request('/api/pros')).json()) as { results: Array<{ openprofile: string }> }
+    expect(api.results[0]!.openprofile).toBe('https://pit.world/b/acme-builders.com/openprofile.md')
+  })
+
+  it('has none for a bare unclaimed page', async () => {
+    const h = harness()
+    expect((await h.request('/b/acme-bakery.com/openprofile.md')).status).toBe(404)
+    const page = await h.request('/b/acme-bakery.com')
+    expect(page.headers.get('link')).toBeNull()
+    expect(await page.text()).not.toContain('rel="openprofile"')
+  })
+})
