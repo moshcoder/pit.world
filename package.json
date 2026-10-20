@@ -32,7 +32,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@profullstack/bridges": "0.2.0",
-    "@profullstack/footer": "latest",
+    "@profullstack/footer": "0.2.5",
     "@profullstack/hqtui": "^0.10.3",
     "@profullstack/openprofile": "0.2.0",
     "hono": "^4.8.0",

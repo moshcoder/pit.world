@@ -7,7 +7,7 @@
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.17.0",
         "@profullstack/bridges": "0.2.0",
-        "@profullstack/footer": "^0.2.4",
+        "@profullstack/footer": "0.2.5",
         "@profullstack/hqtui": "^0.10.3",
         "@profullstack/openprofile": "0.2.0",
         "hono": "^4.8.0",
@@ -26,7 +26,7 @@
 
     "@profullstack/bridges": ["@profullstack/bridges@0.2.0", "", { "bin": { "bridges": "bin/bridges.js" } }, "sha512-ai74Zl1mQN2WZDVb93qiwfpqjCDCg/TZkxgFHFn4Rb/Cxdgg2kUst9ep0B609WoulnNjsXN3IU4IMhpzmypg7w=="],
 
-    "@profullstack/footer": ["@profullstack/footer@0.2.4", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-2ErIzHJCDA2baP8aK6f7rCHohW4EX+wnp7D1mrVMQTUxRcyZwKzmho96hhEFJndXRBGgxT3H/78BHOeBfLxTzg=="],
+    "@profullstack/footer": ["@profullstack/footer@0.2.5", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-/CKwFP3m+qM0ZFTC9Rj11fgClutJzeYliX44Qp4qwrv2JgA/1k4tVOB3mhkPhaeckUhnfg5UyESDI1uoWr9c2w=="],
 
     "@profullstack/hqtui": ["@profullstack/hqtui@0.10.3", "", { "bin": { "hqtui": "bin/hqtui.mjs" } }, "sha512-Z2jaDqmiaGyrMy4JXOoPGCyEkei8l3tHoCbmT3/1gAWDl72ynPvMuHcUj+U97KgsF/CFIpZzzBYnYqcOq5e46g=="],
 
