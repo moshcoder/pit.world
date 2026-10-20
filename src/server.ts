@@ -218,6 +218,8 @@ export function createApp(deps: Deps) {
     if (!query) return c.redirect('/', 302)
     const bang = parseBang(query)
     if (bang) return c.redirect(bang.url, 302)
+    // A browser searches a typed w3bs://chovy.hacker because it cannot load the scheme; open it.
+    if (/^w3bs:\/\//i.test(query)) return c.redirect(`https://w3bs.org/browse?q=${encodeURIComponent(query)}`, 302)
     if (limited(c)) {
       c.header('retry-after', '30')
       return c.html(resultsPage({ query, result: null, resolution: null, error: 'Too many searches from your connection just now. Give it half a minute.' }), 429)

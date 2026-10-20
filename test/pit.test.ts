@@ -232,6 +232,14 @@ describe('the web app', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('sends a w3bs:// URI to the w3bs.org resolver instead of searching it', async () => {
+    const { request, calls } = app()
+    const res = await request('/search?q=' + encodeURIComponent('w3bs://chovy.hacker'))
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBe('https://w3bs.org/browse?q=w3bs%3A%2F%2Fchovy.hacker')
+    expect(calls).toHaveLength(0)
+  })
+
   it('rate limits per visitor, and answers 429 with Retry-After', async () => {
     const { request } = app({ limiter: new RateLimiter(2, 0) })
     expect((await request('/api/search?q=a')).status).toBe(200)
