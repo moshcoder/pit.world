@@ -232,6 +232,14 @@ describe('the web app', () => {
     expect(calls).toHaveLength(0)
   })
 
+  it('sends a w3bs:// URI to the w3bs.org resolver instead of searching it', async () => {
+    const { request, calls } = app()
+    const res = await request('/search?q=' + encodeURIComponent('w3bs://chovy.hacker'))
+    expect(res.status).toBe(302)
+    expect(res.headers.get('location')).toBe('https://w3bs.org/browse?q=w3bs%3A%2F%2Fchovy.hacker')
+    expect(calls).toHaveLength(0)
+  })
+
   it('rate limits per visitor, and answers 429 with Retry-After', async () => {
     const { request } = app({ limiter: new RateLimiter(2, 0) })
     expect((await request('/api/search?q=a')).status).toBe(200)
@@ -337,7 +345,8 @@ describe('categories: images, videos, music, live', () => {
     expect(html).toContain('src="/img?u=https%3A%2F%2Fencrypted-tbn0.gstatic.com%2Fimages%3Fq%3Dtbn%3Aabc"')
     // A thumbnail host outside the allowlist gets no <img> at all.
     expect(html).not.toContain('tracker.example/pixel')
-    expect(html).not.toMatch(/src="https:\/\//)
+    // Nothing loads from another origin, except the footer's built.indie badge, which is ours.
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/)/)
   })
 
   it('puts PairUX first, then nixamp, above live results', async () => {
