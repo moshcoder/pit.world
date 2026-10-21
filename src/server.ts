@@ -154,6 +154,8 @@ export function createApp(deps: Deps) {
     const form = (await c.req.parseBody()) as Record<string, string>
     const again = (error: string, status: 400 | 429 | 502) => c.html(buildPage({ invoicing: true, error, values: form }), status)
     if (!orderLimit.take(c.env?.ip || 'unknown')) return again('Too many orders from you just now. Try again in a few minutes.', 429)
+    // The honeypot (as on /subscribe): a bot that fills it is sent back to /build and no invoice is made.
+    if (typeof form.website === 'string' && form.website !== '') return c.redirect('/build')
     try {
       const { build } = await orderByInvoice(cfg, readOrder(form))
       return c.redirect(build.url)
