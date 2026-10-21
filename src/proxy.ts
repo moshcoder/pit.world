@@ -307,9 +307,16 @@ export async function proxyRequest(request: Request, name: string, ip: string, p
     const req = httpsRequest({ host: target.address, port: 443, method: request.method, path: `${url.pathname}${url.search}`, servername: name, ca: root, headers, timeout: 60_000 }, resolve)
     req.on('timeout', () => req.destroy(new Error('timeout')))
     req.on('error', resolve)
-    if (request.body && request.method !== 'GET' && request.method !== 'HEAD') Readable.fromWeb(request.body as any).pipe(req)
-    else req.end()
+    if (request.body && request.method !== 'GET' && request.method !== 'HEAD') {
+      // pipe() does not forward errors: a visitor who disconnects mid-upload makes the body stream emit
+      // AbortError ("The connection was closed"), and with no listener that kills the whole process.
+      const body = Readable.fromWeb(request.body as any)
+      body.on('error', (e) => req.destroy(e))
+      body.pipe(req)
+    } else req.end()
   })
+  // An upstream that drops mid-response emits 'error' on the response stream; never let that be unhandled.
+  if (!(upstream instanceof Error)) upstream.on('error', () => {})
   if (upstream instanceof Error)
     return page(502, `${name} did not answer`, `<p>pit.world reached the registry, but <code>${esc(name)}</code> itself did not answer. Try again in a moment.</p>`)
 

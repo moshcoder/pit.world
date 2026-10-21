@@ -205,6 +205,7 @@ async function moshpitHomepage(name: string, access: MoshpitAccess): Promise<str
           return resolve(null)
         }
         let html = ''
+        res.on('error', () => resolve(html || null))
         res.setEncoding('utf8')
         res.on('data', (chunk: string) => {
           html += chunk
