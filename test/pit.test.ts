@@ -133,7 +133,10 @@ describe('crawlproof analytics and ads', () => {
     const res = await request('/')
     const html = await res.text()
     expect(html).toContain('<script data-site="81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05" src="https://crawlproof.com/stats.js" async></script>')
-    expect(html).toContain('https://crawlproof.com/api/ads/frame?slot=782907b4-bf27-44bf-b202-df196c4b207e&amp;format=banner_300x250')
+    // No ad on the home page; inner pages carry one low-profile text_link line.
+    expect(html).not.toContain('crawlproof.com/api/ads')
+    const about = await (await request('/about')).text()
+    expect(about).toContain('https://crawlproof.com/api/ads/frame?slot=782907b4-bf27-44bf-b202-df196c4b207e&amp;format=text_link')
     // No ads in or against the footer (fleet rule); the footer links the Profullstack ring.
     const footer = html.slice(html.indexOf('<footer'))
     expect(footer).not.toContain('crawlproof.com/api/ads')

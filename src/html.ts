@@ -55,8 +55,9 @@ const fmt = (n: number) => n.toLocaleString('en-US')
  */
 const TRACKER_SITE = '81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05'
 export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '782907b4-bf27-44bf-b202-df196c4b207e'
-export const adUnit = (format: 'banner_300x250' | 'text_link' = 'banner_300x250') =>
-  AD_SLOT === 'off' ? '' : `<div class="ad-unit ad-${format}"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=${format}" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
+/** One low-profile text_link line; never on the home page, never against the footer. */
+export const adUnit = () =>
+  AD_SLOT === 'off' ? '' : `<div class="ad-unit"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
 
 function ago(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000)
@@ -184,7 +185,6 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
     <p class="default"><a href="/build">Build an app: $49, then $2 a month →</a></p>
   </header>
-  ${adUnit()}
   ${networkPanel(stats)}
   ${options.newsletter ? newsletterForm() : ''}
 </main>`,
@@ -367,6 +367,7 @@ export function aboutPage(): string {
 <main class="prose">
 <h1>How pit.world works</h1>
 <p>A private front end to the web's search indexes, and a search engine for the Moshpit network. One search box, no account, and nothing that tracks what you search.</p>
+${adUnit()}
 
 <h2 id="default">Make it your default</h2>
 <ul>
@@ -399,7 +400,6 @@ pit                          # the TUI
 # MCP, for Claude Code and other agents
 claude mcp add pit -- pit mcp</code></pre>
 <p>The API is rate limited per visitor, like the page. It answers <code>429</code> with <code>Retry-After</code> when you go over.</p>
-${adUnit()}
 </main>`,
   })
 }
