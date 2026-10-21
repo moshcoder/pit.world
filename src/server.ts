@@ -24,6 +24,7 @@ import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
 import { SESSION_COOKIE } from './accounts.js'
+import { createCrawlGate, type CrawlGate } from './crawl-gate.js'
 import { Promotion } from './promotion.js'
 import { mountPromotion } from './promotion-routes.js'
 import { Promoters } from './promoters.js'
@@ -58,6 +59,8 @@ export type Deps = {
   buildInvoicing?: BuildInvoicing
   /** Addresses whose visits are ours, excluded from promotion measurement. */
   internalIps?: string[]
+  /** The x402 crawl gateway (src/crawl-gate.ts); unset means training crawlers read free. */
+  crawlGate?: CrawlGate | null
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -79,6 +82,17 @@ export function createApp(deps: Deps) {
   const limiter = deps.limiter ?? new RateLimiter()
   const promoted = deps.promoted ?? new Promoted(deps.fetch)
   const app = new Hono<Env>()
+
+  // Training crawlers buy a day pass before anything else, and ahead of the header
+  // middleware below, which would strip the pass and checkout cookies it sets.
+  const crawlGate = deps.crawlGate
+  if (crawlGate) {
+    app.use('*', async (c, next) => {
+      const sold = await crawlGate.handle(c.req.raw)
+      if (sold) return sold
+      await next()
+    })
+  }
 
   app.use('*', async (c, next) => {
     await next()
@@ -384,7 +398,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const buildInvoicing: BuildInvoicing | undefined = env.PIT_PAYAGENT_KEY
     ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
     : undefined
-  const app = createApp({ keys: keysFromEnv(), newsletter, listings, accounts, promotion, promoters, internalIps, ...(buildInvoicing ? { buildInvoicing } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, internalIps, ...(buildInvoicing ? { buildInvoicing } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
