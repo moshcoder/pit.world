@@ -544,6 +544,12 @@ describe('/build', () => {
     expect(await bad.text()).toContain('A booking page for my shop')
     expect(sent).toHaveLength(0)
 
+    const bot = await post({ idea: "Hello, I'm interested in scheduling a brief consultation", email: 'x+y@example.com', name: 'Anna', website: 'https://spam.example' })
+    expect(bot.status).toBe(302)
+    expect(bot.headers.get('location')).toBe('/build')
+    expect(sent).toHaveLength(0)
+    expect(mails).toHaveLength(0)
+
     const ok = await post({ idea: 'A booking page for my barbershop\nwith reminders', email: 'Pat@Example.com', name: 'Pat' })
     expect(ok.status).toBe(302)
     expect(ok.headers.get('location')).toBe('https://pa.test/i/inv-1')
@@ -562,7 +568,9 @@ describe('the Moshpit ring', () => {
     expect(neighbors('seo.rank').next.name).toBe('family.ancestry')
     expect(neighbors('family.ancestry').next.name).toBe('pay.agent')
     expect(neighbors('pay.agent').next.name).toBe('built.indie')
-    expect(neighbors('built.indie').next.name).toBe('search.peptides')
+    expect(neighbors('built.indie').next.name).toBe('deadman.switch')
+    expect(neighbors('deadman.switch').next.name).toBe('watch.wallet')
+    expect(neighbors('watch.wallet').next.name).toBe('search.peptides')
     expect(neighbors('search.peptides').next.name).toBe('ad.network.pit.world')
     expect(neighbors('ad.network.pit.world').next.name).toBe('pit.world')
     expect(neighbors('pit.world').prev.name).toBe('ad.network.pit.world')

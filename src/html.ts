@@ -627,6 +627,7 @@ ${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
   <input id="inv-email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(v.email ?? '')}">
   <label for="inv-name">Your name <span class="small">(optional)</span></label>
   <input id="inv-name" name="name" maxlength="80" autocomplete="name" value="${esc(v.name ?? '')}">
+  <input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
   <button class="btn" type="submit">Send me the invoice →</button>
   <p class="small">Your idea and email go to pay.agent (for the invoices) and to the builder. Nothing is kept on pit.world.</p>
 </form>` : ''}
