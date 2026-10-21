@@ -126,12 +126,12 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
       ? `<section class="claim" id="claim">
   <h2>Is this your business? Claim it</h2>
   <p>pit.world listed ${esc(title)} in the <a href="/pros">pro directory</a> from public records: its own website and its state license. Nobody at ${esc(l.domain)} wrote or paid for this page. Claim it to take it over: rewrite it, add your services, hours and links, turn on quote requests, or take it out of the directory. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
-  <form action="/b/${p(l.domain)}/claim" method="post"><button class="btn" type="submit">Claim this listing</button></form>
+  <form action="/b/${p(l.domain)}/claim" method="post"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">Claim this listing</button></form>
 </section>`
       : `<section class="claim" id="claim">
   <h2>Is this your business?</h2>
   <p>Claim the listing to write it yourself: what you do, who runs it, where you work, services, hours, phone, links and your Moshpit name. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
-  <form action="/b/${p(l.domain)}/claim" method="post"><button class="btn" type="submit">Claim this listing</button></form>
+  <form action="/b/${p(l.domain)}/claim" method="post"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">Claim this listing</button></form>
 </section>`
   return docPage({
     title: `${title} · pit.world`,
@@ -171,6 +171,7 @@ Value: ${esc(c.token)}</code></pre>
 <pre><code>${esc(c.meta)}</code></pre>
 <form action="/b/${p(domain)}/verify" method="post">
   <input type="hidden" name="claim" value="${esc(c.claimId)}">
+  <input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
   <button class="btn" type="submit">Verify</button>
 </form>
 <p class="small">Come back later: <a href="/b/${p(domain)}/claim/${esc(c.claimId)}">pit.world/b/${esc(domain)}/claim/${esc(c.claimId)}</a></p>`,
@@ -186,7 +187,7 @@ export function verifyFailedPage(domain: string, c: ClaimStart | null): string {
     body: c
       ? `<h1>Not found yet</h1>
 <p>pit.world could not find <code>${esc(c.token)}</code> in a TXT record at <code>_pit-verify.${esc(domain)}</code>, or the meta tag on <code>https://${esc(domain)}/</code>. DNS changes can take a few minutes; try again shortly.</p>
-<form action="/b/${p(domain)}/verify" method="post"><input type="hidden" name="claim" value="${esc(c.claimId)}"><button class="btn" type="submit">Verify again</button></form>
+<form action="/b/${p(domain)}/verify" method="post"><input type="hidden" name="claim" value="${esc(c.claimId)}"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">Verify again</button></form>
 <p class="small"><a href="/b/${p(domain)}/claim/${esc(c.claimId)}">Back to the instructions</a></p>`
       : `<h1>That claim has expired</h1><p>Claims last 7 days. <a href="/b/${p(domain)}">Start a new one</a>.</p>`,
   })

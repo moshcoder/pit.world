@@ -66,6 +66,19 @@ describe('listings: claim and edit', () => {
     expect(html).toContain('<meta name="robots" content="noindex">')
   })
 
+  it('ignores claim and verify posts that fill the hidden honeypot', async () => {
+    const h = harness()
+    const html = await (await h.request('/b/acme-bakery.com')).text()
+    expect(html).toContain('name="website"')
+    const bot = await h.form('/b/acme-bakery.com/claim', { website: 'https://spam.example' })
+    expect(bot.status).toBe(303)
+    expect(bot.headers.get('location')).toBe('/b/acme-bakery.com')
+    const claimPath = (await h.form('/b/acme-bakery.com/claim', {})).headers.get('location')!
+    expect(await (await h.request(claimPath)).text()).toContain('name="website"')
+    const verifyBot = await h.form('/b/acme-bakery.com/verify', { claim: claimPath.split('/').pop()!, website: 'x' })
+    expect(verifyBot.status).toBe(303)
+  })
+
   it('claims by DNS TXT record, then edits with the key shown once', async () => {
     const h = harness()
     const claim = await h.form('/b/acme-bakery.com/claim', {})

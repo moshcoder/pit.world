@@ -130,8 +130,11 @@ export function mountListings(
     return c.redirect(siteUrl(listing), 302)
   })
 
-  app.post('/b/:domain/claim', (c) => {
+  app.post('/b/:domain/claim', async (c) => {
     if (limited(c)) return c.text('Too many requests. Try again shortly.', 429, { 'retry-after': '30' })
+    // Honeypot: a filled hidden website field is a bot. Back to the listing, no claim started.
+    const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
+    if (typeof form.website === 'string' && form.website !== '') return c.redirect(`/b/${encodeURIComponent(c.req.param('domain'))}`, 303)
     const start = listings.startClaim(c.req.param('domain'))
     return start ? c.redirect(`/b/${encodeURIComponent(normalizeDomain(c.req.param('domain'))!)}/claim/${start.claimId}`, 303) : c.notFound()
   })
@@ -149,6 +152,7 @@ export function mountListings(
     const domain = normalizeDomain(c.req.param('domain'))
     if (!domain) return c.notFound()
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
+    if (typeof form.website === 'string' && form.website !== '') return c.redirect(`/b/${encodeURIComponent(domain)}`, 303)
     const claimId = String(form.claim ?? '')
     const result = await listings.verify(claimId)
     if (result.ok) {
