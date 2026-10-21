@@ -162,3 +162,22 @@ describe('the registry going down is not the names going away', () => {
     expect(missing.status).toBe(404)
   })
 })
+
+describe('a visitor who disconnects mid-upload', () => {
+  it('answers 502 and does not crash the process on the aborted request body', async () => {
+    const access = { rootPem: '', resolve: async (name: string) => ({ nameRegistered: true, target: `${name}.example` }) }
+    const certs: Certs = { has: () => true, issue: () => false }
+    const targets = new Targets(undefined, async () => [{ address: '192.0.2.1' }]) // TEST-NET-1: never answers, so the body error lands first
+    // Bun errors a request body this way when the client hangs up before sending all of it.
+    const body = new ReadableStream({
+      start(c) {
+        c.enqueue(new TextEncoder().encode('partial'))
+        setTimeout(() => c.error(new DOMException('The connection was closed.', 'AbortError')), 5)
+      },
+    })
+    const req = new Request('https://up.load.pit.world/form', { method: 'POST', body, duplex: 'half' } as RequestInit)
+    const res = await proxyRequest(req, 'up.load', '1.2.3.4', 'https', { access, certs, targets })
+    expect(res.status).toBe(502)
+    await new Promise((r) => setTimeout(r, 50))
+  })
+})
