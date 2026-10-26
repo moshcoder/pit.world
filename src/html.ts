@@ -14,6 +14,8 @@ import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from
 
 export const SITE = 'https://pit.world'
 
+const listFormat = new Intl.ListFormat('en', { type: 'conjunction' })
+
 // Each asset URL carries a hash of its content, so a deploy that changes the CSS or
 // JS reaches returning visitors on their next page load instead of an hour later
 // (browser cache) or never (the service worker keeps whatever it stored first).
@@ -309,7 +311,7 @@ ${tabs(query, 'web')}
   </ol>
   ${!error && hits.length === 0 ? '<p class="notice">Nothing found. Try other words, or a bang like <code>!ddg</code>.</p>' : ''}
   <p class="elsewhere">Try this search on <a href="/search?q=${encodeURIComponent(`${query} !ddg`)}">DuckDuckGo</a>, <a href="/search?q=${encodeURIComponent(`${query} !b`)}">Brave</a> or <a href="/search?q=${encodeURIComponent(`${query} !g`)}">Google</a>, without a referrer.</p>
-  ${result?.provider ? `<p class="via">Results from the ${result.provider.split('+').map((p) => LABELS[p as Provider] ?? p).join(' and ')} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
+  ${result?.provider ? `<p class="via">Results from the ${listFormat.format(result.provider.split('+').map((p) => LABELS[p as Provider] ?? p))} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
 </main>`
   return layout({ title: `${query} · pit.world`, description: `Private search results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
 }
@@ -336,7 +338,7 @@ export function privacyPage(): string {
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
-<li>pit.world asks the Google index (through Serper) and the Bing index (through DataForSEO) for results and merges them. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
+<li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, and our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 </ol>

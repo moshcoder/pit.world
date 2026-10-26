@@ -103,11 +103,14 @@ export function createApp(deps: Deps) {
 
   const limited = (c: Context<Env>) => !limiter.take(c.env?.ip || 'unknown')
 
-  async function runSearch(query: string, limit = 10): Promise<{ result: SearchResult | null; error: string | null }> {
+  async function runSearch(query: string, limit = 20): Promise<{ result: SearchResult | null; error: string | null }> {
     try {
-      return { result: await search(query, deps.keys, { cache, limit, ...(deps.fetch ? { fetch: deps.fetch } : {}) }), error: null }
+      const result = await search(query, deps.keys, { cache, limit, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      logFailures(result.failures)
+      return { result, error: null }
     } catch (error) {
-      // No query in the message, and nothing logged.
+      // No query in the message or the log.
+      if (error instanceof SearchUnavailable) console.warn(`search: ${error.message}`)
       return { result: null, error: error instanceof SearchUnavailable ? 'Web results are unavailable for a moment. Try again shortly, or use a bang like !ddg.' : 'Something went wrong fetching results.' }
     }
   }
@@ -361,13 +364,31 @@ export function createApp(deps: Deps) {
   return app
 }
 
+const logged = new Map<string, number>()
+
+/** Which engine failed and why, at most once per engine and reason every ten minutes. Never the query. */
+function logFailures(failures: SearchResult['failures']): void {
+  const now = Date.now()
+  for (const { provider, error } of failures) {
+    const key = `${provider} ${error}`
+    if (now - (logged.get(key) ?? 0) < 10 * 60_000) continue
+    logged.set(key, now)
+    console.warn(`search: ${key}`)
+  }
+}
+
 /** Provider keys from the environment (the deploy writes them from the vault). */
 export function keysFromEnv(env: Record<string, string | undefined> = process.env): Keys {
   return {
     serper: env.SERPER_API_KEY,
     bing: env.DATAFORSEO_LOGIN && env.DATAFORSEO_PASSWORD ? `${env.DATAFORSEO_LOGIN}:${env.DATAFORSEO_PASSWORD}` : undefined,
+    brave: env.BRAVE_API_KEY,
+    tavily: env.TAVILY_API_KEY,
+    ceramic: env.CERAMIC_API_KEY,
     linkup: env.LINKUP_API_KEY,
     exa: env.EXA_API_KEY,
+    // Not a key: the base URL of a SearXNG instance on loopback, e.g. http://127.0.0.1:8888.
+    searxng: env.SEARXNG_URL,
     perplexity: env.PERPLEXITY_API_KEY,
   }
 }
