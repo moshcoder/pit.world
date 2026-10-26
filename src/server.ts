@@ -7,8 +7,8 @@
 import { startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
-import { adminAuthorized, Newsletter, resendMailer } from './newsletter.js'
+import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
@@ -129,35 +129,72 @@ export function createApp(deps: Deps) {
   app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false })))
 
   // --- newsletter (double opt-in) ------------------------------------------------
+  // The one signup endpoint for every Profullstack property: the @profullstack/footer form posts here with a
+  // hidden `site` (its hostname), plain HTML, no script. The answer is a page that says to check the inbox
+  // and links back to that site.
+  const origin = (site: unknown) => {
+    const source = normalizeSource(site)
+    return { source, pit: brandFor(source).pit }
+  }
+  app.get('/subscribe', (c) => {
+    if (!newsletter?.enabled) return c.notFound()
+    return c.html(newsletterPage('form', origin(c.req.query('site'))))
+  })
   app.post('/subscribe', async (c) => {
     if (!newsletter?.enabled) return c.notFound()
-    if (limited(c)) return c.html(newsletterPage('limited'), 429, { 'retry-after': '30' })
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
+    const from = origin(form.site ?? c.req.query('site'))
+    if (limited(c)) return c.html(newsletterPage('limited', from), 429, { 'retry-after': '30' })
     // The honeypot: a field people never see. A bot that fills it gets the normal answer and nothing else.
-    if (typeof form.website === 'string' && form.website !== '') return c.html(newsletterPage('check'))
-    const result = await newsletter.signup(form.email)
+    if (typeof form.website === 'string' && form.website !== '') return c.html(newsletterPage('check', from))
+    const result = await newsletter.signup(form.email, from.source)
     const page = result === 'sent' || result === 'already' ? 'check' : result
-    return c.html(newsletterPage(page), page === 'check' ? 200 : page === 'failed' ? 503 : 400)
+    return c.html(newsletterPage(page, from), page === 'check' ? 200 : page === 'failed' ? 503 : 400)
   })
+  // JSON for scripts and other sites' pages (CORS: any origin may post an address; nothing is read back).
+  const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type', 'access-control-max-age': '86400' }
+  app.options('/api/subscribe', (c) => c.body(null, 204, cors))
   app.post('/api/subscribe', async (c) => {
+    for (const [k, v] of Object.entries(cors)) c.header(k, v)
     if (!newsletter?.enabled) return c.json({ error: 'The newsletter is not open on this instance.' }, 404)
     if (limited(c)) {
       c.header('retry-after', '30')
       return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
     }
-    const body = (await c.req.json().catch(() => ({}))) as { email?: unknown }
-    const result = await newsletter.signup(body.email)
+    const body = (await c.req.json().catch(() => ({}))) as { email?: unknown; site?: unknown }
+    const result = await newsletter.signup(body.email, body.site)
     if (result === 'sent' || result === 'already') return c.json({ ok: true, status: 'check-inbox' })
     const status = { invalid: 400, undeliverable: 400, failed: 503 }[result]
     return c.json({ ok: false, status: result }, status as 400 | 503)
   })
   app.get('/confirm', (c) => {
     if (!newsletter) return c.notFound()
-    return newsletter.confirm(c.req.query('t')) ? c.html(newsletterPage('confirmed')) : c.html(newsletterPage('expired'), 410)
+    const done = newsletter.confirm(c.req.query('t'))
+    return done ? c.html(newsletterPage('confirmed', origin(done.source))) : c.html(newsletterPage('expired'), 410)
+  })
+  // Subscribers by property, for an admin: bearer token, or a signed-in pit.world admin account in a browser.
+  const subscriberAdmin = (c: Context<Env>) => {
+    if (adminAuthorized(c.req.header('authorization'), deps.adminToken)) return true
+    const a = deps.accounts
+    const me = a ? a.accounts.sessionAccount(parseCookies(c.req.header('cookie'))[SESSION_COOKIE]) : null
+    return Boolean(me && (a!.admins ?? []).includes(me.sub))
+  }
+  app.get('/api/admin/subscribers.json', (c) => {
+    if (!newsletter || !subscriberAdmin(c)) return c.json({ error: 'unauthorized' }, 401)
+    const source = normalizeSource(c.req.query('site')) ?? undefined
+    c.header('cache-control', 'no-store')
+    return c.json({ total: newsletter.count(), pending: newsletter.pendingCount(), properties: newsletter.byProperty(), ...(c.req.query('list') !== undefined || source ? { subscribers: newsletter.subscribers(source) } : {}) })
+  })
+  app.get('/admin/subscribers', (c) => {
+    if (!newsletter) return c.notFound()
+    if (!subscriberAdmin(c)) return c.html('<!doctype html><title>Sign in</title><p>Sign in as a pit.world admin: <a href="/signin?next=/admin/subscribers">sign in</a>.</p>', 401)
+    const source = normalizeSource(c.req.query('site')) ?? undefined
+    c.header('cache-control', 'no-store')
+    return c.html(subscribersAdminPage(newsletter.byProperty(), newsletter.subscribers(source), { total: newsletter.count(), pending: newsletter.pendingCount(), ...(source ? { site: source } : {}) }))
   })
   app.get('/api/admin/subscribers.csv', (c) => {
-    if (!newsletter || !adminAuthorized(c.req.header('authorization'), deps.adminToken)) return c.json({ error: 'unauthorized' }, 401)
-    return c.body(newsletter.csv(), 200, { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store' })
+    if (!newsletter || !subscriberAdmin(c)) return c.json({ error: 'unauthorized' }, 401)
+    return c.body(newsletter.csv(normalizeSource(c.req.query('site')) ?? undefined), 200, { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store' })
   })
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))

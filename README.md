@@ -131,6 +131,12 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 | MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`, `listing`, `pros`, `ring`, `edit_listing`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
 | PWA | installable from any browser (`/manifest.webmanifest`, share target into `/search`); the worker in `public/sw.js` caches the static shell and an offline page, never a search |
 
+### Newsletter (one list for every Profullstack property)
+
+`GET /subscribe` shows the form; `POST /subscribe` (form: `email`, optional `site`) and `POST /api/subscribe` (JSON, CORS `*`) start a double opt-in. The @profullstack/footer subscribe form posts here with `site=<its hostname>`, so every signup keeps the property it came from; pit.world, `*.pit.world` and Moshpit names get pit.world copy, every other site gets Profullstack copy and a link back. An address already on the list still gets an email (its click records the new property).
+
+Subscribers by property: `/admin/subscribers` (signed-in admin, `PIT_ADMIN_SUBS`) or with `Authorization: Bearer $PIT_ADMIN_TOKEN`: `/api/admin/subscribers.json[?site=host&list]`, `/api/admin/subscribers.csv[?site=host]` (columns `email,confirmed_at,source,sources`). On the box: `bun src/admin.ts subscribers [SITE]`.
+
 The CLI, TUI and MCP talk to `https://pit.world` (or `PIT_URL`), so they need no keys.
 
 ## Run your own

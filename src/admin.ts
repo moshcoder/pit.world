@@ -4,14 +4,29 @@
  *   bun src/admin.ts seed FILE.json    list businesses pit.world found in public records (an array of SeedInput)
  *   bun src/admin.ts unseed DOMAIN     take one of those back out
  *   bun src/admin.ts views             every directory listing with its view count, as JSON
+ *   bun src/admin.ts subscribers [SITE]  newsletter signups per property (confirmed, pending), or the confirmed
+ *                                        addresses from one property. Reads PIT_NEWSLETTER_DB, else $PIT_DATA_DIR/newsletter.db.
  *
  * The database path is the server's: PIT_LISTINGS_DB, else $PIT_DATA_DIR/listings.db, else ~/.local/share/pit-world.
  */
 import { readFileSync } from 'node:fs'
 import { Listings, type SeedInput } from './listings.js'
+import { Newsletter, normalizeSource } from './newsletter.js'
 
-export async function admin(args: string[], listings: Listings, out: Pick<Console, 'log' | 'error'> = console): Promise<number> {
+export async function admin(args: string[], listings: Listings, out: Pick<Console, 'log' | 'error'> = console, newsletter?: () => Newsletter): Promise<number> {
   const [command, arg] = args
+  if (command === 'subscribers' && newsletter) {
+    const n = newsletter()
+    if (arg) {
+      const site = normalizeSource(arg)
+      for (const s of site ? n.subscribers(site) : []) out.log(`${s.email}  ${new Date(s.confirmed_at).toISOString().slice(0, 10)}  ${s.sources.join(',')}`)
+      return site ? 0 : 1
+    }
+    out.log(`${'property'.padEnd(40)} confirmed  pending`)
+    for (const p of n.byProperty()) out.log(`${p.source.padEnd(40)} ${String(p.confirmed).padStart(9)}  ${String(p.pending).padStart(7)}`)
+    out.log(`${'total'.padEnd(40)} ${String(n.count()).padStart(9)}  ${String(n.pendingCount()).padStart(7)}`)
+    return 0
+  }
   if (command === 'seed' && arg) {
     const rows = JSON.parse(readFileSync(arg, 'utf8')) as SeedInput[]
     let failed = 0
@@ -35,12 +50,14 @@ export async function admin(args: string[], listings: Listings, out: Pick<Consol
     out.log(JSON.stringify(all.filter(Boolean).map((l) => ({ domain: l!.domain, name: l!.name, claimed: l!.claimed, views: l!.views, url: `https://pit.world/b/${l!.domain}` })), null, 2))
     return 0
   }
-  out.error('usage: bun src/admin.ts seed FILE.json | unseed DOMAIN | views')
+  out.error('usage: bun src/admin.ts seed FILE.json | unseed DOMAIN | views | subscribers [SITE]')
   return 2
 }
 
 if (import.meta.main) {
   const env = process.env
   const dataDir = env.PIT_DATA_DIR ?? `${env.HOME ?? '.'}/.local/share/pit-world`
-  process.exit(await admin(process.argv.slice(2), new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`)))
+  const args = process.argv.slice(2)
+  const newsletter = () => new Newsletter(env.PIT_NEWSLETTER_DB ?? `${dataDir}/newsletter.db`, null)
+  process.exit(await admin(args, args[0] === 'subscribers' ? (null as unknown as Listings) : new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`), console, newsletter))
 }
