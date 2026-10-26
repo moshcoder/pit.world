@@ -152,13 +152,23 @@ ${esc(LINKS.enable)}</code></pre><p>Or point your browser's secure DNS at <code>
 </section>`
 }
 
-export function newsletterForm(): string {
-  return `<section id="newsletter" class="newsletter">
-  <p class="kicker">The pit.world newsletter</p>
+/** Where a signup came from, and where to send the reader back to. Both built from a normalized hostname. */
+export type NewsletterOrigin = { source?: string | null; pit?: boolean }
+
+export function newsletterForm(origin: NewsletterOrigin = {}): string {
+  const pit = origin.pit ?? true
+  const site = origin.source && origin.source !== 'pit.world' ? `\n    <input type="hidden" name="site" value="${esc(origin.source)}">` : ''
+  const intro = pit
+    ? `<p class="kicker">The pit.world newsletter</p>
   <h2>What's new on pit.world and the Moshpit network.</h2>
-  <p class="lede">About once a month. You confirm by email before anything is sent, and every issue has a one-click unsubscribe. Your address is the only thing pit.world will ever keep, and only if you click the link.</p>
+  <p class="lede">About once a month. You confirm by email before anything is sent, and every issue has a one-click unsubscribe. Your address is the only thing pit.world will ever keep, and only if you click the link.</p>`
+    : `<p class="kicker">The Profullstack newsletter</p>
+  <h2>What's new across the Profullstack sites.</h2>
+  <p class="lede">About once a month. You confirm by email before anything is sent, and every issue has a one-click unsubscribe. We keep your address and the site you signed up on, nothing else.</p>`
+  return `<section id="newsletter" class="newsletter">
+  ${intro}
   <form class="subscribe" action="/subscribe" method="post">
-    <input name="email" type="email" placeholder="you@example.com" aria-label="Email address" autocomplete="email" maxlength="254" required>
+    <input name="email" type="email" placeholder="you@example.com" aria-label="Email address" autocomplete="email" maxlength="254" required>${site}
     <input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
     <button type="submit">Subscribe</button>
   </form>
@@ -564,10 +574,19 @@ sudo update-ca-trust</code></pre>
   })
 }
 
-/** The page after a signup or a confirmation click. One page per outcome, never one that says who is on the list. */
-export function newsletterPage(kind: 'check' | 'invalid' | 'undeliverable' | 'failed' | 'limited' | 'confirmed' | 'expired'): string {
+export type NewsletterKind = 'form' | 'check' | 'invalid' | 'undeliverable' | 'failed' | 'limited' | 'confirmed' | 'expired'
+
+/**
+ * The page after a signup or a confirmation click (and GET /subscribe, the form on its own). One page per
+ * outcome, never one that says who is on the list. A signup from another Profullstack property gets a plain
+ * Profullstack page with a link back to that site, and none of pit.world's own chrome.
+ */
+export function newsletterPage(kind: NewsletterKind, origin: NewsletterOrigin = {}): string {
+  const pit = origin.pit ?? true
+  const name = pit ? 'pit.world' : 'Profullstack'
   const copy = {
-    check: ['Check your inbox', 'If that address can get the newsletter, a confirmation link is on its way. Click it within 48 hours to join; otherwise the address is forgotten.'],
+    form: [`The ${name} newsletter`, 'About once a month. Confirm by email, unsubscribe in one click.'],
+    check: ['Check your inbox', 'A confirmation link is on its way to that address. Click it within 48 hours to join; otherwise the address is forgotten. Nothing there in a few minutes? Look in spam, or try again.'],
     invalid: ["That doesn't look like an email address", 'Check it and try again.'],
     undeliverable: ["That domain can't receive email", 'There is no mail server for it. Check the spelling after the @.'],
     failed: ["We couldn't send the confirmation", 'Our email provider did not take the message. Please try again in a few minutes.'],
@@ -575,7 +594,17 @@ export function newsletterPage(kind: 'check' | 'invalid' | 'undeliverable' | 'fa
     confirmed: ["You're on the list", 'Thanks. The next issue comes to your inbox, and each one has a one-click unsubscribe.'],
     expired: ['That link has expired', 'Confirmation links work once, for 48 hours. Sign up again and use the new link.'],
   }[kind]
-  const retry = kind === 'invalid' || kind === 'undeliverable' || kind === 'failed' || kind === 'expired'
+  const retry = kind === 'form' || kind === 'invalid' || kind === 'undeliverable' || kind === 'failed' || kind === 'expired'
+  const backHref = origin.source && origin.source !== 'pit.world' ? `https://${origin.source}/` : pit ? '/' : 'https://profullstack.com/'
+  const backLabel = origin.source && origin.source !== 'pit.world' ? `Back to ${origin.source}` : pit ? 'Back to search' : 'Back to Profullstack'
+  const form = retry ? newsletterForm(origin).replace(/<p class="kicker">[\s\S]*?<\/p>\s*<h2>[\s\S]*?<\/h2>\s*<p class="lede">[\s\S]*?<\/p>/, '') : ''
+  const status = kind === 'check' || kind === 'confirmed' ? ' role="status"' : ''
+  const main = `<main class="prose">
+<h1${status}>${esc(copy[0])}</h1>
+<p>${esc(copy[1])}</p>
+${form}<p><a class="btn" href="${esc(backHref)}">${esc(backLabel)}</a></p>
+</main>`
+  if (!pit) return plainPage({ title: `${copy[0]} · Profullstack`, body: main })
   return layout({
     title: `${copy[0]} · pit.world`,
     description: 'The pit.world newsletter.',
@@ -583,12 +612,27 @@ export function newsletterPage(kind: 'check' | 'invalid' | 'undeliverable' | 'fa
     bodyClass: 'doc',
     noindex: true,
     body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
-<main class="prose">
-<h1>${esc(copy[0])}</h1>
-<p>${esc(copy[1])}</p>
-${retry ? newsletterForm() : '<p><a class="btn" href="/">Back to search</a></p>'}
-</main>`,
+${main}`,
   })
+}
+
+/** A bare page for visitors from other Profullstack sites: pit.world's stylesheet, none of its chrome or wording. */
+function plainPage(o: { title: string; body: string }): string {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(o.title)}</title>
+<meta name="referrer" content="no-referrer">
+<meta name="robots" content="noindex">
+<meta name="color-scheme" content="dark light">
+<link rel="stylesheet" href="${STYLE_URL}">
+</head>
+<body class="doc">
+${o.body}
+</body>
+</html>`
 }
 
 export function buildPage(o: { invoicing?: boolean; error?: string; values?: Record<string, string> } = {}): string {
@@ -854,4 +898,34 @@ ${sites
 </body>
 </opml>
 `
+}
+
+/** /admin/subscribers: newsletter signups per Profullstack property, and the confirmed list (filter with ?site=). */
+export function subscribersAdminPage(
+  properties: Array<{ source: string; confirmed: number; pending: number }>,
+  subscribers: Array<{ email: string; confirmed_at: number; source: string; sources: string[] }>,
+  o: { total: number; pending: number; site?: string },
+): string {
+  const day = (ms: number) => new Date(ms).toISOString().slice(0, 10)
+  const rows = properties
+    .map((p) => `<tr><td><a href="/admin/subscribers?site=${encodeURIComponent(p.source)}">${esc(p.source)}</a></td><td>${p.confirmed}</td><td>${p.pending}</td></tr>`)
+    .join('')
+  const list = subscribers.map((s) => `<tr><td>${esc(s.email)}</td><td>${day(s.confirmed_at)}</td><td>${esc(s.sources.join(', '))}</td></tr>`).join('')
+  const csv = `/api/admin/subscribers.csv${o.site ? `?site=${encodeURIComponent(o.site)}` : ''}`
+  return layout({
+    title: 'Newsletter subscribers · pit.world admin',
+    description: 'Newsletter signups by property.',
+    path: '/admin/subscribers',
+    bodyClass: 'doc',
+    noindex: true,
+    track: false,
+    body: `<main class="prose">
+<h1>Newsletter subscribers</h1>
+<p>${o.total} confirmed, ${o.pending} waiting on their confirmation email (48 h). A signup's property is the site whose footer form (or page) it came from. <a href="${csv}">Download CSV</a>${o.site ? ` · <a href="/admin/subscribers">All properties</a>` : ''}</p>
+<h2>By property</h2>
+<table class="facts"><tr><th>Property</th><th>Confirmed</th><th>Pending</th></tr>${rows || '<tr><td colspan="3">No signups yet.</td></tr>'}</table>
+<h2>${o.site ? `Confirmed from ${esc(o.site)}` : 'Confirmed'} (${subscribers.length})</h2>
+<table class="facts"><tr><th>Email</th><th>Confirmed</th><th>Properties</th></tr>${list || '<tr><td colspan="3">None.</td></tr>'}</table>
+</main>`,
+  })
 }
