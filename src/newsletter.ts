@@ -64,12 +64,18 @@ export function brandFor(source: string | null | undefined): { name: string; lis
     : { name: 'Profullstack', list: 'the Profullstack newsletter', from: NETWORK_FROM, pit }
 }
 
-/** Can this domain receive mail at all? A domain with no MX (and no A fallback worth trusting) cannot confirm. */
+/**
+ * Can this domain receive mail at all? A domain with no MX (and no A fallback worth trusting) cannot confirm.
+ * Only a definite DNS answer ("no such domain", "no MX records") says no. A timeout or SERVFAIL is our
+ * resolver's problem, not the address's: telling someone their domain can't take mail because a lookup
+ * flaked turned real signups away (2026-10-26), so those let the confirmation email decide.
+ */
 export const dnsMx: MxLookup = async (domain) => {
   try {
     return (await resolveMx(domain)).some((r) => r.exchange && r.exchange !== '.')
-  } catch {
-    return false
+  } catch (e) {
+    const code = (e as { code?: string }).code
+    return !(code === 'ENOTFOUND' || code === 'ENODATA')
   }
 }
 
