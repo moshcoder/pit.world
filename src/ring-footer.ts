@@ -14,9 +14,21 @@
  * This is NOT the pit.world global footer (footer.ts, /snippets/footer.html): that
  * fragment goes on every fleet site and never carries the Profullstack ring.
  */
-import { footerHtml, footerHtmlSync } from '@profullstack/footer'
+import { createHash } from 'node:crypto'
+import { footerHtml, footerHtmlSync, subscribeForm } from '@profullstack/footer'
 
 type FooterOptions = Parameters<typeof footerHtmlSync>[0]
+
+/**
+ * The CSP source for the footer's inline newsletter script (wireSubscribe, since 0.4.0), as
+ * 'sha256-...'. Our CSP has no 'unsafe-inline' and the footer is a cached string, so a per-request
+ * nonce cannot reach it; the script is the same bytes on every render (the renderer, not the CDN
+ * template, emits it), so its hash allows exactly it.
+ */
+export const FOOTER_SCRIPT_SRC: string = (() => {
+  const m = subscribeForm('https://pit.world/').match(/<script[^>]*>([\s\S]*?)<\/script>/)
+  return m?.[1] ? `'sha256-${createHash('sha256').update(m[1]).digest('base64')}'` : ''
+})()
 
 export function ringFooterOptions(links: { label: string; href: string }[]): FooterOptions {
   return {

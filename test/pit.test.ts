@@ -195,8 +195,8 @@ describe('crawlproof analytics and ads', () => {
     expect(footer).not.toContain('crawlproof.com/api/ads')
     expect(footer).toContain('https://rssamplifier.com/ring/profullstack/next?from=https%3A%2F%2Fpit.world%2F')
     const csp = res.headers.get('content-security-policy')!
-    expect(csp).toContain("script-src 'self' https://crawlproof.com;")
-    expect(csp).toContain("connect-src 'self' https://crawlproof.com;")
+    expect(csp).toContain("script-src 'self' https://crawlproof.com 'sha256-")
+    expect(csp).toContain("connect-src 'self' https://pit.world https://crawlproof.com;")
     expect(csp).toContain('frame-src https://crawlproof.com;')
     expect(csp).toContain("frame-ancestors 'none'")
     // The footer's built.indie badge is a cross-origin image; CSP must let it load.
