@@ -201,7 +201,7 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("frame-ancestors 'none'")
     // The footer's built.indie badge is a cross-origin image; CSP must let it load.
     expect(footer).toContain('https://built.indie.pit.world/for.svg')
-    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world;")
+    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com;")
   })
 
   it('never runs on search results, whose URL is the query', async () => {
