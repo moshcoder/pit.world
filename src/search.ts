@@ -31,9 +31,9 @@ export type SearchResult = {
   failures: Array<{ provider: Provider; error: string; credits?: boolean }>
   cached: boolean
 }
-
-/** Asked together and merged. */
-export const PRIMARY: Provider[] = ['serper', 'bing', 'brave', 'tavily', 'ceramic', 'exa', 'linkup', 'searxng']
+/** Asked together and merged. Broad indexes first: fusion ties go to the earlier list, and SearXNG already blends five engines. */
+// Broad indexes first: fusion ties go to the earlier list, and SearXNG already blends five engines.
+export const PRIMARY: Provider[] = ['serper', 'bing', 'searxng', 'brave', 'tavily', 'exa', 'linkup', 'ceramic']
 /** Tried one by one, only when every primary failed. */
 export const FALLBACK: Provider[] = ['perplexity']
 export const ORDER: Provider[] = [...PRIMARY, ...FALLBACK]
