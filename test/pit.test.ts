@@ -404,8 +404,8 @@ describe('categories: images, videos, music, live', () => {
     expect(html).toContain('src="/img?u=https%3A%2F%2Fencrypted-tbn0.gstatic.com%2Fimages%3Fq%3Dtbn%3Aabc"')
     // A thumbnail host outside the allowlist gets no <img> at all.
     expect(html).not.toContain('tracker.example/pixel')
-    // Nothing loads from another origin, except the footer's built.indie badge, which is ours.
-    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/)/)
+    // Nothing loads from another origin, except the footer's built.indie and pwamart badges, which are ours.
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/)/)
   })
 
   it('puts PairUX first, then nixamp, above live results', async () => {
