@@ -49,6 +49,7 @@ export const RING: RingSite[] = [
   { name: 'built.indie', about: 'Launch your indie product with one URL. We fetch the rest; people upvote; you get a badge.', moshpit: true, feed: 'https://built.indie.pit.world/feed.xml' },
   { name: 'deadman.switch', about: "A dead man's switch for your crypto. Seal where the keys are; if you stop checking in, your people get it.", moshpit: true },
   { name: 'watch.wallet', about: 'Know the second your wallet moves: any address on Bitcoin, Ethereum, Base, Polygon or Solana, or a price.', moshpit: true },
+  { name: 'resident.alerts', about: 'Live 911 incidents near you on a map, push alerts for your places, and the police radio for your county.', moshpit: true },
   { name: 'search.peptides', about: 'Every research-peptide vendor and listing: price per mg, independent lab results, how to reach them.', moshpit: true },
   { name: 'ad.network.pit.world', about: 'Run ads, or earn from your site, in crypto. Paste a link and a budget, or one tag and a wallet.', moshpit: false },
 ]
