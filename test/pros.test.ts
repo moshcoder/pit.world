@@ -263,7 +263,7 @@ describe('the pit.world ring: claimed listings join it', () => {
     expect(names).not.toContain('acme-plumbing.com')
     expect((await h.listings.get('acme-plumbing.com'))!.ring).toBe(false)
     expect(await (await h.request('/b/acme-plumbing.com/edit')).text()).not.toContain('Leave the ring')
-    expect(names.slice(0, 11)).toEqual([
+    expect(names.slice(0, 12)).toEqual([
       'pit.world',
       'seo.rank',
       'family.ancestry',
@@ -273,6 +273,7 @@ describe('the pit.world ring: claimed listings join it', () => {
       'watch.wallet',
       'resident.alerts',
       'search.peptides',
+      'auto.hacker',
       'ad.network.pit.world',
       'group.call.pit.world',
     ])
