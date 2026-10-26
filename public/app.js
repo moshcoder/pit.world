@@ -12,13 +12,16 @@
   }
   document.addEventListener('keydown', (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey) return
-    const typing = document.activeElement === input
+    // Any field counts, not just search: j/k and "/" were eaten in the footer's newsletter email box,
+    // so "anthony@profullstack.com" went out as "...profullstac.com" and bounced as undeliverable.
+    const el = document.activeElement
+    const typing = !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName))
     if (event.key === '/' && !typing) {
       event.preventDefault()
       input?.focus()
       input?.select()
     } else if (event.key === 'Escape' && typing) {
-      input.blur()
+      el.blur()
     } else if (!typing && (event.key === 'j' || event.key === 'ArrowDown')) {
       event.preventDefault()
       focus(index + 1)
