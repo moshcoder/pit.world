@@ -30,18 +30,18 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@modelcontextprotocol/sdk": "^1.32.2",
     "@profullstack/bridges": "0.2.0",
-    "@profullstack/footer": "0.2.5",
-    "@profullstack/hqtui": "^0.10.3",
+    "@profullstack/footer": "0.2.6",
+    "@profullstack/hqtui": "^0.11.0",
     "@profullstack/openprofile": "0.2.0",
-    "@profullstack/x402-gateway": "^0.11.0",
-    "hono": "^4.8.0",
-    "zod": "^3.25.0"
+    "@profullstack/x402-gateway": "^0.13.1",
+    "hono": "^4.13.14",
+    "zod": "^4.6.7"
   },
   "devDependencies": {
-    "@types/bun": "^1.2.0",
-    "typescript": "^5.9.0"
+    "@types/bun": "^1.4.4",
+    "typescript": "^7.0.2"
   },
   "keywords": [
     "search",
