@@ -90,6 +90,13 @@ Both sign people in with their **pit.world account**: sign in once at [pit.world
 - **Certificates:** one Let's Encrypt certificate per name covers `<name>`, `social.<name>` and `bbs.<name>` (`deploy/pit-proxy-cert`).
 - Settings: `PIT_COINPAY_CLIENT_ID`, `PIT_COINPAY_CLIENT_SECRET` (CoinPay client with callback `https://pit.world/api/v1/coinpay/oauth/callback`), `PIT_BRIDGE_KEY`, `PIT_ADMIN_SUBS`, `PIT_SOCIAL_URL` (default `http://127.0.0.1:8794`, `off`), `PIT_BBS` (`off`), `PIT_BBS_MAX` (default 100).
 
+## Credit codes and invites
+
+- **Credit codes** ([@profullstack/redeem-credits](https://www.npmjs.com/package/@profullstack/redeem-credits)) grant `server_months`: months of the $5-a-month Moshpit server sold on [/start](https://pit.world/start). Redeem on `/account` ("Have a code?"), `POST /api/v1/redeem` or `pit redeem CODE`. A month is spent on `/account` through the same order a paid month makes (names, username, SSH key to whoever sets up servers, `PIT_BUILD_NOTIFY`), marked as paid with a credit; if the order cannot be sent the month comes back. Names under our endings are already free, so codes never grant names. Mint on the box: `bun $(readlink -f node_modules/.bin/redeem-credits) mint --db ~/.local/share/pit-world/accounts.db --unit server_months --amount 1 --label "who it is for"`.
+- **Invites** ([@profullstack/affiliates](https://www.npmjs.com/package/@profullstack/affiliates)): 3 per account, single use, 30 days, made on `/account/invites`, `POST /api/v1/invites` or `pit invite`. `/i/<code>` sends a person through sign-in, and only a brand-new account spends it. An accepted invite gives nothing beyond the way in.
+- **Affiliate links**: `pit.world/join?ref=CODE` (and `/?ref=CODE`) attributes a new account to the member, first touch, once. Promoter codes stay with the [promoter program](https://pit.world/promote).
+- No cookie: the invite or ref rides the sign-in `next` URL. Tables `credit_*` and `aff_*` live in accounts.db.
+
 ## Privacy, by construction
 
 - nginx writes **no access log** for the site (`ACCESS_LOG=off` in `bin/install.conf`), and the app logs nothing per request.

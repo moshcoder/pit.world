@@ -29,6 +29,8 @@ import { Promotion } from './promotion.js'
 import { mountPromotion } from './promotion-routes.js'
 import { Promoters } from './promoters.js'
 import { mountPromote } from './promoters-routes.js'
+import { Rewards } from './rewards.js'
+import { mountRewards, rewardsOnSignIn, rewardsSections } from './rewards-routes.js'
 import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
@@ -57,6 +59,8 @@ export type Deps = {
   promoters?: Promoters
   /** /build by pay.agent invoice; unset means only the chovy.com checkout. */
   buildInvoicing?: BuildInvoicing
+  /** Credit codes (server months) and invites on accounts (needs accounts); unset means off. */
+  rewards?: Rewards
   /** Addresses whose visits are ours, excluded from promotion measurement. */
   internalIps?: string[]
   /** The x402 crawl gateway (src/crawl-gate.ts); unset means training crawlers read free. */
@@ -102,6 +106,15 @@ export function createApp(deps: Deps) {
   })
 
   const limited = (c: Context<Env>) => !limiter.take(c.env?.ip || 'unknown')
+
+  // An affiliate link (/?ref=CODE, no query) lands on /join, a promoter's on /promote. No cookie either way.
+  if (deps.rewards && deps.accounts) {
+    app.use('/', async (c, next) => {
+      const ref = c.req.query('ref')
+      if (c.req.method !== 'GET' || !ref || c.req.query('q') || !/^[A-Za-z0-9_-]{4,40}$/.test(ref)) return next()
+      return c.redirect(deps.promoters?.byCode(ref) ? `/promote?ref=${encodeURIComponent(ref)}` : `/join?ref=${encodeURIComponent(ref)}`, 302)
+    })
+  }
 
   async function runSearch(query: string, limit = 20): Promise<{ result: SearchResult | null; error: string | null }> {
     try {
@@ -371,7 +384,11 @@ export function createApp(deps: Deps) {
     c.body(mobileConfig(await rootPem()), 200, { 'content-type': 'application/x-apple-aspen-config', 'content-disposition': 'attachment; filename="moshpit.mobileconfig"', 'cache-control': 'public, max-age=86400' }),
   )
 
-  if (deps.accounts) mountAccounts(app, deps.accounts)
+  if (deps.accounts) {
+    const rewards = deps.rewards
+    mountAccounts(app, rewards ? { ...deps.accounts, onSignIn: deps.accounts.onSignIn ?? rewardsOnSignIn(rewards), accountSections: deps.accounts.accountSections ?? rewardsSections(rewards) } : deps.accounts)
+    if (rewards) mountRewards(app, { rewards, accounts: deps.accounts.accounts, site: deps.accounts.site })
+  }
   if (deps.promoters && deps.accounts) mountPromote(app, { promoters: deps.promoters, accounts: deps.accounts.accounts, site: deps.accounts.site })
   const promoHooks =
     deps.listings && deps.promotion
@@ -456,7 +473,8 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const buildInvoicing: BuildInvoicing | undefined = env.PIT_PAYAGENT_KEY
     ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
     : undefined
-  const app = createApp({ keys: keysFromEnv(), crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, internalIps, ...(buildInvoicing ? { buildInvoicing } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const rewards = new Rewards(accounts.accounts.db, { mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com', promoterCode: (code) => Boolean(promoters.byCode(code)) })
+  const app = createApp({ keys: keysFromEnv(), crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

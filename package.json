@@ -1,6 +1,6 @@
 {
   "name": "pitworld",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "mcpName": "world.pit/pit",
   "description": "pit.world MCP server: private web search and Moshpit name lookups for AI agents (stdio, no API key). Also a web app, API, CLI and TUI.",
   "license": "MIT",
@@ -31,10 +31,12 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
+    "@profullstack/affiliates": "0.2.0",
     "@profullstack/bridges": "0.2.0",
     "@profullstack/footer": "0.2.6",
     "@profullstack/hqtui": "^0.11.0",
     "@profullstack/openprofile": "0.2.0",
+    "@profullstack/redeem-credits": "0.1.0",
     "@profullstack/x402-gateway": "^0.13.1",
     "hono": "^4.13.14",
     "zod": "^4.6.7"

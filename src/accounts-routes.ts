@@ -26,6 +26,10 @@ export type AccountDeps = {
   admins?: string[]
   /** Tests swap the CoinPay client for a fake. */
   coinpayClient?: BridgeClient
+  /** After a CoinPay sign-in: `isNew` on the first one. May return where to go instead of returnTo. */
+  onSignIn?: (account: Account, isNew: boolean, returnTo: string) => Promise<string | void>
+  /** Extra sections for /account (credits, invites), placed before "Sign out or delete". */
+  accountSections?: (account: Account) => Promise<string>
 }
 
 const STATE_COOKIE = 'pw_cp_state'
@@ -123,11 +127,14 @@ ${coinpay ? `<p><a class="btn" href="/auth/coinpay?next=${encodeURIComponent(nex
     const result = await coinpay.complete(new URL(c.req.url).searchParams, cookies(c)[STATE_COOKIE])
     c.header('set-cookie', setCookie(STATE_COOKIE, '', 0, '/api/v1/coinpay'), { append: true })
     if (!result.ok) return c.redirect(`/signin?error=${encodeURIComponent(result.error)}&next=${encodeURIComponent(safeNext(result.returnTo))}`, 302)
+    const isNew = !accounts.db.query('SELECT 1 FROM accounts WHERE sub = ?').get(String(result.user.sub ?? '').trim())
     const account = accounts.signIn(result.user)
     const session = accounts.createSession(account.id)
     c.header('set-cookie', setCookie(SESSION_COOKIE, session.token, session.maxAge), { append: true })
     c.header('cache-control', 'no-store')
-    return c.redirect(safeNext(result.returnTo), 302)
+    let to = safeNext(result.returnTo)
+    if (d.onSignIn) to = safeNext((await d.onSignIn(account, isNew, to).catch(() => undefined)) || to)
+    return c.redirect(to, 302)
   })
 
   app.post('/signout', (c) => {
@@ -139,13 +146,14 @@ ${coinpay ? `<p><a class="btn" href="/auth/coinpay?next=${encodeURIComponent(nex
 
   // ---- your account --------------------------------------------------------------
 
-  app.get('/account', (c) => {
+  app.get('/account', async (c) => {
     const me = current(c)
     if (!me) return c.redirect('/signin?next=/account', 302)
     const grants = accounts.grants(me.id)
     const tokens = accounts.tokens(me.id)
     const day = (t: number) => new Date(t).toISOString().slice(0, 10)
     const ok = c.req.query('ok')
+    const extra = d.accountSections ? await d.accountSections(me) : ''
     return page(
       c,
       'Your account',
@@ -163,6 +171,7 @@ ${
 <h2>CLI and API tokens</h2>
 <p><code>pit login</code> opens this page and makes a token for the CLI (OAuth 2.1 with PKCE, nothing to paste).</p>
 ${tokens.length ? `<ul class="plain">${tokens.map((t) => `<li>${esc(t.label)} <span class="muted">made ${day(t.created_at)}${t.last_used_at ? `, last used ${day(t.last_used_at)}` : ''}</span> <form method="post" action="/account/tokens/revoke" class="inline"><input type="hidden" name="id" value="${esc(t.id)}"><button class="link">Revoke</button></form></li>`).join('')}</ul>` : '<p class="muted">No tokens.</p>'}
+${extra}
 <h2>Sign out or delete</h2>
 <form method="post" action="/signout" class="inline"><button>Sign out</button></form>
 <details><summary>Delete my pit.world account</summary><form method="post" action="/account/delete"><p>This removes your account, sessions, tokens and site list here. Posts you made on a board or social site stay there unless you delete them on that site.</p><label><input type="checkbox" name="confirm" value="yes" required> Yes, delete it</label> <button class="danger">Delete account</button></form></details>`,

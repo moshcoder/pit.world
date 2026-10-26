@@ -80,6 +80,21 @@ export async function whoami(base: string): Promise<any> {
   return body
 }
 
+/** A call to the pit.world API as the signed-in account (pit login). */
+export async function authed(base: string, path: string, init: { method?: string; body?: unknown } = {}): Promise<any> {
+  const saved = savedToken()
+  if (!saved) throw new Error('not signed in: pit login')
+  const res = await fetch(`${saved.base || base}${path}`, {
+    method: init.method ?? 'GET',
+    headers: { authorization: `Bearer ${saved.token}`, accept: 'application/json', ...(init.body !== undefined ? { 'content-type': 'application/json' } : {}) },
+    ...(init.body !== undefined ? { body: JSON.stringify(init.body) } : {}),
+    signal: AbortSignal.timeout(15_000),
+  })
+  const body = (await res.json().catch(() => ({}))) as any
+  if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+  return body
+}
+
 export async function logout(base: string): Promise<boolean> {
   const saved = savedToken()
   if (!saved) return false
