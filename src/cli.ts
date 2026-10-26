@@ -42,6 +42,10 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
                                one account for every social.<name> and bbs.<name>.pit.world
   pit whoami                   your account and the pit.world sites you use
   pit logout                   revoke this computer's token
+  pit redeem CODE              redeem a credit code (months of a Moshpit server)
+  pit credits                  your server months
+  pit invites                  your invites (3), who joined, your affiliate link
+  pit invite [NOTE]            make an invite link (single use, for someone new)
   pit social NAME | pit bbs NAME   the social feed or board of a Moshpit name
   pit subscribe EMAIL          get the pit.world newsletter (double opt-in)
   pit open WORDS               open the results page in your browser
@@ -250,6 +254,32 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
           out.log(`${me.account.name ?? '(no name)'}  ${me.account.sub}${me.admin ? '  (admin)' : ''}`)
           for (const s of me.sites ?? []) out.log(`  https://${s.client_id}/`)
         }
+        return 0
+      }
+      case 'redeem': {
+        if (!words[0]) return usage(out, 'pit redeem CODE')
+        const r = await (await import('./login.js')).authed(client.base, '/api/v1/redeem', { method: 'POST', body: { code: words[0] } })
+        out.log(json ? JSON.stringify(r, null, 2) : `${r.message} Server months: ${r.server_months}. Use them on https://pit.world/account`)
+        return 0
+      }
+      case 'credits': {
+        const r = await (await import('./login.js')).authed(client.base, '/api/v1/credits')
+        out.log(json ? JSON.stringify(r, null, 2) : `Server months: ${r.server_months}`)
+        return 0
+      }
+      case 'invites': {
+        const r = await (await import('./login.js')).authed(client.base, '/api/v1/invites')
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else {
+          out.log(`Invites left: ${r.quota.left} of ${r.quota.total}. Joined on yours: ${r.joined}.`)
+          out.log(`Affiliate link: ${r.affiliate_link}`)
+          for (const i of r.invites) out.log(`  ${i.created_at.slice(0, 10)}  ${i.used ? 'used' : i.revoked ? 'withdrawn' : 'open'}  ${i.note}`)
+        }
+        return 0
+      }
+      case 'invite': {
+        const r = await (await import('./login.js')).authed(client.base, '/api/v1/invites', { method: 'POST', body: { note: words.join(' ') } })
+        out.log(json ? JSON.stringify(r, null, 2) : `${r.link}\n(works once, for someone new; ${r.left} left)`)
         return 0
       }
       case 'logout':

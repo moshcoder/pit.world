@@ -733,7 +733,7 @@ export function startPage(): string {
 
 <h2>4. Deploy it to a Moshpit server</h2>
 <ol>
-<li><b>Pay $5 for the month.</b> On Moshpit DNS, use <a href="${pay}">pay.agent/profullstack</a>; on the clearnet, pay through <a href="${LINKS.payClearnet}">coinpayportal.com</a>. In the note, put the names you want served, the username you want, and your SSH public key (<code>cat ~/.ssh/id_ed25519.pub</code>).</li>
+<li><b>Pay $5 for the month.</b> On Moshpit DNS, use <a href="${pay}">pay.agent/profullstack</a>; on the clearnet, pay through <a href="${LINKS.payClearnet}">coinpayportal.com</a>. In the note, put the names you want served, the username you want, and your SSH public key (<code>cat ~/.ssh/id_ed25519.pub</code>). Have a credit code? Redeem it on <a href="/account">your account</a> and use the month there instead: same order, no payment.</li>
 <li><b>We set up your account</b> on the Moshpit server and point each name at it, with its certificate. You get a reply when it is ready.</li>
 <li><b>Deploy from your machine</b>, from the folder with your site in it:
 <pre><code>moshcode deploy shop.yourname --user yourname</code></pre>
