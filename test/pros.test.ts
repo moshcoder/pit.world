@@ -263,7 +263,18 @@ describe('the pit.world ring: claimed listings join it', () => {
     expect(names).not.toContain('acme-plumbing.com')
     expect((await h.listings.get('acme-plumbing.com'))!.ring).toBe(false)
     expect(await (await h.request('/b/acme-plumbing.com/edit')).text()).not.toContain('Leave the ring')
-    expect(names.slice(0, 9)).toEqual(['pit.world', 'seo.rank', 'family.ancestry', 'pay.agent', 'built.indie', 'deadman.switch', 'watch.wallet', 'search.peptides', 'ad.network.pit.world'])
+    expect(names.slice(0, 10)).toEqual([
+      'pit.world',
+      'seo.rank',
+      'family.ancestry',
+      'pay.agent',
+      'built.indie',
+      'deadman.switch',
+      'watch.wallet',
+      'resident.alerts',
+      'search.peptides',
+      'ad.network.pit.world',
+    ])
     expect(ring.sites.at(-1)).toMatchObject({ name: 'acme.pit.world', listing: true, moshpit: false, feed: 'https://acme.pit.world/rss.xml' })
     expect((await h.request('/ring/next?from=https%3A%2F%2Fad.network.pit.world%2F&direct=1')).headers.get('location')).toBe('https://acme.pit.world/')
     expect((await h.request('/ring/next?from=acme.pit.world')).headers.get('location')).toBe('https://pit.world/')

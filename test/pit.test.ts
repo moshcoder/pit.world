@@ -6,14 +6,27 @@ import { PitClient } from '../src/client.ts'
 import { esc } from '../src/html.ts'
 import { looksLikeName, MOSHPIT_ROOT_SHA256, Registry } from '../src/moshpit.ts'
 import { RateLimiter } from '../src/ratelimit.ts'
-import { Cache, cleanHits, mergeResults, parseDataForSeo, parseSerper, search, SearchUnavailable } from '../src/search.ts'
+import {
+  Cache,
+  clearBench,
+  cleanHits,
+  mergeResults,
+  parseBrave,
+  parseCeramic,
+  parseDataForSeo,
+  parseSearxng,
+  parseSerper,
+  parseTavily,
+  search,
+  SearchUnavailable,
+} from '../src/search.ts'
 import { pick } from '../src/promoted.ts'
 import { neighbors, randomSite, RING, siteHref } from '../src/ring.ts'
 import { createApp } from '../src/server.ts'
 import { initialState, onKey } from '../src/tui.ts'
 
 /** A fake upstream: Serper, the registry, and a record of every request made to the outside. */
-function upstream(options: { serperFails?: boolean } = {}) {
+function upstream(options: { serperFails?: boolean; serperBroke?: boolean } = {}) {
   const calls: Array<{ url: string; headers: Record<string, string>; body: string }> = []
   const fetchImpl = (async (input: any, init: any = {}) => {
     const url = String(input)
@@ -23,6 +36,7 @@ function upstream(options: { serperFails?: boolean } = {}) {
     const json = (value: unknown, status = 200) => new Response(JSON.stringify(value), { status, headers: { 'content-type': 'application/json' } })
     if (url.startsWith('https://google.serper.dev')) {
       if (options.serperFails) return json({ message: 'nope' }, 500)
+      if (options.serperBroke) return json({ message: 'Not enough credits', statusCode: 400 }, 400)
       if (url.endsWith('/images'))
         return json({
           images: [
@@ -43,6 +57,7 @@ function upstream(options: { serperFails?: boolean } = {}) {
       })
     }
     if (url.startsWith('https://api.linkup.so')) return json({ results: [{ name: 'From Linkup', url: 'https://linkup.example/', content: 'fallback' }] })
+    if (url.startsWith('https://api.perplexity.ai')) return json({ results: [{ title: 'From Perplexity', url: 'https://perplexity.example/', snippet: 'last resort' }] })
     if (url.includes('/api/moshpit/resolve')) {
       const name = new URL(url).searchParams.get('name')
       if (name === 'chovy.hacker') return json({ name, registered: true, name_registered: true, target: 'dev.profullstack.com', mode: 'clearnet' })
@@ -95,15 +110,53 @@ describe('search core', () => {
     expect(Object.keys(calls[0]!.headers).sort()).toEqual(['content-type', 'x-api-key'])
   })
 
-  it('falls back to the next provider, and caches in memory', async () => {
-    const { calls, fetchImpl } = upstream({ serperFails: true })
+  it('asks every engine at once and fuses the answers', async () => {
+    const { calls, fetchImpl } = upstream()
+    const result = await search('x', { serper: 'K', linkup: 'L', perplexity: 'P' }, { fetch: fetchImpl })
+    expect(result.provider).toBe('serper+linkup')
+    expect(result.hits.map((h) => h.url)).toEqual(['https://moshcode.sh/', 'https://linkup.example/'])
+    // Perplexity is the paid last resort: not asked while the free engines answer.
+    expect(calls.map((c) => new URL(c.url).hostname).sort()).toEqual(['api.linkup.so', 'google.serper.dev'])
+    // Each engine is asked for its top 10, whatever the page shows.
+    expect(JSON.parse(calls.find((c) => c.url.includes('serper'))!.body).num).toBe(10)
+  })
+
+  it('serves the engines that answered, and does not cache when one merely failed', async () => {
+    const { fetchImpl } = upstream({ serperFails: true })
     const cache = new Cache()
     const first = await search('x', { serper: 'K', linkup: 'L' }, { fetch: fetchImpl, cache })
     expect(first.provider).toBe('linkup')
-    expect(first.failures[0]!.provider).toBe('serper')
-    const second = await search('X', { serper: 'K', linkup: 'L' }, { fetch: fetchImpl, cache })
-    expect(second.cached).toBe(true)
-    expect(calls).toHaveLength(2)
+    expect(first.failures[0]).toEqual({ provider: 'serper', error: 'HTTP 500' })
+    expect(cache.get('10:x')).toBeNull()
+  })
+
+  it('benches an engine that is out of credits, and caches without it', async () => {
+    clearBench()
+    const { calls, fetchImpl } = upstream({ serperBroke: true })
+    const cache = new Cache()
+    const first = await search('x', { serper: 'K', linkup: 'L' }, { fetch: fetchImpl, cache })
+    expect(first.failures[0]).toEqual({ provider: 'serper', error: 'HTTP 400 out of credits', credits: true })
+    expect((await search('X', { serper: 'K', linkup: 'L' }, { fetch: fetchImpl, cache })).cached).toBe(true)
+    await search('y', { serper: 'K', linkup: 'L' }, { fetch: fetchImpl, cache })
+    // Serper was asked once, then left alone.
+    expect(calls.filter((c) => c.url.includes('serper'))).toHaveLength(1)
+    clearBench()
+  })
+
+  it('falls back to Perplexity only when every free engine failed', async () => {
+    const { fetchImpl } = upstream({ serperFails: true })
+    const result = await search('x', { serper: 'K', perplexity: 'P' }, { fetch: fetchImpl })
+    expect(result.provider).toBe('perplexity')
+    expect(result.hits[0]).toMatchObject({ url: 'https://perplexity.example/', sources: ['perplexity'] })
+  })
+
+  it('parses Brave, Tavily, Ceramic and SearXNG', () => {
+    expect(parseBrave({ web: { results: [{ url: 'https://b.example/', title: 'B', description: 'the <strong>word</strong>' }] } })[0]).toMatchObject({ description: 'the word' })
+    expect(parseTavily({ results: [{ url: 'https://t.example/', title: 'T', content: 'tc' }] })[0]).toMatchObject({ title: 'T', description: 'tc' })
+    expect(parseCeramic({ result: { results: [{ url: 'https://c.example/', title: 'C', description: '  a\n b ' }] } })[0]).toMatchObject({ description: 'a b' })
+    expect(parseSearxng({ results: [{ url: 'javascript:x', title: 'bad' }, { url: 'https://s.example/', title: 'S', content: 'sc' }] })).toEqual([
+      { url: 'https://s.example/', title: 'S', description: 'sc', host: 's.example' },
+    ])
   })
 
   it('says so when nothing is configured', async () => {
@@ -256,7 +309,7 @@ describe('the web app', () => {
   it('serves the JSON API, OpenSearch and suggestions', async () => {
     const { request } = app()
     const api = await (await request('/api/search?q=moshpit&n=5')).json()
-    expect(api).toMatchObject({ query: 'moshpit', provider: 'serper', results: [{ url: 'https://moshcode.sh/' }] })
+    expect(api).toMatchObject({ query: 'moshpit', provider: 'serper+linkup', results: [{ url: 'https://moshcode.sh/' }, { url: 'https://linkup.example/' }] })
     expect(await (await request('/api/resolve?name=chovy.hacker')).json()).toMatchObject({ registered: true, target: 'dev.profullstack.com' })
     expect((await request('/api/resolve?name=not a name')).status).toBe(400)
     expect(await (await request('/opensearch.xml')).text()).toContain('https://pit.world/search?q={searchTerms}')
@@ -570,7 +623,8 @@ describe('the Moshpit ring', () => {
     expect(neighbors('pay.agent').next.name).toBe('built.indie')
     expect(neighbors('built.indie').next.name).toBe('deadman.switch')
     expect(neighbors('deadman.switch').next.name).toBe('watch.wallet')
-    expect(neighbors('watch.wallet').next.name).toBe('search.peptides')
+    expect(neighbors('watch.wallet').next.name).toBe('resident.alerts')
+    expect(neighbors('resident.alerts').next.name).toBe('search.peptides')
     expect(neighbors('search.peptides').next.name).toBe('ad.network.pit.world')
     expect(neighbors('ad.network.pit.world').next.name).toBe('pit.world')
     expect(neighbors('pit.world').prev.name).toBe('ad.network.pit.world')

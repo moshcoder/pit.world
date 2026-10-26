@@ -5,17 +5,20 @@
  * on their behalf, so the provider sees our server and the words, never the
  * person: no IP, no cookie, no user agent, no referrer.
  *
- * Each query goes to the Google index (Serper) and the Bing index (DataForSEO)
- * at once, and the two lists are merged: results both engines found rise, each
- * result says which engine found it. Bing gets a short leash, so a slow Bing
- * answer means a Google-only page, never a slow page. Only when both fail do
- * the fallbacks (Linkup, Exa, Perplexity) run, one at a time. The parsers
+ * Hybrid results: each query goes to every configured index at once (Google
+ * via Serper, Bing via DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup and a
+ * local SearXNG), the top 10 from each are fused, and each result says which
+ * engines found it, so pages several engines agree on rise. Once one engine has
+ * answered the rest get a short leash, so a slow engine means a thinner page,
+ * never a slow one. Perplexity, the only one with no free allowance, runs only
+ * when every other engine failed. An engine that says it is out of credits is
+ * benched for a while instead of being asked on every search. The parsers
  * follow cli-tools' `websearch`.
  */
 
 export type Hit = { url: string; title: string; description: string; host: string; sources?: Provider[] }
 
-export type Provider = 'serper' | 'bing' | 'linkup' | 'exa' | 'perplexity'
+export type Provider = 'serper' | 'bing' | 'brave' | 'tavily' | 'ceramic' | 'exa' | 'linkup' | 'searxng' | 'perplexity'
 
 export type Keys = Partial<Record<Provider, string>>
 
@@ -25,22 +28,54 @@ export type SearchResult = {
   provider: string | null
   hits: Hit[]
   /** Providers that were tried and failed, with why. Never shown with the query attached. */
-  failures: Array<{ provider: Provider; error: string }>
+  failures: Array<{ provider: Provider; error: string; credits?: boolean }>
   cached: boolean
 }
 
 /** Asked together and merged. */
-export const PRIMARY: Provider[] = ['serper', 'bing']
+export const PRIMARY: Provider[] = ['serper', 'bing', 'brave', 'tavily', 'ceramic', 'exa', 'linkup', 'searxng']
 /** Tried one by one, only when every primary failed. */
-export const FALLBACK: Provider[] = ['linkup', 'exa', 'perplexity']
+export const FALLBACK: Provider[] = ['perplexity']
 export const ORDER: Provider[] = [...PRIMARY, ...FALLBACK]
 /** How long the merge waits for a slower primary once one has answered. */
 const SECOND_WAIT_MS = 2_500
-export const LABELS: Record<Provider, string> = { serper: 'Google', bing: 'Bing', linkup: 'Linkup', exa: 'Exa', perplexity: 'Perplexity' }
+/** How many results each engine is asked for, whatever the page shows. */
+export const PER_ENGINE = 10
+/** How long an engine that said it is out of credits sits out. */
+const BENCH_MS = 15 * 60_000
+export const LABELS: Record<Provider, string> = {
+  serper: 'Google',
+  bing: 'Bing',
+  brave: 'Brave',
+  tavily: 'Tavily',
+  ceramic: 'Ceramic',
+  exa: 'Exa',
+  linkup: 'Linkup',
+  searxng: 'DuckDuckGo',
+  perplexity: 'Perplexity',
+}
 export const MAX_QUERY = 512
 const TIMEOUT_MS = 8_000
 
 export class SearchUnavailable extends Error {}
+
+/** The provider answered that the account has no credits, quota or funds left. */
+export class OutOfCredits extends Error {}
+
+/** Engines out of credits, and until when. In memory only; a restart forgets it. */
+const benched = new Map<Provider, number>()
+
+export function clearBench(): void {
+  benched.clear()
+}
+
+function isBenched(provider: Provider): boolean {
+  const until = benched.get(provider)
+  if (until === undefined) return false
+  if (Date.now() < until) return true
+  benched.delete(provider)
+  return false
+}
 
 type Fetch = typeof fetch
 
@@ -92,25 +127,66 @@ export function parseDataForSeo(body: any): Hit[] {
   return cleanHits(items.filter((i) => i?.type === 'organic').map((i) => ({ url: i.url, title: i.title, description: i.description })))
 }
 
+export function parseBrave(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.web?.results) ? body.web.results : []
+  return cleanHits(results.map((r) => ({ url: r?.url, title: stripTags(r?.title), description: stripTags(r?.description) })))
+}
+
+export function parseTavily(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.results) ? body.results : []
+  return cleanHits(results.map((r) => ({ url: r?.url, title: r?.title, description: r?.content })))
+}
+
+/** Ceramic: `result.results[]` of { title, url, description }. */
+export function parseCeramic(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.result?.results) ? body.result.results : Array.isArray(body?.results) ? body.results : []
+  return cleanHits(results.map((r) => ({ url: r?.url, title: r?.title, description: typeof r?.description === 'string' ? r.description.replace(/\s+/g, ' ') : '' })))
+}
+
+export function parseSearxng(body: any): Hit[] {
+  const results: any[] = Array.isArray(body?.results) ? body.results : []
+  return cleanHits(results.map((r) => ({ url: r?.url, title: r?.title, description: r?.content })))
+}
+
+/** Brave marks query words with <strong>; the page escapes everything, so drop the tags here. */
+function stripTags(value: unknown): string {
+  return typeof value === 'string' ? value.replace(/<[^>]*>/g, '') : ''
+}
+
 export function parsePerplexity(body: any): Hit[] {
   const results: any[] = Array.isArray(body?.results) ? body.results : []
   return cleanHits(results.map((r) => ({ url: r?.url, title: r?.title, description: r?.snippet })))
 }
 
-async function postJson(fetchImpl: Fetch, url: string, headers: Record<string, string>, body: unknown): Promise<any> {
-  const response = await fetchImpl(url, {
-    method: 'POST',
-    headers: { ...headers, 'content-type': 'application/json' },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(TIMEOUT_MS),
-  })
+const CREDITS = /credit|funds|quota|payment|balance|top ?up|exceeded/i
+
+async function readJson(response: Response): Promise<any> {
   const text = await response.text()
-  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  if (!response.ok) {
+    // Serper says 400, Linkup 429, Exa 402: the words are the only common ground.
+    if ([400, 402, 403, 429, 432].includes(response.status) && CREDITS.test(text)) throw new OutOfCredits(`HTTP ${response.status} out of credits`)
+    throw new Error(`HTTP ${response.status}`)
+  }
   const json = JSON.parse(text)
   // DataForSEO answers HTTP 200 with its own status inside.
   const inner = json?.tasks?.[0]?.status_code
   if (typeof inner === 'number' && inner !== 20000) throw new Error(`provider status ${inner}`)
   return json
+}
+
+async function postJson(fetchImpl: Fetch, url: string, headers: Record<string, string>, body: unknown): Promise<any> {
+  return readJson(
+    await fetchImpl(url, {
+      method: 'POST',
+      headers: { ...headers, 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(TIMEOUT_MS),
+    }),
+  )
+}
+
+async function getJson(fetchImpl: Fetch, url: string, headers: Record<string, string>): Promise<any> {
+  return readJson(await fetchImpl(url, { headers: { ...headers, accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS) }))
 }
 
 export async function callProvider(provider: Provider, key: string, query: string, limit: number, fetchImpl: Fetch = fetch): Promise<Hit[]> {
@@ -127,6 +203,19 @@ export async function callProvider(provider: Provider, key: string, query: strin
           [{ keyword: query, location_code: 2840, language_code: 'en', depth: Math.max(10, limit) }],
         ),
       ).slice(0, limit)
+    case 'brave':
+      return parseBrave(
+        await getJson(fetchImpl, `https://api.search.brave.com/res/v1/web/search?${new URLSearchParams({ q: query, count: String(Math.min(20, limit)) })}`, {
+          'x-subscription-token': key,
+        }),
+      ).slice(0, limit)
+    case 'tavily':
+      return parseTavily(await postJson(fetchImpl, 'https://api.tavily.com/search', { authorization: `Bearer ${key}` }, { query, max_results: limit, search_depth: 'basic' })).slice(0, limit)
+    case 'ceramic':
+      return parseCeramic(await postJson(fetchImpl, 'https://api.ceramic.ai/search', { authorization: `Bearer ${key}` }, { query })).slice(0, limit)
+    case 'searxng':
+      // key is the instance's base URL, e.g. http://127.0.0.1:8888, reached over loopback.
+      return parseSearxng(await getJson(fetchImpl, `${key.replace(/\/+$/, '')}/search?${new URLSearchParams({ q: query, format: 'json' })}`, {})).slice(0, limit)
     case 'linkup':
       return parseLinkup(
         await postJson(fetchImpl, 'https://api.linkup.so/v1/search', { authorization: `Bearer ${key}` }, { q: query, depth: 'standard', outputType: 'searchResults' }),
@@ -224,17 +313,22 @@ async function askPrimaries(
   limit: number,
   fetchImpl: Fetch | undefined,
   failures: SearchResult['failures'],
-): Promise<Array<{ provider: Provider; hits: Hit[] }>> {
+): Promise<{ answers: Array<{ provider: Provider; hits: Hit[] }>; settled: boolean }> {
   const answers: Array<{ provider: Provider; hits: Hit[] }> = []
+  let done = 0
   let firstAnswer: () => void = () => {}
   const first = new Promise<void>((resolve) => (firstAnswer = resolve))
   const calls = providers.map((provider) =>
     callProvider(provider, keys[provider]!, q, limit, fetchImpl).then(
       (hits) => {
+        done++
         answers.push({ provider, hits })
         firstAnswer()
       },
-      (error) => failures.push({ provider, error: error instanceof Error ? error.message : String(error) }),
+      (error) => {
+        done++
+        fail(failures, provider, error)
+      },
     ),
   )
   const all = Promise.all(calls)
@@ -243,7 +337,15 @@ async function askPrimaries(
     await Promise.race([all, new Promise((resolve) => setTimeout(resolve, SECOND_WAIT_MS))])
   }
   // Keep the configured order so fusion ties break the same way every time.
-  return [...answers].sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider))
+  const sorted = [...answers].sort((a, b) => providers.indexOf(a.provider) - providers.indexOf(b.provider))
+  // Settled: nobody is still running, and every failure was one the next search would hit too.
+  return { answers: sorted, settled: done === providers.length && failures.every((f) => f.credits) }
+}
+
+function fail(failures: SearchResult['failures'], provider: Provider, error: unknown): void {
+  const credits = error instanceof OutOfCredits
+  if (credits) benched.set(provider, Date.now() + BENCH_MS)
+  failures.push({ provider, error: error instanceof Error ? error.message : String(error), ...(credits ? { credits: true } : {}) })
 }
 
 export async function search(
@@ -258,13 +360,16 @@ export async function search(
   // Answer with the caller's words: echoing the first asker's would tell this one what someone else searched.
   if (hit) return { ...hit, query: q }
   const failures: SearchResult['failures'] = []
-  const order = (options.order ?? ORDER).filter((p) => keys[p])
-  if (!order.length) throw new SearchUnavailable('No search provider is configured.')
+  const configured = (options.order ?? ORDER).filter((p) => keys[p])
+  if (!configured.length) throw new SearchUnavailable('No search provider is configured.')
+  // When every engine is benched, ask anyway: someone may have topped one up.
+  const awake = configured.filter((p) => !isBenched(p))
+  const order = awake.length ? awake : configured
   const primaries = order.filter((p) => PRIMARY.includes(p))
   const fallbacks = order.filter((p) => !PRIMARY.includes(p))
 
   if (primaries.length) {
-    const answers = await askPrimaries(primaries, keys, q, limit, options.fetch, failures)
+    const { answers, settled } = await askPrimaries(primaries, keys, q, Math.max(PER_ENGINE, limit), options.fetch, failures)
     if (answers.length) {
       const result: SearchResult = {
         query: q,
@@ -273,8 +378,9 @@ export async function search(
         failures,
         cached: false,
       }
-      // A partial answer (one engine timed out or failed) is not cached, so the next asker gets both.
-      if (answers.length === primaries.length) options.cache?.set(cacheKey, result)
+      // A partial answer (an engine timed out or failed) is not cached, so the next asker gets them all.
+      // An engine out of credits will not be back in ten minutes, so it does not hold the cache up.
+      if (settled) options.cache?.set(cacheKey, result)
       return result
     }
   }
@@ -285,7 +391,7 @@ export async function search(
       options.cache?.set(cacheKey, result)
       return result
     } catch (error) {
-      failures.push({ provider, error: error instanceof Error ? error.message : String(error) })
+      fail(failures, provider, error)
     }
   }
   throw new SearchUnavailable(`Every search provider failed: ${failures.map((f) => `${f.provider} ${f.error}`).join('; ')}`)
