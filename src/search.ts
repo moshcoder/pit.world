@@ -51,7 +51,7 @@ export const LABELS: Record<Provider, string> = {
   ceramic: 'Ceramic',
   exa: 'Exa',
   linkup: 'Linkup',
-  searxng: 'DuckDuckGo',
+  searxng: 'SearXNG',
   perplexity: 'Perplexity',
 }
 export const MAX_QUERY = 512
