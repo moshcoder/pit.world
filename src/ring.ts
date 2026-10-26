@@ -52,6 +52,7 @@ export const RING: RingSite[] = [
   { name: 'resident.alerts', about: 'Live 911 incidents near you on a map, push alerts for your places, and the police radio for your county.', moshpit: true },
   { name: 'search.peptides', about: 'Every research-peptide vendor and listing: price per mg, independent lab results, how to reach them.', moshpit: true },
   { name: 'ad.network.pit.world', about: 'Run ads, or earn from your site, in crypto. Paste a link and a budget, or one tag and a wallet.', moshpit: false },
+  { name: 'group.call.pit.world', about: 'A party line for people and AI agents. Make a room, get a four-digit code, everyone dials one number.', moshpit: false },
 ]
 
 let source: (() => ListingMember[]) | null = null
