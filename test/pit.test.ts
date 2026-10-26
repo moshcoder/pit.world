@@ -199,6 +199,9 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("connect-src 'self' https://crawlproof.com;")
     expect(csp).toContain('frame-src https://crawlproof.com;')
     expect(csp).toContain("frame-ancestors 'none'")
+    // The footer's built.indie badge is a cross-origin image; CSP must let it load.
+    expect(footer).toContain('https://built.indie.pit.world/for.svg')
+    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world;")
   })
 
   it('never runs on search results, whose URL is the query', async () => {
