@@ -189,6 +189,9 @@ pre code { background: none; padding: 0; }
 .pfs-footer a:hover, .pfs-footer a:focus-visible { color: var(--text); text-decoration: underline; }
 .pfs-footer__links { flex-basis: 100%; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; }
 .pfs-footer__ring { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .6rem; }
+.pfs-footer__badges { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .6rem; }
+.pfs-footer a.pfs-footer__badge { display: inline-block; line-height: 0; }
+.pfs-footer__badge img { display: block; width: 200px; height: 44px; max-width: 100%; }
 .pfs-footer__copy { margin: 0; }
 .pfs-footer__copy a { color: inherit; }
 .ad-unit { max-width: 960px; margin: 10px auto; }
