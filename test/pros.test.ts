@@ -263,7 +263,7 @@ describe('the pit.world ring: claimed listings join it', () => {
     expect(names).not.toContain('acme-plumbing.com')
     expect((await h.listings.get('acme-plumbing.com'))!.ring).toBe(false)
     expect(await (await h.request('/b/acme-plumbing.com/edit')).text()).not.toContain('Leave the ring')
-    expect(names.slice(0, 12)).toEqual([
+    expect(names.slice(0, 15)).toEqual([
       'pit.world',
       'seo.rank',
       'family.ancestry',
@@ -276,11 +276,14 @@ describe('the pit.world ring: claimed listings join it', () => {
       'auto.hacker',
       'ad.network.pit.world',
       'group.call.pit.world',
+      'offtherecord.podcast',
+      'live.streaming',
+      'pics.collage',
     ])
     expect(ring.sites.at(-1)).toMatchObject({ name: 'acme.pit.world', listing: true, moshpit: false, feed: 'https://acme.pit.world/rss.xml' })
-    expect((await h.request('/ring/next?from=https%3A%2F%2Fgroup.call.pit.world%2F&direct=1')).headers.get('location')).toBe('https://acme.pit.world/')
+    expect((await h.request('/ring/next?from=https%3A%2F%2Fpics.collage%2F&direct=1')).headers.get('location')).toBe('https://acme.pit.world/')
     expect((await h.request('/ring/next?from=acme.pit.world')).headers.get('location')).toBe('https://pit.world/')
-    expect((await h.request('/ring/prev', { headers: { referer: 'https://www.acme.pit.world/about' } })).headers.get('location')).toBe('https://group.call.pit.world/')
+    expect((await h.request('/ring/prev', { headers: { referer: 'https://www.acme.pit.world/about' } })).headers.get('location')).toBe('https://pics.collage.pit.world/')
     expect((await h.request('/ring/random?from=acme.pit.world')).headers.get('cache-control')).toBe('no-store')
     const page = await (await h.request('/ring')).text()
     expect(page).toContain('href="/b/acme.pit.world"')
@@ -299,7 +302,7 @@ describe('the pit.world ring: claimed listings join it', () => {
     const ok = await (await h.form('/b/acme.bakery/verify', { claim: start.claimId })).text()
     expect(ok).toContain('pit.world/ring/next?from=https%3A%2F%2Facme.bakery%2F')
     expect(ok).toContain('https://rssamplifier.com/ring/pit-world')
-    expect(neighbors('group.call.pit.world').next).toMatchObject({ name: 'acme.bakery', moshpit: true })
+    expect(neighbors('pics.collage').next).toMatchObject({ name: 'acme.bakery', moshpit: true })
   })
 })
 

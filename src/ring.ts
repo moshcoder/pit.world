@@ -35,6 +35,8 @@ export type RingSite = {
   listing?: boolean
   /** Its RSS/Atom feed, when it has one. */
   feed?: string
+  /** Phrases people search for it by, beyond its name and about line (search promo boxes, featured.ts). */
+  keywords?: string[]
 }
 
 /** A claimed listing, as the ring sees it (Listings.ringMembers()). */
@@ -42,18 +44,21 @@ export type ListingMember = { domain: string; name: string; description: string;
 
 /** The core of the ring, always first, in this order. */
 export const RING: RingSite[] = [
-  { name: 'pit.world', about: 'Private search, and the front door of the Moshpit network.', moshpit: false, feed: 'https://pit.world/b/feed.xml' },
-  { name: 'seo.rank', about: 'Free, open-source on-page SEO audit. API, CLI and MCP.', moshpit: true },
-  { name: 'family.ancestry', about: 'Your family tree, on your own name. Import GEDCOM, share by link.', moshpit: true },
-  { name: 'pay.agent', about: 'Get paid in crypto with one link. Sign in with CoinPay; people and agents pay you by name.', moshpit: true },
-  { name: 'built.indie', about: 'Launch your indie product with one URL. We fetch the rest; people upvote; you get a badge.', moshpit: true, feed: 'https://built.indie.pit.world/feed.xml' },
-  { name: 'deadman.switch', about: "A dead man's switch for your crypto. Seal where the keys are; if you stop checking in, your people get it.", moshpit: true },
-  { name: 'watch.wallet', about: 'Know the second your wallet moves: any address on Bitcoin, Ethereum, Base, Polygon or Solana, or a price.', moshpit: true },
-  { name: 'resident.alerts', about: 'Live 911 incidents near you on a map, push alerts for your places, and the police radio for your county.', moshpit: true },
-  { name: 'search.peptides', about: 'Every research-peptide vendor and listing: price per mg, independent lab results, how to reach them.', moshpit: true },
-  { name: 'auto.hacker', about: 'Authorized, non-destructive website pentests \u2014 for sites you have proven you own. Web, API, CLI, MCP, TUI.', moshpit: true },
-  { name: 'ad.network.pit.world', about: 'Run ads, or earn from your site, in crypto. Paste a link and a budget, or one tag and a wallet.', moshpit: false },
-  { name: 'group.call.pit.world', about: 'A party line for people and AI agents. Make a room, get a four-digit code, everyone dials one number.', moshpit: false },
+  { name: 'pit.world', keywords: ['private search', 'search engine', 'moshpit'], about: 'Private search, and the front door of the Moshpit network.', moshpit: false, feed: 'https://pit.world/b/feed.xml' },
+  { name: 'seo.rank', keywords: ['seo audit', 'seo checker', 'on-page seo'], about: 'Free, open-source on-page SEO audit. API, CLI and MCP.', moshpit: true },
+  { name: 'family.ancestry', keywords: ['family tree', 'genealogy', 'gedcom', 'ancestry'], about: 'Your family tree, on your own name. Import GEDCOM, share by link.', moshpit: true },
+  { name: 'pay.agent', keywords: ['crypto payments', 'payment link', 'get paid', 'venmo'], about: 'Get paid in crypto with one link. Sign in with CoinPay; people and agents pay you by name.', moshpit: true },
+  { name: 'built.indie', keywords: ['launch', 'indie hackers', 'product hunt', 'upvote'], about: 'Launch your indie product with one URL. We fetch the rest; people upvote; you get a badge.', moshpit: true, feed: 'https://built.indie.pit.world/feed.xml' },
+  { name: 'deadman.switch', keywords: ["dead man's switch", 'dead mans switch', 'crypto inheritance'], about: "A dead man's switch for your crypto. Seal where the keys are; if you stop checking in, your people get it.", moshpit: true },
+  { name: 'watch.wallet', keywords: ['wallet alerts', 'wallet tracker', 'whale alert', 'price alert'], about: 'Know the second your wallet moves: any address on Bitcoin, Ethereum, Base, Polygon or Solana, or a price.', moshpit: true },
+  { name: 'resident.alerts', keywords: ['911', 'police scanner', 'police radio', 'crime map', 'incidents'], about: 'Live 911 incidents near you on a map, push alerts for your places, and the police radio for your county.', moshpit: true },
+  { name: 'search.peptides', keywords: ['peptides', 'peptide vendors', 'bpc-157'], about: 'Every research-peptide vendor and listing: price per mg, independent lab results, how to reach them.', moshpit: true },
+  { name: 'auto.hacker', keywords: ['pentest', 'penetration test', 'security scan', 'vulnerability scan'], about: 'Authorized, non-destructive website pentests \u2014 for sites you have proven you own. Web, API, CLI, MCP, TUI.', moshpit: true },
+  { name: 'ad.network.pit.world', keywords: ['advertising', 'ad network', 'crypto ads', 'monetize'], about: 'Run ads, or earn from your site, in crypto. Paste a link and a budget, or one tag and a wallet.', moshpit: false },
+  { name: 'group.call.pit.world', about: 'A party line for people and AI agents. Make a room, get a four-digit code, everyone dials one number.', moshpit: false, keywords: ['conference call', 'group call', 'party line', 'dial in', 'phone call'] },
+  { name: 'offtherecord.podcast', about: 'Off The Record: a Silicon Valley veteran programmer on fleet engineering, agentic coding bots and building a new internet.', moshpit: true, feed: 'https://offtherecord.podcast.pit.world/feed.xml', keywords: ['off the record', 'otr', 'podcast', 'interview', 'agentic coding'] },
+  { name: 'live.streaming', about: 'Radio and TV stations, live now: AI-composed music, tracks shared by listeners, and more.', moshpit: true, keywords: ['radio', 'live tv', 'stations', 'stream'] },
+  { name: 'pics.collage', about: 'Make photo collages on your phone: grids, freestyle, stickers, text and backgrounds. Free, no account, works offline.', moshpit: true, keywords: ['collage', 'photo grid', 'photo editor'] },
 ]
 
 let source: (() => ListingMember[]) | null = null

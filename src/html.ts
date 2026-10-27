@@ -227,6 +227,21 @@ function tabs(query: string, active: Vertical): string {
   }).join('')}</nav>`
 }
 
+/** Our own ring sites a search is about, above every outside result (featured.ts). */
+function featuredBox(sites: RingSite[] | undefined): string {
+  if (!sites?.length) return ''
+  return `<section class="promo featured" aria-label="Featured on pit.world">
+  <p class="kicker">Featured on pit.world</p>
+  <ul>${sites
+    .map(
+      (s) => `<li>
+    <a href="${esc(siteHref(s, false))}"><span class="from">${esc(s.name.replace(/\.pit\.world$/, ''))}</span><b>${esc(s.about.split(/(?<=[.:!?])\s/)[0]!.replace(/[.:]$/, ''))}</b><small>${esc(s.about)}</small></a>
+  </li>`,
+    )
+    .join('')}</ul>
+</section>`
+}
+
 /** PairUX channels and nixamp streams, ours, ahead of everything else. */
 function promoStrip(promos: Promo[], vertical: Vertical): string {
   if (!promos.length) return ''
@@ -275,7 +290,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
     .join('')}</ol>`
 }
 
-export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null }): string {
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[] }): string {
   const { query, vertical, result, promos, error } = options
   const hits = result?.hits ?? []
   const label = VERTICALS.find((v) => v.id === vertical)!.label
@@ -285,6 +300,7 @@ export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 
 </header>
 ${tabs(query, vertical)}
 <main class="results ${vertical}">
+  ${featuredBox(options.featured)}
   ${promoStrip(promos, vertical)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   ${hits.length ? mediaList(vertical, hits) : ''}
@@ -294,7 +310,7 @@ ${tabs(query, vertical)}
   return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string }): string {
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[] }): string {
   const { query, result, resolution, error } = options
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
@@ -305,6 +321,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
 ${tabs(query, 'web')}
 <main class="results">
   ${resolution?.registered ? moshpitCard(resolution) : ''}
+  ${featuredBox(options.featured)}
   ${options.card ?? ''}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a>${options.card ? '' : ` · <a href="/b/${encodeURIComponent(domain)}">business listing</a>`}</p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}

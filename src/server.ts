@@ -16,6 +16,7 @@ import { snippetFor } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
 import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
+import { featuredFor } from './featured.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
@@ -297,11 +298,12 @@ export function createApp(deps: Deps) {
     c.header('cache-control', 'no-store')
     if (vertical !== 'web') {
       const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query), promoted.for(query, vertical)])
-      return c.html(mediaPage({ query, vertical, result, promos, error }), result || promos.length ? 200 : 503)
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: featuredFor(query) }), result || promos.length ? 200 : 503)
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     const claimed = deps.listings?.claimedOnly(query)
-    return c.html(resultsPage({ query, result, resolution, error, ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed ? 200 : 503)
+    const featured = featuredFor(query)
+    return c.html(resultsPage({ query, result, resolution, error, featured, ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
   })
 
   // --- JSON API ---------------------------------------------------------------
@@ -321,14 +323,15 @@ export function createApp(deps: Deps) {
     const raw = Math.trunc(Number(c.req.query('n') ?? 10))
     const n = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 20) : 10
     const vertical = parseVertical(c.req.query('t'))
+    const featured = featuredFor(query).map((s) => ({ name: s.name, url: siteHref(s, false), about: s.about }))
     if (vertical !== 'web') {
       const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, n), promoted.for(query, vertical)])
-      if (!result) return c.json({ query, type: vertical, error, promoted: promos }, 503)
-      return c.json({ query, type: vertical, provider: result.provider, results: result.hits, promoted: promos })
+      if (!result) return c.json({ query, type: vertical, error, featured, promoted: promos }, 503)
+      return c.json({ query, type: vertical, provider: result.provider, featured, results: result.hits, promoted: promos })
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
-    if (!result) return c.json({ query, error, moshpit: resolution }, 503)
-    return c.json({ query, provider: result.provider, results: result.hits, moshpit: resolution })
+    if (!result) return c.json({ query, error, featured, moshpit: resolution }, 503)
+    return c.json({ query, provider: result.provider, featured, results: result.hits, moshpit: resolution })
   })
 
   app.get('/api/resolve', async (c) => {
