@@ -40,6 +40,22 @@ export function readOrder(form: Record<string, unknown>): BuildOrder {
   return { email, name: str('name', 80), idea }
 }
 
+/**
+ * Contact-form spam: the stock "questions about pricing" notes that are sent to
+ * every form on the web. They describe no app, so they get no invoice.
+ */
+const SPAM_IDEAS = [
+  /questions? about (your )?(pricing|prices|availability)/i,
+  /general process of working with you/i,
+  /let me know what (details|information) you need/i,
+  /interested in (scheduling|booking) a (brief|quick|short) (consultation|call)/i,
+  /\b(guest post|backlinks?|seo services|rank (your|on) (website|google))\b/i,
+]
+
+export function looksLikeSpam(order: BuildOrder): boolean {
+  return SPAM_IDEAS.some((re) => re.test(order.idea))
+}
+
 export async function orderByInvoice(cfg: BuildInvoicing, order: BuildOrder, now = new Date()): Promise<{ build: Invoice; hosting: Invoice }> {
   const doFetch = cfg.fetch ?? fetch
   const base = cfg.payAgentUrl.replace(/\/+$/, '')
