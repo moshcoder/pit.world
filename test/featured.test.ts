@@ -10,7 +10,7 @@ describe('featured ring sites in search', () => {
     expect(names('agentic coding podcast')).toContain('offtherecord.podcast')
   })
   test('every core site is found by its own name', () => {
-    for (const q of ['group call', 'seo rank', 'family ancestry', 'pay agent', 'built indie', 'deadman switch', 'watch wallet', 'resident alerts', 'search peptides', 'auto hacker', 'ad network', 'live streaming', 'pics collage'])
+    for (const q of ['group call', 'seo rank', 'family ancestry', 'pay agent', 'built indie', 'deadman switch', 'watch wallet', 'resident alerts', 'search peptides', 'auto hacker', 'fineprint agent', 'ad network', 'live streaming', 'pics collage'])
       expect(names(q).length).toBeGreaterThan(0)
     expect(names('group call')[0]).toBe('group.call.pit.world')
     expect(names('pics collage')[0]).toBe('pics.collage')
