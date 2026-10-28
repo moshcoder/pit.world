@@ -6,6 +6,7 @@
  * for $2 that CoinPay repeats monthly from day 31. We keep nothing; the order
  * goes to the builder by email and the buyer goes to their $49 invoice.
  */
+import { scoreSubmission, substance } from '@profullstack/form-guard'
 import type { Mailer } from './newsletter.js'
 
 export const BUILD_USD = 49
@@ -40,20 +41,27 @@ export function readOrder(form: Record<string, unknown>): BuildOrder {
   return { email, name: str('name', 80), idea }
 }
 
-/**
- * Contact-form spam: the stock "questions about pricing" notes that are sent to
- * every form on the web. They describe no app, so they get no invoice.
- */
-const SPAM_IDEAS = [
-  /questions? about (your )?(pricing|prices|availability)/i,
-  /general process of working with you/i,
-  /let me know what (details|information) you need/i,
-  /interested in (scheduling|booking) a (brief|quick|short) (consultation|call)/i,
-  /\b(guest post|backlinks?|seo services|rank (your|on) (website|google))\b/i,
-]
+/** Selling to us, not buying: no idea that mentions these is an app. */
+const SELLING = /\b(guest post|backlinks?|seo services|rank (your|on) (website|google))\b/i
+/** Stock enquiry sentences form-guard does not know (it knows the pricing/availability/process one). */
+const CANNED = [/interested in (scheduling|booking) a (brief|quick|short) (consultation|call)/i]
 
+/**
+ * Contact-form spam: the stock "questions about pricing, availability, and the
+ * general process of working with you" note sent to every form on the web.
+ * It is spam only when nothing is left once its stock sentences and
+ * pleasantries are taken out (form-guard's substance()), so a real buyer who
+ * opens with the same line and then describes an app still gets an invoice.
+ */
 export function looksLikeSpam(order: BuildOrder): boolean {
-  return SPAM_IDEAS.some((re) => re.test(order.idea))
+  if (SELLING.test(order.idea)) return true
+  const canned = scoreSubmission({ message: order.idea }).signals.includes('contentless_request') || CANNED.some((re) => re.test(order.idea))
+  if (!canned) return false
+  const rest = substance(order.idea)
+    .split(/(?<=[.!?])\s+/)
+    .filter((s) => !CANNED.some((re) => re.test(s)))
+    .join(' ')
+  return rest.length < 20
 }
 
 export async function orderByInvoice(cfg: BuildInvoicing, order: BuildOrder, now = new Date()): Promise<{ build: Invoice; hosting: Invoice }> {

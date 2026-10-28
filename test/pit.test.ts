@@ -612,6 +612,9 @@ describe('/build', () => {
     expect(spam.headers.get('location')).toBe('/build')
     expect(sent).toHaveLength(0)
     expect(mails).toHaveLength(0)
+    const seo = await post({ idea: 'We offer guest post and backlinks packages for your site', email: 'a@b.example', name: 'S' }, '203.0.113.11')
+    expect(seo.headers.get('location')).toBe('/build')
+    expect(sent).toHaveLength(0)
 
     const ok = await post({ idea: 'A booking page for my barbershop\nwith reminders', email: 'Pat@Example.com', name: 'Pat' })
     expect(ok.status).toBe(302)
