@@ -591,8 +591,8 @@ describe('/build', () => {
       keys: {},
       buildInvoicing: { payAgentUrl: 'https://pa.test/', key: 'pa_test', fetch: payAgent, notifyTo: 'builder@example.com', mailer: async (m) => void mails.push(m) },
     })
-    const post = (form: Record<string, string>) =>
-      instance.request('/build/invoice', { method: 'POST', body: new URLSearchParams(form).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded' } }, { ip: '203.0.113.9' })
+    const post = (form: Record<string, string>, ip = '203.0.113.9') =>
+      instance.request('/build/invoice', { method: 'POST', body: new URLSearchParams(form).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded' } }, { ip })
 
     expect(await (await instance.request('/build', {}, { ip: '203.0.113.9' })).text()).toContain('action="/build/invoice"')
     const bad = await post({ idea: 'A booking page for my shop', email: 'nope' })
@@ -603,6 +603,13 @@ describe('/build', () => {
     const bot = await post({ idea: "Hello, I'm interested in scheduling a brief consultation", email: 'x+y@example.com', name: 'Anna', website: 'https://spam.example' })
     expect(bot.status).toBe(302)
     expect(bot.headers.get('location')).toBe('/build')
+    expect(sent).toHaveLength(0)
+    expect(mails).toHaveLength(0)
+
+    // Stock contact-form spam (2026-10-28): no honeypot hit, but no app either, so no invoice and no email.
+    const spam = await post({ idea: 'Hello, I have a few questions about pricing, availability, and the general process of working with you. Please let me know what details you need from me to proceed. Thanks!', email: 'someone+abc@gmail.com', name: 'Samuel' }, '203.0.113.10')
+    expect(spam.status).toBe(302)
+    expect(spam.headers.get('location')).toBe('/build')
     expect(sent).toHaveLength(0)
     expect(mails).toHaveLength(0)
 

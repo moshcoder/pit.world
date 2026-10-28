@@ -9,7 +9,7 @@ import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
 import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
-import { orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
+import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { snippetFor } from './footer.js'
@@ -225,7 +225,13 @@ export function createApp(deps: Deps) {
     // The honeypot (as on /subscribe): a bot that fills it is sent back to /build and no invoice is made.
     if (typeof form.website === 'string' && form.website !== '') return c.redirect('/build')
     try {
-      const { build } = await orderByInvoice(cfg, readOrder(form))
+      const order = readOrder(form)
+      // Stock contact-form spam is answered like the honeypot: back to /build, no invoice, no email.
+      if (looksLikeSpam(order)) {
+        console.log('build order: spam ignored from', order.email)
+        return c.redirect('/build')
+      }
+      const { build } = await orderByInvoice(cfg, order)
       return c.redirect(build.url)
     } catch (e) {
       return again(e instanceof Error ? e.message : String(e), e instanceof OrderError && !e.message.startsWith('pay.agent') ? 400 : 502)
