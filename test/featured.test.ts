@@ -1,5 +1,14 @@
 import { describe, expect, test } from 'bun:test'
-import { featuredFor } from '../src/featured.ts'
+import { backfillFor, featuredFor } from '../src/featured.ts'
+
+describe('backfill for a search that matched none of our sites', () => {
+  test('is stable for a query, varies across queries, and is never pit.world itself', () => {
+    expect(backfillFor('kitchen remodel')?.name).toBe(backfillFor('Kitchen  remodel')?.name)
+    const picks = new Set(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((q) => backfillFor(`query ${q}`)?.name))
+    expect(picks.size).toBeGreaterThan(2)
+    expect(picks.has('pit.world')).toBe(false)
+  })
+})
 
 const names = (q: string) => featuredFor(q).map((s) => s.name)
 

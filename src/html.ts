@@ -51,9 +51,11 @@ const fmt = (n: number) => n.toLocaleString('en-US')
 
 /**
  * crawlproof analytics and ads, on pit.world's own pages only: the *.pit.world relay
- * (proxy.ts) serves other people's sites and never gets either. Neither runs on search
- * results, whose URL is the query. Ads are a cross-origin sandboxed iframe, so
- * the ad sees pit.world's origin and nothing else. CRAWLPROOF_AD_SLOT=off turns ads off.
+ * (proxy.ts) serves other people's sites and never gets either. Analytics never runs on
+ * search results, whose URL is the query. The ad does (one line after the third result,
+ * Anthony 2026-10-29), because it is a cross-origin sandboxed iframe sent with an
+ * origin-only referrer: the ad sees pit.world's origin and nothing else, never the query.
+ * CRAWLPROOF_AD_SLOT=off turns ads off.
  */
 const TRACKER_SITE = '81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05'
 export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '782907b4-bf27-44bf-b202-df196c4b207e'
@@ -290,7 +292,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
     .join('')}</ol>`
 }
 
-export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[] }): string {
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite }): string {
   const { query, vertical, result, promos, error } = options
   const hits = result?.hits ?? []
   const label = VERTICALS.find((v) => v.id === vertical)!.label
@@ -304,13 +306,26 @@ ${tabs(query, vertical)}
   ${promoStrip(promos, vertical)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   ${hits.length ? mediaList(vertical, hits) : ''}
+  ${hits.length ? adUnit() : ''}
+  ${featuredBox(options.backfill ? [options.backfill] : undefined)}
   ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
   ${result ? `<p class="via">${label} from the Google index, fetched by pit.world. Thumbnails are loaded through pit.world too, so Google and YouTube never see your IP address, browser or cookies.</p>` : ''}
 </main>`
   return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[] }): string {
+/** Web results before the one ad line: in the content, never at the top, never by the footer. */
+const AD_AFTER = 3
+
+function hitItem(h: SearchResult['hits'][number]): string {
+  return `<li>
+      <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
+      <div class="url">${esc(h.host)}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
+      ${h.description ? `<p>${esc(h.description)}</p>` : ''}
+    </li>`
+}
+
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite }): string {
   const { query, result, resolution, error } = options
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
@@ -326,16 +341,11 @@ ${tabs(query, 'web')}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a>${options.card ? '' : ` · <a href="/b/${encodeURIComponent(domain)}">business listing</a>`}</p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   <ol class="hits">
-    ${hits
-      .map(
-        (h) => `<li>
-      <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
-      <div class="url">${esc(h.host)}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
-      ${h.description ? `<p>${esc(h.description)}</p>` : ''}
-    </li>`,
-      )
-      .join('')}
+    ${hits.slice(0, AD_AFTER).map(hitItem).join('')}
   </ol>
+  ${hits.length ? adUnit() : ''}
+  ${hits.length > AD_AFTER ? `<ol class="hits" start="${AD_AFTER + 1}">${hits.slice(AD_AFTER).map(hitItem).join('')}</ol>` : ''}
+  ${featuredBox(options.backfill ? [options.backfill] : undefined)}
   ${!error && hits.length === 0 ? '<p class="notice">Nothing found. Try other words, or a bang like <code>!ddg</code>.</p>' : ''}
   <p class="elsewhere">Try this search on <a href="/search?q=${encodeURIComponent(`${query} !ddg`)}">DuckDuckGo</a>, <a href="/search?q=${encodeURIComponent(`${query} !b`)}">Brave</a> or <a href="/search?q=${encodeURIComponent(`${query} !g`)}">Google</a>, without a referrer.</p>
   ${result?.provider ? `<p class="via">Results from the ${listFormat.format(result.provider.split('+').map((p) => LABELS[p as Provider] ?? p))} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
@@ -361,7 +371,7 @@ export function privacyPage(): string {
 <li><b>Your searches, to anyone else.</b> Search results pages load nothing from a third party.</li>
 </ul>
 <h2 id="analytics">Analytics and ads, outside search</h2>
-<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); neither one runs on search results, so neither ever sees a query. The ad frame is told only that it is on pit.world. Fonts and every other script still come from pit.world.</p>
+<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); it never runs on search results, so it never sees a query. Search results show one crawlproof ad line, marked Sponsored, in the same sandboxed frame: the frame is told only that it is on pit.world, never what you searched for. Boxes marked "Featured on pit.world" are our own sites, not ads, and nobody pays for them. Fonts and every other script still come from pit.world.</p>
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
