@@ -59,6 +59,7 @@ export const RING: RingSite[] = [
   { name: 'offtherecord.podcast', about: 'Off The Record: a Silicon Valley veteran programmer on fleet engineering, agentic coding bots and building a new internet.', moshpit: true, feed: 'https://offtherecord.podcast.pit.world/feed.xml', keywords: ['off the record', 'otr', 'podcast', 'interview', 'agentic coding'] },
   { name: 'live.streaming', about: 'Radio and TV stations, live now: AI-composed music, tracks shared by listeners, and more.', moshpit: true, keywords: ['radio', 'live tv', 'stations', 'stream'] },
   { name: 'pics.collage', about: 'Make photo collages on your phone: grids, freestyle, stickers, text and backgrounds. Free, no account, works offline.', moshpit: true, keywords: ['collage', 'photo grid', 'photo editor'] },
+  { name: 'my.ip', about: 'Your public IPv4 and IPv6 in one answer, as text or JSON. curl -L my.ip.pit.world', moshpit: true, keywords: ['my ip', 'what is my ip', 'ip address', 'ipv6', 'ipv4'] },
 ]
 
 let source: (() => ListingMember[]) | null = null
