@@ -30,7 +30,8 @@ import { isPublicAddress, normalizeDomain, type MoshpitAccess } from './listings
 import { FOOTER_CSS, footerMarkup } from './footer.js'
 
 export const PROXY_SUFFIX = '.pit.world'
-const ASSET = '/.pit/proxy.css'
+const ASSET_PATH = '/.pit/proxy.css'
+const ASSET = `${ASSET_PATH}?v=contrast-1`
 const HOP = new Set(['connection', 'keep-alive', 'proxy-connection', 'transfer-encoding', 'upgrade', 'te', 'trailer', 'proxy-authorization', 'proxy-authenticate', 'host', 'content-length', 'accept-encoding'])
 const MAX_REWRITE = 8 * 1024 * 1024
 
@@ -268,7 +269,7 @@ export type ProxyDeps = { access: MoshpitAccess; certs: Certs; targets?: Targets
 export async function proxyRequest(request: Request, name: string, ip: string, proto: string, deps: ProxyDeps): Promise<Response> {
   const url = new URL(request.url)
   const proxyHost = `${name}${PROXY_SUFFIX}`
-  if (url.pathname === ASSET) return new Response(PROXY_CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' } })
+  if (url.pathname === ASSET_PATH) return new Response(PROXY_CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' } })
 
   const found = await (deps.targets ?? defaultTargets).get(name, deps.access)
   if (found.state === 'unreachable')

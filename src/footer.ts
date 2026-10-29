@@ -99,12 +99,12 @@ export function snippetFor(value: string | null | undefined): string | null {
 
 // all:initial keeps the host page's CSS out; it also drops the UA popover rules, hence height:fit-content
 // and the :not(:popover-open) line.
-export const FOOTER_CSS = `.pit-foot,.pit-foot-modal{all:initial;box-sizing:border-box;font:13px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#5b6555}
+export const FOOTER_CSS = `.pit-foot,.pit-foot-modal{all:initial;box-sizing:border-box;font:14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;color:#273321}
 .pit-foot *{box-sizing:border-box;font:inherit;color:inherit}
-.pit-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:4px 16px;margin:0 auto;padding:12px 16px;max-width:960px;text-align:center}
-.pit-foot b{font-weight:600;color:#2a3324}
+.pit-foot{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:6px 16px;margin:16px auto 8px;padding:14px 18px;max-width:960px;text-align:center;background:#f4f8ee;border:1px solid #d1dac7;border-top:2px solid #4d8a00;border-radius:8px}
+.pit-foot b{font-weight:600;color:#172015}
 .pit-foot-links{display:flex;flex-wrap:wrap;justify-content:center;gap:4px 14px}
-.pit-foot-links>a,.pit-foot-links>button{all:unset;cursor:pointer;color:#2f6b00}
+.pit-foot-links>a,.pit-foot-links>button{all:unset;cursor:pointer;color:#285800}
 .pit-foot-links>a:hover,.pit-foot-links>button:hover{text-decoration:underline}
 .pit-foot a:focus-visible,.pit-foot button:focus-visible{outline:2px solid #4d8a00;outline-offset:2px;border-radius:2px}
 .pit-foot-modal{position:fixed;inset:0;margin:auto;width:min(560px,calc(100vw - 32px));height:fit-content;max-height:calc(100vh - 32px);overflow:auto;padding:22px 24px 18px;border:0;border-radius:12px;background:#fff;color:#2a3324;font-size:14px;line-height:1.55;text-align:left;box-shadow:0 20px 60px rgba(0,0,0,.25)}
@@ -115,7 +115,7 @@ export const FOOTER_CSS = `.pit-foot,.pit-foot-modal{all:initial;box-sizing:bord
 .pit-foot-modal b{font-weight:700}.pit-foot-modal a{color:#2f6b00;text-decoration:underline;cursor:pointer}
 .pit-foot-modal code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:.9em;background:#eef3e7;padding:.05em .3em;border-radius:4px;overflow-wrap:anywhere}
 .pit-foot-x{all:unset;position:absolute;top:8px;right:12px;font-size:22px;line-height:1;padding:4px 6px;cursor:pointer;color:#6b7563}
-@media (prefers-color-scheme:dark){.pit-foot{color:#a9b5a0}.pit-foot b{color:#dfe8d8}.pit-foot-links>a,.pit-foot-links>button{color:#c4ff6b}.pit-foot-modal{background:#151a11;color:#dfe8d8}.pit-foot-modal a{color:#c4ff6b}.pit-foot-modal code{background:#222a1c}.pit-foot-x{color:#a9b5a0}}
+@media (prefers-color-scheme:dark){.pit-foot{background:#151a11;border-color:#384330;border-top-color:#a6ff1a;color:#edf3e8}.pit-foot b{color:#fff}.pit-foot-links>a,.pit-foot-links>button{color:#c4ff6b}.pit-foot-modal{background:#151a11;color:#edf3e8}.pit-foot-modal a{color:#c4ff6b}.pit-foot-modal code{background:#222a1c}.pit-foot-x{color:#c4ff6b}}
 `
 
 // Neutral, inherits the host page's colors: a clearnet site is not dressed in pit.world green.
