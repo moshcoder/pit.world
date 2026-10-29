@@ -589,12 +589,28 @@ describe('/build', () => {
     }) as typeof fetch
     const instance = createApp({
       keys: {},
-      buildInvoicing: { payAgentUrl: 'https://pa.test/', key: 'pa_test', fetch: payAgent, notifyTo: 'builder@example.com', mailer: async (m) => void mails.push(m) },
+      buildInvoicing: { payAgentUrl: 'https://pa.test/', key: 'pa_test', fetch: payAgent, notifyTo: 'builder@example.com', mailer: async (m) => void mails.push(m), guard: { minAgeMs: 0 } },
     })
-    const post = (form: Record<string, string>, ip = '203.0.113.9') =>
+    // A person renders /build first, so every post carries the form guard's token from that page.
+    const token = async () => /name="fg_token" value="([^"]+)"/.exec(await (await instance.request('/build', {}, { ip: '203.0.113.9' })).text())![1]!
+    const raw = (form: Record<string, string>, ip = '203.0.113.9') =>
       instance.request('/build/invoice', { method: 'POST', body: new URLSearchParams(form).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded' } }, { ip })
+    const post = async (form: Record<string, string>, ip = '203.0.113.9') => raw({ fg_token: await token(), ...form }, ip)
 
-    expect(await (await instance.request('/build', {}, { ip: '203.0.113.9' })).text()).toContain('action="/build/invoice"')
+    const page = await instance.request('/build', {}, { ip: '203.0.113.9' })
+    expect(page.headers.get('cache-control')).toBe('no-store')
+    const html = await page.text()
+    expect(html).toContain('action="/build/invoice"')
+    expect(html).toContain('<div aria-hidden="true" class="hp"><label>Website<input type="text" name="website"')
+
+    // The INV-043/044 case: a bot that POSTs without ever rendering the page has no token. No invoice, no email.
+    const direct = await raw({ idea: 'A booking page for my barbershop with reminders', email: 'bot@example.com', name: 'Bot' }, '203.0.113.20')
+    expect(direct.status).toBe(302)
+    expect(direct.headers.get('location')).toBe('/build')
+    const forged = await raw({ fg_token: 'x.y.z', idea: 'A booking page for my barbershop with reminders', email: 'bot@example.com' }, '203.0.113.21')
+    expect(forged.headers.get('location')).toBe('/build')
+    expect(sent).toHaveLength(0)
+    expect(mails).toHaveLength(0)
     const bad = await post({ idea: 'A booking page for my shop', email: 'nope' })
     expect(bad.status).toBe(400)
     expect(await bad.text()).toContain('A booking page for my shop')
