@@ -17,7 +17,7 @@ import { snippetFor } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
 import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
-import { featuredFor } from './featured.js'
+import { backfillFor, featuredFor } from './featured.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
 import { mountListings } from './listings-routes.js'
@@ -326,12 +326,15 @@ export function createApp(deps: Deps) {
     c.header('cache-control', 'no-store')
     if (vertical !== 'web') {
       const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query), promoted.for(query, vertical)])
-      return c.html(mediaPage({ query, vertical, result, promos, error, featured: featuredFor(query) }), result || promos.length ? 200 : 503)
+      const mediaFeatured = featuredFor(query)
+      const mediaBackfill = mediaFeatured.length ? undefined : backfillFor(query)
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     const claimed = deps.listings?.claimedOnly(query)
     const featured = featuredFor(query)
-    return c.html(resultsPage({ query, result, resolution, error, featured, ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+    const backfill = featured.length ? undefined : backfillFor(query)
+    return c.html(resultsPage({ query, result, resolution, error, featured, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
   })
 
   // --- JSON API ---------------------------------------------------------------

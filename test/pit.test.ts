@@ -204,10 +204,23 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com;")
   })
 
-  it('never runs on search results, whose URL is the query', async () => {
+  it('runs no analytics on search results, and the one ad never sees the query', async () => {
     const { request } = app()
     const html = await (await request('/search?q=moshpit+network')).text()
-    expect(html).not.toContain('crawlproof.com')
+    expect(html).not.toContain('crawlproof.com/stats.js')
+    const frames = html.match(/<iframe [^>]*>/g) ?? []
+    expect(frames).toHaveLength(1)
+    expect(frames[0]).toContain('https://crawlproof.com/api/ads/frame?slot=')
+    expect(frames[0]).toContain('format=text_link')
+    expect(frames[0]).toContain('sandbox=')
+    expect(frames[0]).not.toMatch(/moshpit|network/i)
+  })
+
+  it('backfills a search that matches none of our sites with one Featured site, never an ad', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=' + encodeURIComponent('zzqx unrelated words'))).text()
+    expect(html.match(/class="promo featured"/g)?.length).toBe(1)
+    expect(html.indexOf('class="ad-unit"')).toBeLessThan(html.indexOf('class="promo featured"'))
   })
 })
 
@@ -404,8 +417,9 @@ describe('categories: images, videos, music, live', () => {
     expect(html).toContain('src="/img?u=https%3A%2F%2Fencrypted-tbn0.gstatic.com%2Fimages%3Fq%3Dtbn%3Aabc"')
     // A thumbnail host outside the allowlist gets no <img> at all.
     expect(html).not.toContain('tracker.example/pixel')
-    // Nothing loads from another origin, except the footer's built.indie and pwamart badges, which are ours.
-    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/)/)
+    // Nothing loads from another origin, except the footer's built.indie and pwamart badges, which are
+    // ours, and the one sandboxed crawlproof ad frame, which is told only that it is on pit.world.
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|crawlproof\.com\/api\/ads\/frame\?)/)
   })
 
   it('puts PairUX first, then nixamp, above live results', async () => {

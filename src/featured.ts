@@ -46,3 +46,18 @@ export function featuredFor(query: string, max = 2, sites: RingSite[] = RING): R
     .slice(0, max)
     .map((s) => s.site)
 }
+
+/**
+ * One of our own sites for a search that matched none of them, so the space never goes to waste
+ * (Anthony 2026-10-29: search "is a good place to backfill our properties listings, which are
+ * featured, not ads"). Labelled Featured like a match, never Sponsored: paid ads come only from the
+ * crawlproof unit. The pick is stable for a query and spreads across queries; pit.world itself and
+ * claimed listings are left out.
+ */
+export function backfillFor(query: string, sites: RingSite[] = RING): RingSite | undefined {
+  const pool = sites.filter((s) => s.name !== 'pit.world' && !s.listing)
+  if (!pool.length) return undefined
+  let h = 2166136261
+  for (const ch of flat(query)) h = Math.imul(h ^ ch.charCodeAt(0), 16777619) >>> 0
+  return pool[h % pool.length]
+}
