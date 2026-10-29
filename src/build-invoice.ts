@@ -21,6 +21,12 @@ export type BuildInvoicing = {
   /** Who hears about each order. */
   notifyTo?: string
   fetch?: typeof fetch
+  /**
+   * The form's proof-of-render token (@profullstack/form-guard). The secret
+   * defaults to the pay.agent key, which is already stable and server-only;
+   * minAgeMs is the fill-time floor (tests set 0).
+   */
+  guard?: { secret?: string; minAgeMs?: number }
 }
 
 export type BuildOrder = { email: string; name: string; idea: string }

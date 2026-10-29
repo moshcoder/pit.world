@@ -9,6 +9,7 @@ import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
 import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
+import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
 import { looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
@@ -213,17 +214,38 @@ export function createApp(deps: Deps) {
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/connect', (c) => c.html(connectPage()))
-  app.get('/build', (c) => c.html(buildPage({ invoicing: Boolean(deps.buildInvoicing) })))
+  // The house form guard on the invoice form: a signed token minted with the page (a bot that POSTs
+  // without rendering /build has none), a fill-time floor and the honeypot. Rate limiting stays ours.
+  const orderGuard = deps.buildInvoicing
+    ? createFormGuard({
+        secret: deps.buildInvoicing.guard?.secret || deps.buildInvoicing.key,
+        binding: 'build-invoice',
+        honeypotField: 'website',
+        rateLimit: false,
+        ...(deps.buildInvoicing.guard?.minAgeMs !== undefined ? { minAgeMs: deps.buildInvoicing.guard.minAgeMs } : {}),
+      })
+    : null
+  const guardHtml = async () => (orderGuard ? orderGuard.hiddenHTML(await orderGuard.issue(), { className: 'hp' }) : undefined)
+  app.get('/build', async (c) => {
+    c.header('cache-control', 'no-store')
+    return c.html(buildPage({ invoicing: Boolean(deps.buildInvoicing), guard: await guardHtml() }))
+  })
   // /build by invoice: two pay.agent invoices ($49 now, $2 a month from day 31), then the buyer sees the first.
   const orderLimit = new RateLimiter(3, 0.2)
   app.post('/build/invoice', async (c) => {
     const cfg = deps.buildInvoicing
-    if (!cfg) return c.redirect('/build')
+    if (!cfg || !orderGuard) return c.redirect('/build')
     const form = (await c.req.parseBody()) as Record<string, string>
-    const again = (error: string, status: 400 | 429 | 502) => c.html(buildPage({ invoicing: true, error, values: form }), status)
+    const again = async (error: string, status: 400 | 429 | 502) => c.html(buildPage({ invoicing: true, error, values: form, guard: await guardHtml() }), status)
     if (!orderLimit.take(c.env?.ip || 'unknown')) return again('Too many orders from you just now. Try again in a few minutes.', 429)
-    // The honeypot (as on /subscribe): a bot that fills it is sent back to /build and no invoice is made.
-    if (typeof form.website === 'string' && form.website !== '') return c.redirect('/build')
+    // No token, a forged one or a filled honeypot: told it worked (back to /build), no invoice, no email.
+    // A stale page or a too-fast submit is a person often enough to get the form back instead.
+    const verdict = await orderGuard.check({ fields: form, ip: c.env?.ip || null })
+    if (verdict.action === 'drop') {
+      console.log('build order: dropped by form guard:', verdict.reason)
+      return c.redirect('/build')
+    }
+    if (verdict.action === 'retry') return again('That page had been open a while. Please send it again.', 400)
     try {
       const order = readOrder(form)
       // Stock contact-form spam is answered like the honeypot: back to /build, no invoice, no email.
