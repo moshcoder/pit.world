@@ -4,7 +4,7 @@ import { PitClient } from '../src/client.ts'
 import { cleanLinks, isPublicAddress, Listings, normalizeDomain, readMeta, type Verifier } from '../src/listings.ts'
 import { looksLikeName } from '../src/moshpit.ts'
 import { createApp } from '../src/server.ts'
-import { ensurePublicDirectorySeeds } from '../src/directory-seeds.ts'
+import { ensurePublicDirectorySeeds, PUBLIC_DIRECTORY_SEEDS } from '../src/directory-seeds.ts'
 
 function fakeVerifier(state: { txt?: Record<string, string[]>; pages?: Record<string, string> } = {}): Verifier & { state: typeof state } {
   return {
@@ -184,7 +184,7 @@ describe('listings: listed by pit.world (seeded)', () => {
 
   it('adds Trial Stack AI from its public site without inventing a location or license', async () => {
     const h = harness()
-    expect(ensurePublicDirectorySeeds(h.listings)).toBe(1)
+    expect(ensurePublicDirectorySeeds(h.listings)).toBe(PUBLIC_DIRECTORY_SEEDS.length)
     expect(ensurePublicDirectorySeeds(h.listings)).toBe(0)
     const listing = h.listings.toPublic('trialstack.davidts.ai')!
     expect(listing).toMatchObject({ name: 'Trial Stack AI', category: 'software', seeded: true, country: '', license: '' })
