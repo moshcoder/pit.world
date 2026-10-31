@@ -9,7 +9,8 @@ export function readCuratedSeeds(file: URL): SeedInput[] {
   const data: unknown = JSON.parse(readFileSync(file, 'utf8'))
   if (!Array.isArray(data)) throw new Error('Curated business listings must be a JSON array')
   for (const entry of data) {
-    if (!entry || typeof entry !== 'object' || !normalizeDomain(entry.domain) || typeof entry.name !== 'string' || !entry.name.trim()) {
+    const row = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : null
+    if (!row || !normalizeDomain(row.domain) || typeof row.name !== 'string' || !row.name.trim()) {
       throw new Error('Invalid entry in curated business listings')
     }
   }
