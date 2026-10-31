@@ -26,6 +26,7 @@ import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
+import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
@@ -541,6 +542,13 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const refreshDirectoryResearch = () => void enrichNicheDb(listings)
     .then((r) => console.log(`NicheDB / OutreachGraph: checked ${r.checked}, matched ${r.matched}, unmatched ${r.unmatched}, failed ${r.failed}`))
     .catch(() => console.error('NicheDB / OutreachGraph refresh failed'))
+  // Corporate contacts and team links are read from the company's own public site,
+  // never from OutreachGraph's private prospect database.
+  const refreshCompanyMetadata = () => void enrichOfficialCompanySites(listings)
+    .then((r) => console.log(`Official company metadata: checked ${r.checked}, enriched ${r.enriched}, failed ${r.failed}`))
+    .catch(() => console.error('Official company metadata refresh failed'))
+  setTimeout(refreshCompanyMetadata, 30_000).unref()
+  setInterval(refreshCompanyMetadata, 24 * 3600 * 1000).unref()
   setTimeout(refreshDirectoryResearch, 10_000).unref()
   setInterval(refreshDirectoryResearch, 24 * 3600 * 1000).unref()
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
