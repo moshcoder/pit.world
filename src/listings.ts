@@ -14,6 +14,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { dnsMx, normalizeEmail, type Mailer, type MxLookup } from './newsletter.js'
 import { PRICES, categoryOf, cleanServices, normalizeOperator, normalizeWebUrl, ringEligible } from './pros.js'
+import type { CompanySiteFacts, CompanySiteMetadata } from './company-metadata.js'
 import { ensurePromotionSchema } from './promotion-schema.js'
 
 export type Listing = {
@@ -65,6 +66,8 @@ export type Listing = {
   licenseCheckedAt: number | null
   /** Public company directory topics attached only after an exact website-domain match. */
   researchTopics: string[]
+  /** Public contact and team pointers only from this company's own site; not owner-entered. */
+  publicMetadata: CompanySiteMetadata | null
   /** The NicheDB item page that attributes this public OutreachGraph directory record. */
   researchUrl: string
   /** When pit.world last refreshed the public directory record. */
@@ -319,6 +322,7 @@ const MIGRATIONS: Array<[string, string]> = [
   ['license', "ALTER TABLE listings ADD COLUMN license TEXT NOT NULL DEFAULT ''"],
   ['license_checked_at', 'ALTER TABLE listings ADD COLUMN license_checked_at INTEGER'],
   ['research_topics', "ALTER TABLE listings ADD COLUMN research_topics TEXT NOT NULL DEFAULT '[]'"],
+  ['public_metadata', "ALTER TABLE listings ADD COLUMN public_metadata TEXT NOT NULL DEFAULT ''"],
   ['research_url', "ALTER TABLE listings ADD COLUMN research_url TEXT NOT NULL DEFAULT ''"],
   ['researched_at', 'ALTER TABLE listings ADD COLUMN researched_at INTEGER'],
   ['views', 'ALTER TABLE listings ADD COLUMN views INTEGER NOT NULL DEFAULT 0'],
@@ -405,6 +409,7 @@ export class Listings {
       license: row?.license ?? '',
       licenseCheckedAt: row?.license_checked_at ?? null,
       researchTopics: row?.research_topics ? JSON.parse(row.research_topics) : [],
+      publicMetadata: row?.seeded_at && !row?.claimed_at && row?.public_metadata ? JSON.parse(row.public_metadata) as CompanySiteMetadata : null,
       researchUrl: row?.research_url ?? '',
       researchedAt: row?.researched_at ?? null,
       views: row?.views ?? 0,
@@ -726,6 +731,34 @@ export class Listings {
     const domain = normalizeDomain(input)
     if (!domain) return false
     return this.db.run('DELETE FROM listings WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NOT NULL', [domain]).changes > 0
+  }
+
+  /** A website check uses the verifier's public DNS/HTTPS and redirect restrictions. */
+  async companyHomepage(input: unknown): Promise<string | null> {
+    const domain = normalizeDomain(input)
+    if (!domain || !this.toPublic(domain)?.seeded) return null
+    return this.verifier.homepage(domain)
+  }
+
+  needsCompanyMetadataRefresh(input: unknown, maxAgeMs = 24 * 60 * 60 * 1000): boolean {
+    const domain = normalizeDomain(input)
+    const row = domain ? this.row(domain) : null
+    if (!row || !row.seeded_at || row.claimed_at) return false
+    const date = row.public_metadata ? (JSON.parse(row.public_metadata) as CompanySiteMetadata).checkedAt : 0
+    return !date || date < this.now() - maxAgeMs
+  }
+
+  /** Official-site facts are always subordinate to the owner's claimed listing.
+   * A later site change only updates these attributed facts, never owner fields.
+   */
+  setCompanyMetadata(input: unknown, facts: CompanySiteFacts): boolean {
+    const domain = normalizeDomain(input)
+    if (!domain || facts.sourceUrl !== `https://${domain}/`) return false
+    const row = this.row(domain)
+    if (!row?.seeded_at || row.claimed_at) return false
+    const publicMetadata: CompanySiteMetadata = { ...facts, checkedAt: this.now() }
+    return this.db.run('UPDATE listings SET public_metadata = ? WHERE domain = ? AND seeded_at IS NOT NULL AND claimed_at IS NULL',
+      [JSON.stringify(publicMetadata), domain]).changes > 0
   }
 
   /** Attach a public directory record only to its exact, already listed website domain. */
