@@ -20,7 +20,8 @@ export function listingOpenProfile(l: Listing): string {
   const page = `${SITE}/b/${encodeURIComponent(l.domain)}`
   const category = categoryOf(l.category)?.label ?? ''
   const site = siteUrl(l)
-  const links = [...new Set([site, ...l.links, ...(l.feed ? [l.feed] : [])])]
+  const meta = l.publicMetadata
+  const links = [...new Set([site, ...l.links, ...(meta?.contactUrl ? [meta.contactUrl] : []), ...(meta?.teamUrl ? [meta.teamUrl] : []), ...(meta?.socialUrls ?? []), ...(l.feed ? [l.feed] : [])])]
   return renderOpenProfile(
     makeOpenProfile({
       name: l.name || l.domain,
@@ -31,7 +32,10 @@ export function listingOpenProfile(l: Listing): string {
         Location: place(l) || null,
         Area: l.area || null,
         Address: l.address || null,
-        Phone: l.phone || null,
+        Phone: l.phone || meta?.phone || null,
+        PublicBusinessEmail: meta?.email || null,
+        BusinessContactPage: meta?.contactUrl || null,
+        PublicBusinessSource: meta?.sourceUrl || null,
         Hours: l.hours || null,
         Price: l.price ? priceLabel(l.price) : null,
         License: l.license
@@ -47,6 +51,7 @@ export function listingOpenProfile(l: Listing): string {
         listSection('Links', links),
         listSection('Topics', [category]),
         listSection('Services', l.services),
+        listSection('Public company topics', l.researchTopics),
         l.operator
           ? keyedSection('Operator', operatorHref(l.operator) ? { Profile: l.operator } : { Name: l.operator })
           : null,
