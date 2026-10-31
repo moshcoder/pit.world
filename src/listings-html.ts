@@ -40,6 +40,27 @@ export function place(l: Listing): string {
   return [l.city, l.region, l.country].filter(Boolean).join(', ')
 }
 
+
+/** Machine-readable organization metadata from visible, attributed business facts. */
+export function organizationJsonLd(l: Listing): string {
+  const meta = l.publicMetadata
+  const org = {
+    '@context': 'https://schema.org',
+    '@type': 'Organization',
+    name: l.name || l.domain,
+    url: siteUrl(l),
+    ...(l.description ? { description: l.description } : {}),
+    ...(l.category ? { industry: categoryOf(l.category)?.label ?? l.category } : {}),
+    ...(l.phone || meta?.phone ? { telephone: l.phone || meta?.phone } : {}),
+    ...(l.address ? { address: l.address } : {}),
+    ...(l.country ? { areaServed: l.country } : {}),
+    ...(meta?.email ? { email: meta.email } : {}),
+    ...(meta?.socialUrls.length ? { sameAs: meta.socialUrls } : {}),
+    ...(meta?.contactUrl ? { contactPoint: { '@type': 'ContactPoint', url: meta.contactUrl, ...(meta.email ? { email: meta.email } : {}) } } : {}),
+  }
+  return JSON.stringify(org).replace(/</g, '\\u003c')
+}
+
 function details(l: Listing, track?: { domain: string; via: string }): string {
   const beacon = track ? ` data-ev="phone" data-domain="${esc(track.domain)}"${track.via ? ` data-via="${esc(track.via)}"` : ''}` : ''
   const where = place(l)
@@ -54,6 +75,12 @@ function details(l: Listing, track?: { domain: string; via: string }): string {
     l.hours && `<li><b>Hours</b> ${esc(l.hours)}</li>`,
     l.address && `<li><b>Address</b> ${esc(l.address)}</li>`,
     licenseRow(l),
+
+    !l.phone && l.publicMetadata?.phone && `<li><b>Public business phone</b> ${esc(l.publicMetadata.phone)} · ${ext(l.publicMetadata.sourceUrl, 'Company source')}</li>`,
+    l.publicMetadata?.contactUrl && `<li><b>Contact company</b> ${ext(l.publicMetadata.contactUrl, 'Official contact page')}</li>`,
+    l.publicMetadata?.email && `<li><b>Public business inbox</b> ${ext(`mailto:${l.publicMetadata.email}`, l.publicMetadata.email)} · ${ext(l.publicMetadata.sourceUrl, 'Company source')}</li>`,
+    l.publicMetadata?.teamUrl && `<li><b>People / leadership</b> ${ext(l.publicMetadata.teamUrl, 'Official team page')}</li>`,
+    ...((l.publicMetadata?.socialUrls ?? []).map((u) => `<li><b>Official social</b> ${ext(u, bare(u))}</li>`)),
     l.phone && `<li><b>Phone</b> <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}"${beacon}>${esc(l.phone)}</a></li>`,
     l.moshpit && `<li><b>On Moshpit</b> ${ext(`https://${l.moshpit}/`, l.moshpit)} · ${ext(proxyUrl(l.moshpit), `${l.moshpit}.pit.world`)} <span class="muted">(any browser)</span></li>`,
     l.feed && `<li><b>Feed</b> ${ext(l.feed, bare(l.feed))}</li>`,
@@ -139,9 +166,10 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
     description: l.description || `${l.domain} on pit.world`,
     path: `/b/${p(l.domain)}`,
     noindex: !l.claimed && !l.seeded,
-    ...(hasOpenProfile(l) ? { head: `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n` } : {}),
+    ...(hasOpenProfile(l) ? { head: `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n<script type="application/ld+json">${organizationJsonLd(l)}</script>\n` } : {}),
     body: `<p class="kicker">${l.sponsoredUntil ? 'Featured · Paid placement · ' : ''}Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
+${l.category ? `<p class="row"><a class="chip" href="/pros/${p(l.category)}">${esc(categoryOf(l.category)?.label ?? l.category)}</a></p>` : ''}
 <p class="small"><a href="/pros">Business directory</a> · <a href="/b/${p(l.domain)}/featured">Feature or manage this business · $19/month</a></p>
 <p><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a></p>
 ${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'}
@@ -325,12 +353,13 @@ export function prosPage(options: { listings: Listing[]; total: number; category
       const where = [l.area, place(l)].filter(Boolean).join(' · ')
       return `<li class="pro">
   ${l.sponsoredUntil ? '<p class="paid-label">Featured · Paid placement</p>' : ''}<h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> ${l.claimed ? '<span class="verified" title="Verified owner">✓</span>' : '<span class="small">unclaimed</span>'}</h3>
-  <p class="small">${[l.category ? esc(categoryOf(l.category)?.label ?? '') : '', where ? esc(where) : '', l.price ? esc(priceLabel(l.price)) : ''].filter(Boolean).join(' · ') || esc(l.domain)}</p>
+  ${l.category ? `<p><a class="chip" href="/pros/${p(l.category)}">${esc(categoryOf(l.category)?.label ?? l.category)}</a></p>` : ''}
+  <p class="small">${[where ? esc(where) : '', l.price ? esc(priceLabel(l.price)) : ''].filter(Boolean).join(' · ') || esc(l.domain)}</p>
   ${l.description ? `<p>${esc(l.description.length > 220 ? `${l.description.slice(0, 217)}…` : l.description)}</p>` : ''}
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
   ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
   ${l.researchTopics.length ? `<p class="small">${esc(l.researchTopics.slice(0, 4).join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'Source')}` : ''}</p>` : ''}
-  <p class="row"><a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
+  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
 </li>`
     })
     .join('')
