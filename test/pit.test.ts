@@ -201,7 +201,7 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("frame-ancestors 'none'")
     // The footer's built.indie badge is a cross-origin image; CSP must let it load.
     expect(footer).toContain('https://built.indie.pit.world/for.svg')
-    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com;")
+    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com;")
   })
 
   it('runs no analytics on search results, and the one ad never sees the query', async () => {
@@ -419,7 +419,7 @@ describe('categories: images, videos, music, live', () => {
     expect(html).not.toContain('tracker.example/pixel')
     // Nothing loads from another origin, except the footer's built.indie and pwamart badges, which are
     // ours, and the one sandboxed crawlproof ad frame, which is told only that it is on pit.world.
-    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|crawlproof\.com\/api\/ads\/frame\?)/)
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|profullstack\.com\/assets\/logo\.svg|crawlproof\.com\/api\/ads\/frame\?)/)
   })
 
   it('puts PairUX first, then nixamp, above live results', async () => {
