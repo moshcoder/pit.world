@@ -44,15 +44,14 @@ describe('official company metadata', () => {
     expect(item.publicMetadata?.email).toBe('sales@company.example')
     expect(item.publicMetadata?.teamUrl).toBe('https://company.example/team')
     expect(await enrichOfficialCompanySites(store, 1)).toEqual({ checked: 0, enriched: 0, failed: 0 })
-    const claim = store.startClaim(domain)!
-    const verified = new Listings(':memory:', {
-      txt: async () => [claim.token], homepage: async () => html,
-    })
-    // The owner takes over the same listing; enrichment does not publish stale unclaimed facts.
-    verified.seed({domain, name: 'Example Company'})
-    const initiated = verified.startClaim(domain)!
-    // Fake verifier's TXT response is set above; ownership is proven through that challenge.
-    expect((await verified.verify(initiated.claimId)).ok).toBe(true)
-    expect(verified.toPublic(domain)?.publicMetadata).toBeNull()
+    // On ownership verification, the enriched facts are hidden in favor of the owner.
+    let txt: string[] = []
+    const owner = new Listings(':memory:', { txt: async () => txt, homepage: async () => html })
+    owner.seed({ domain, name: 'Owner-controlled company' })
+    expect(owner.setCompanyMetadata(domain, parseCompanyHomepage(html, domain)!)).toBe(true)
+    const challenge = owner.startClaim(domain)!
+    txt = [challenge.token]
+    expect((await owner.verify(challenge.claimId)).ok).toBe(true)
+    expect(owner.toPublic(domain)?.publicMetadata).toBeNull()
   })
 })
