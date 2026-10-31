@@ -1,0 +1,28 @@
+[
+  {
+    "domain": "powellind.com",
+    "name": "Powell Industries, Inc.",
+    "description": "Houston-based manufacturer and engineering provider of electrical power distribution and control equipment, including switchgear, circuit breakers, integrated power solutions and services for data centers, industrial facilities and utilities.",
+    "phone": "713-944-6900",
+    "address": "8550 Mosley Road, Houston, TX 77075",
+    "category": "industrial",
+    "area": "United States and international markets",
+    "city": "Houston",
+    "region": "Texas",
+    "country": "United States",
+    "services": [
+      "Medium- and low-voltage switchgear",
+      "Circuit breakers and electrical distribution systems",
+      "Integrated packaged electrical solutions",
+      "Data center power distribution",
+      "Project engineering and integration",
+      "Commissioning, maintenance and modernization",
+      "Industrial automation and control"
+    ],
+    "links": [
+      "https://www.powellind.com/",
+      "https://www.powellind.com/contact"
+    ],
+    "featured": 0
+  }
+]
