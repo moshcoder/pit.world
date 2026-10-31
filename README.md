@@ -64,6 +64,19 @@ No key is needed. `PIT_URL` points it at another pit.world instance (default `ht
 
 Powell Industries is listed as an unclaimed electrical-infrastructure company in `src/directory-seeds.ts`, using the existing server-side `ensurePublicDirectorySeeds` import. View it at `/b/powellind.com` or browse `/pros/industrial`. Business owners can claim their entry using the standard verification process. The legacy `/pro` route already redirects to `/pros`. This directory listing does not imply endorsement, partnership, or any acquisition by xAI.
 
+### Business metadata and company enrichment
+
+Every company listing has a canonical website and a categorized directory page. `/pros/industrial` is the industrial electrical-power category, and `/b/powellind.com` is Powell Industries' profile. Both the directory cards and detail pages show the category prominently, along with website and publicly listed phone, when known. A JSON-LD `Organization` block on the detail page, the JSON API (`/api/listing` / `/api/pros`) and `/b/<domain>/openprofile.md` expose the same public facts to search engines and agents.
+
+Two independent, daily source-driven enrichments run on the existing listings:
+
+- **NicheDB / OutreachGraph:** `src/nichedb.ts` matches the exact website hostname from NicheDB's public OutreachGraph directory mirror and adds attributed business/industry/technology topics. Only company records are accepted; person or site rows are not used as proof of a business association. The OutreachGraph public export intentionally **does not expose emails, phone numbers, locations, or CRM leads**. No private API token or workspace campaign data is used.
+- **Official company website:** `src/official-company-sites.ts` uses the existing SSRF-checked HTTPS verifier for unclaimed, seeded companies only, bounded to three concurrent requests, with a 24-hour refresh. `src/company-metadata.ts` extracts an explicitly linked same-domain contact page, team/leadership page, company social links, role-based public company inbox (`info@`, `sales@`, etc.), and a corporate phone only from matching on-domain Organization JSON-LD. It never guesses a person's address or imports CRM contact data. Each fact retains the company's site as its source. An owner claim hides these automatic facts rather than overriding owner-entered data. A missing or unavailable site remains un-enriched; no fake fields are filled.
+
+**People enrichment:** PIT links to an official team/leadership page when one is explicitly published by the company. Do not import named prospects from OutreachGraph into PIT's public directory unless their company affiliation has explicit, authoritative public evidence, and only use their public, voluntarily published professional profiles. Keep private campaigns, scores, guessed emails, personal phone numbers, and unpublished OpenProfile.md files out of public profiles. This phase does not replicate OutreachGraph's people database.
+
+Deployment note: changes to the code do not update a running process by themselves. After deployment, server startup migrates the listings SQLite database and refresh jobs fill metadata; verify `GET /api/pros/categories`, `GET /api/listing?domain=powellind.com`, and `/pros/industrial` to confirm live data and category counts.
+
 ## Promotion campaigns: promote first, then show the results
 
 A promotion campaign lists and promotes the businesses an [OutreachGraph](https://outreachgraph.com) campaign targets, measures what that did for each one over its own 30-day window, and only then writes to them, with the numbers. It is how the Los Gatos builders campaign runs ([pit.world/roundup/los-gatos-builders](https://pit.world/roundup/los-gatos-builders)).
