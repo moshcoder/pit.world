@@ -24,6 +24,7 @@ import { FeaturedBusinesses } from './business-featured.js'
 import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
+import { applyCuratedSeeds, readCuratedSeeds } from './curated-seeds.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
@@ -493,6 +494,8 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const rootPem = readFileSync(new URL('../public/moshpit-root-ca.crt', import.meta.url), 'utf8')
   const mailer = env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null
   const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }), undefined, { mailer })
+  // Editorial seed data is imported once per domain; owners can claim or opt out.
+  applyCuratedSeeds(listings, readCuratedSeeds(new URL('../data/curated-listings.json', import.meta.url)))
   const ringSync = env.RSSAMPLIFIER_API_KEY
     ? new RingSync({ apiKey: env.RSSAMPLIFIER_API_KEY, ...(env.RSSAMPLIFIER_URL ? { base: env.RSSAMPLIFIER_URL } : {}), ...(env.RSSAMPLIFIER_RING ? { slug: env.RSSAMPLIFIER_RING } : {}) })
     : undefined
