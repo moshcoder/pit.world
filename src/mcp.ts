@@ -43,7 +43,7 @@ export function createMcpServer(client = new PitClient()): McpServer {
 
   server.tool(
     'pros',
-    `Search the pit.world pro directory: businesses and independent pros. claimed=true means the owner verified their own site; seeded=true means pit.world listed it from public records (e.g. a CSLB contractor license, shown in license) and the owner has not claimed it yet. No paid placement and no reviews; a few featured listings first, then verified owners by latest edit. Filter by category (one of: ${CATEGORIES.map((c) => c.slug).join(', ')}), by place (city, region or country words), and by words (what the person needs).`,
+    `Search the pit.world pro directory: businesses and independent pros. claimed=true means the owner verified their own site; seeded=true means pit.world listed it from public records (e.g. a CSLB contractor license, shown in license) and the owner has not claimed it yet. Paid featured placements are identified by sponsoredUntil (a future timestamp), then editorial listings and verified owners. No reviews. Filter by category (one of: ${CATEGORIES.map((c) => c.slug).join(', ')}), by place (city, region or country words), and by words (what the person needs).`,
     {
       query: z.string().max(120).optional(),
       category: z.enum(CATEGORIES.map((c) => c.slug) as [string, ...string[]]).optional(),

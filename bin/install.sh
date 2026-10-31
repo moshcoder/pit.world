@@ -244,6 +244,7 @@ SELECT CASE WHEN EXISTS (SELECT 1 FROM pg_roles WHERE rolname = :'role')
 SELECT format('CREATE DATABASE %I OWNER %I', :'role', :'role')
   WHERE NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = :'role') \gexec
 SQL
+  # threatcrush-disable-next-line secret-database-url  Format template, not a credential: $pw is freshly generated above; db.env is written under umask 077.
   ( umask 077; printf "DATABASE_URL='postgres://%s:%s@127.0.0.1:%s/%s'\n" "$db" "$pw" "$port" "$db" >> "$STATE_DIR/db.env" )
   log "postgres: created $db, DATABASE_URL in $STATE_DIR/db.env"
 }

@@ -139,8 +139,9 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
     path: `/b/${p(l.domain)}`,
     noindex: !l.claimed && !l.seeded,
     ...(hasOpenProfile(l) ? { head: `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n` } : {}),
-    body: `<p class="kicker">Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
+    body: `<p class="kicker">${l.sponsoredUntil ? 'Featured · Paid placement · ' : ''}Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
+<p class="small"><a href="/pros">Business directory</a> · <a href="/b/${p(l.domain)}/featured">Feature or manage this business · $19/month</a></p>
 <p><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a></p>
 ${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'}
 ${details(l, { domain: l.domain, via })}
@@ -261,6 +262,7 @@ ${l.claimed ? '' : `<p class="notice">This listing is not claimed yet. <a href="
   <h2>Links</h2>
   ${field('links', 'Links (one per line, up to 5)', l.links.join('\n'), 1600, true)}
   ${field('moshpit', 'Moshpit name (e.g. acme.bakery)', l.moshpit, 253)}
+  <h2>Featured placement</h2><p><a href="/b/${p(l.domain)}/featured">Get featured or manage your $19/month plan →</a></p>
   <h2>Pro directory listing</h2>
   <label for="listed">In the <a href="/pros">pro directory</a></label><select id="listed" name="listed"><option value="in"${l.listed || !l.claimed ? ' selected' : ''}>Listed</option><option value="out"${l.claimed && !l.listed ? ' selected' : ''}>Take it out of the directory</option></select>
   <p class="small">Out of the directory, this page still answers at pit.world/b/${esc(l.domain)}.</p>
@@ -321,7 +323,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
     .map((l) => {
       const where = [l.area, place(l)].filter(Boolean).join(' · ')
       return `<li class="pro">
-  <h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> ${l.claimed ? '<span class="verified" title="Verified owner">✓</span>' : '<span class="small">unclaimed</span>'}</h3>
+  ${l.sponsoredUntil ? '<p class="paid-label">Featured · Paid placement</p>' : ''}<h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> ${l.claimed ? '<span class="verified" title="Verified owner">✓</span>' : '<span class="small">unclaimed</span>'}</h3>
   <p class="small">${[l.category ? esc(categoryOf(l.category)?.label ?? '') : '', where ? esc(where) : '', l.price ? esc(priceLabel(l.price)) : ''].filter(Boolean).join(' · ') || esc(l.domain)}</p>
   ${l.description ? `<p>${esc(l.description.length > 220 ? `${l.description.slice(0, 217)}…` : l.description)}</p>` : ''}
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
@@ -335,12 +337,13 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   const chips = CATEGORIES.map((c) => `<a class="chip${cat?.slug === c.slug ? ' on' : ''}" href="/pros/${p(c.slug)}" title="${esc(c.examples)}">${esc(c.label)}${options.counts[c.slug] ? ` <span>${options.counts[c.slug]}</span>` : ''}</a>`).join('')
   return docPage({
     title: `${heading}${options.near ? ` near ${options.near}` : ''} · pit.world pros`,
-    description: cat ? `${cat.label} (${cat.examples}) on pit.world. No paid placement, no fake reviews.` : 'A directory of businesses and pros: verified owners and licensed businesses waiting to claim. No paid placement, no fake reviews, no tracking.',
+    description: cat ? `${cat.label} (${cat.examples}) on pit.world. Clearly labeled paid placements, no fake reviews.` : 'A directory of businesses and pros: verified owners and licensed businesses waiting to claim. Clearly labeled paid placements, no fake reviews, no search tracking.',
     path: cat ? `/pros/${p(cat.slug)}` : '/pros',
     noindex: Boolean(options.q || options.near || options.page > 1),
     body: `<p class="kicker">Pro directory</p>
 <h1>${esc(heading)}</h1>
-<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> ones were listed by pit.world from public records (a state license, the business's own website) and are waiting for their owner. Nobody pays to be placed higher and there are no star ratings to buy: a few listings pit.world features come first, then verified owners by latest edit. Get in touch with a person, not a lead broker.</p>
+<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> ones were listed by pit.world from public records (a state license, the business's own website) and are waiting for their owner. Featured businesses pay $19/month and are labeled “Paid placement”. Other listings keep their editorial order. Payment does not buy a verified-owner badge, license verification or reviews. Get in touch with a person, not a lead broker.</p>
+<p><a class="btn" href="/featured">Feature your business · $19/month</a> <a href="/b">Claim a free listing</a></p>
 <form class="listing-lookup" action="${cat ? `/pros/${p(cat.slug)}` : '/pros'}" method="get">
   <input name="q" value="${esc(options.q)}" placeholder="What do you need? (plumber, tax prep, web app)" aria-label="What you need" maxlength="120">
   <input name="near" value="${esc(options.near)}" placeholder="Where? (city, region or country)" aria-label="Where" maxlength="120">

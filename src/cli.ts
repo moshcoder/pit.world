@@ -33,7 +33,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
        [--contact EMAIL|""] [--ring in|out] [--name N] [--description D]
                                edit your listing (or PIT_EDIT_KEY=... instead of --key)
   pit pros [WORDS] [--category SLUG] [--near PLACE]
-                               the pro directory: verified and licensed businesses, no paid placement
+                               the pro directory: verified and licensed businesses, labeled paid features
   pit categories               the directory's categories
   pit quote DOMAIN --name N --email E --message M [--phone P]
                                ask one listed pro for a quote; they reply to your email

@@ -57,6 +57,8 @@ export type Listing = {
   seeded: boolean
   /** Editorial order in the directory: higher first. Never sold. */
   featured: number
+  /** Paid feature window; expired placements are never marked sponsored. */
+  sponsoredUntil?: number | null
   /** A public license the listing was checked against, e.g. "CSLB #349328 (B - General Building)". */
   license: string
   /** When pit.world last saw that license active at the issuer. */
@@ -307,6 +309,7 @@ const MIGRATIONS: Array<[string, string]> = [
   ['moshpit_only', 'ALTER TABLE listings ADD COLUMN moshpit_only INTEGER NOT NULL DEFAULT 0'],
   ['seeded_at', 'ALTER TABLE listings ADD COLUMN seeded_at INTEGER'],
   ['featured', 'ALTER TABLE listings ADD COLUMN featured INTEGER NOT NULL DEFAULT 0'],
+  ['featured_paid_until', 'ALTER TABLE listings ADD COLUMN featured_paid_until INTEGER'],
   ['license', "ALTER TABLE listings ADD COLUMN license TEXT NOT NULL DEFAULT ''"],
   ['license_checked_at', 'ALTER TABLE listings ADD COLUMN license_checked_at INTEGER'],
   ['views', 'ALTER TABLE listings ADD COLUMN views INTEGER NOT NULL DEFAULT 0'],
@@ -389,6 +392,7 @@ export class Listings {
       claimed: Boolean(row?.claimed_at),
       seeded: Boolean(row?.seeded_at && !row?.claimed_at),
       featured: row?.featured ?? 0,
+      sponsoredUntil: (row?.featured_paid_until ?? 0) > this.now() ? row.featured_paid_until : null,
       license: row?.license ?? '',
       licenseCheckedAt: row?.license_checked_at ?? null,
       views: row?.views ?? 0,
@@ -635,9 +639,9 @@ export class Listings {
           : `SELECT *, (SELECT MIN(COALESCE(m.display_order, 1000000)) FROM promo_members m JOIN promo_campaigns pc ON pc.id = m.campaign_id
                        WHERE m.domain = listings.domain AND m.priority = 1 AND m.state = 'verified' AND pc.state IN ('active', 'paused')) AS promo_rank
              FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0
-             ORDER BY promo_rank IS NULL, promo_rank, featured DESC, CASE WHEN promo_rank IS NULL THEN '' ELSE lower(name) END, claimed_at IS NULL, updated_at DESC, domain`,
+             ORDER BY CASE WHEN featured_paid_until > ? THEN 0 ELSE 1 END, promo_rank IS NULL, promo_rank, featured DESC, CASE WHEN promo_rank IS NULL THEN '' ELSE lower(name) END, claimed_at IS NULL, updated_at DESC, domain`,
       )
-      .all() as any[]
+      .all(...(query.claimedOnly ? [] : [this.now()])) as any[]
     const matched = rows
       .map((row) => this.toListing(row, row.domain))
       .filter((l) => !category || l.category === category)
