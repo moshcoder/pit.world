@@ -359,7 +359,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
   ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
   ${l.researchTopics.length ? `<p class="small">${esc(l.researchTopics.slice(0, 4).join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'Source')}` : ''}</p>` : ''}
-  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
+  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
 </li>`
     })
     .join('')
