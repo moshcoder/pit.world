@@ -732,12 +732,7 @@ describe('the Moshpit ring', () => {
     expect(await subdomain.text()).toBe('')
     const res = await request('/snippets/footer.html?site=pit.world')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
-    const html = await res.text()
-    expect(html.startsWith('<style>')).toBe(true)
-    expect(html).toContain('<b>pit.world</b> is part of the pit.world network')
-    expect(html).toContain('data-pit-footer')
-    expect(html).not.toContain('How do I use this?')
-    expect(html).not.toContain('<script')
+    expect(await res.text()).toBe('')
     // A Moshpit name, by itself or by its pit.world host, gets the how-to.
     for (const site of ['foo.bar.pit.world', 'https://www.Foo.Bar.pit.world/t/x']) {
       const moshpit = await (await request(`/snippets/footer.html?site=${encodeURIComponent(site)}`)).text()
