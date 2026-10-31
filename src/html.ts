@@ -2,6 +2,7 @@
  * Server-rendered pages. Every page works with JavaScript off (Tor Browser on
  * "Safest" included); /app.js only adds keyboard shortcuts.
  */
+import type { Listing } from './listings.js'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
@@ -177,7 +178,20 @@ export function newsletterForm(origin: NewsletterOrigin = {}): string {
 </section>`
 }
 
-export function homePage(stats: NetworkStats | null, options: { newsletter?: boolean } = {}): string {
+function businessDirectoryHome(businesses: Listing[]): string {
+  const cards = businesses.map(l => `<article class="business-preview${l.sponsoredUntil ? ' sponsored' : ''}">
+    <p class="small">${l.sponsoredUntil ? 'Featured · Paid placement' : l.claimed ? 'Verified owner' : 'Listed by pit.world · Unclaimed'}</p>
+    <h3><a href="/b/${encodeURIComponent(l.domain)}">${esc(l.name || l.domain)}</a></h3>
+    <p class="small">${esc([l.category.replaceAll('-',' '),l.city,l.region].filter(Boolean).join(' · '))}</p>
+    <p>${esc(l.description.slice(0,160))}${l.description.length > 160 ? '…' : ''}</p>
+    <a href="/b/${encodeURIComponent(l.domain)}">View business →</a></article>`).join('')
+  return `<section class="home-businesses" aria-labelledby="businesses-title"><p class="kicker">The local business directory</p><div class="business-heading"><div><h2 id="businesses-title">Good businesses. Easy to find.</h2><p>Find builders, shops and independent pros by service and location.</p></div><a href="/pros">Browse all businesses →</a></div>
+  <form class="business-search" action="/pros" method="get"><label>What do you need?<input name="q" maxlength="120" placeholder="Contractor, coffee, accountant…"></label><label>Where?<input name="near" maxlength="120" placeholder="City or region"></label><button class="btn">Find businesses</button></form>
+  <div class="business-previews">${cards || '<p>Own a business? <a href="/b">Claim your free listing</a> and help people find you.</p>'}</div>
+  <p class="business-offer"><span>Your searchable listing is free.</span> <a href="/featured">Get featured · $19/month through CoinPay →</a></p></section>`
+}
+
+export function homePage(stats: NetworkStats | null, options: { newsletter?: boolean; businesses?: Listing[] } = {}): string {
   return layout({
     title: 'pit.world: private search, and the doorway to the Moshpit network',
     description: 'ICANN doesn\'t scale for the agentic web. Meet pit.world: search the web without being the product. No logs, no cookies, no profile, no JavaScript required. And search the Moshpit network, the namespace ICANN didn\'t sell you.',
@@ -199,6 +213,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
     <p class="default"><a href="/build">Build an app: $49, then $2 a month →</a></p>
   </header>
+  ${businessDirectoryHome(options.businesses ?? [])}
   ${networkPanel(stats)}
   ${options.newsletter ? newsletterForm() : ''}
 </main>`,
@@ -388,6 +403,7 @@ export function privacyPage(): string {
 <h2 id="listings">Business listings: what we count</h2>
 <p>For businesses pit.world is featuring in a promotion (like a local roundup), pit.world counts visits to their listing page, clicks on the link to their website, taps on their phone number and quote requests, so it can tell each business honestly what the listing did for them. Search is never counted. A visit is stored as a type, a time, the listing, which of our posts linked you there (if one did) and the site you came from (its name only, never the full address). To count distinct visitors in a day, pit.world keeps a hash of your IP address and browser under a random key that is deleted when that day ends: nothing that can be turned back into an address, and nothing that links two days. No cookie is set, and nothing from a third party is loaded. The phone-tap count comes from a few lines of pit.world's own script on the listing page.</p>
 <h2 id="accounts">Your account, only if you sign in</h2>
+<p>Business owners may buy featured placement for $19 per month. We keep the invoice email, listing domain, renewal preference, provider invoice identifiers and paid-through date for billing. CoinPay processes the payments through pay.agent. Paid listings are labeled; these billing records are not used to track searches.</p>
 <p>One pit.world account signs you in on every <code>social.&lt;name&gt;.pit.world</code> feed and <code>bbs.&lt;name&gt;.pit.world</code> board, so you never make an account per site. You sign in with CoinPay (OAuth 2.1). We keep your CoinPay id, the name and email CoinPay gives us, a session cookie for <code>pit.world</code> only, and the list of pit.world sites you signed in to, which you can see and clear on <a href="/account">your account page</a>. A site gets your CoinPay id and name, nothing else. Search never reads the cookie. Delete the account from the same page and it is gone; what you posted on a board or feed stays there until you delete it on that site.</p>
 <h2>Source</h2>
 <p>The code that does all of this is public: <a href="https://github.com/moshcoder/pit.world">github.com/moshcoder/pit.world</a>.</p>

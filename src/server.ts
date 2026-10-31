@@ -20,6 +20,8 @@ import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './
 import { backfillFor, featuredFor } from './featured.js'
 import { Promoted } from './promoted.js'
 import { listingCard } from './listings-html.js'
+import { FeaturedBusinesses } from './business-featured.js'
+import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { readFileSync } from 'node:fs'
@@ -60,6 +62,7 @@ export type Deps = {
   /** Promoter/affiliate program (needs accounts); unset means off. */
   promoters?: Promoters
   /** /build by pay.agent invoice; unset means only the chovy.com checkout. */
+  featuredBusinesses?: FeaturedBusinesses
   buildInvoicing?: BuildInvoicing
   /** Credit codes (server months) and invites on accounts (needs accounts); unset means off. */
   rewards?: Rewards
@@ -141,7 +144,7 @@ export function createApp(deps: Deps) {
 
 
   const newsletter = deps.newsletter
-  app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false })))
+  app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false, businesses: deps.listings?.directory({ limit: 6 }).listings ?? [] })))
 
   // --- newsletter (double opt-in) ------------------------------------------------
   // The one signup endpoint for every Profullstack property: the @profullstack/footer form posts here with a
@@ -293,7 +296,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/about', '/privacy', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,
@@ -438,6 +441,7 @@ export function createApp(deps: Deps) {
           },
         })
       : null
+  if (deps.listings) mountBusinessFeatured(app, deps.listings, deps.featuredBusinesses, limited, deps.accounts?.site ?? 'https://pit.world')
   if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName, { ringChanged: () => deps.ringSync?.soon(ringSites), ...(promoHooks ?? {}) })
 
   app.notFound((c) =>
@@ -507,8 +511,14 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const buildInvoicing: BuildInvoicing | undefined = env.PIT_PAYAGENT_KEY
     ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
     : undefined
+  const featuredBusinesses = buildInvoicing ? new FeaturedBusinesses(listings, buildInvoicing) : undefined
+  if (featuredBusinesses) {
+    const tick = () => void featuredBusinesses.tick().catch(() => console.error('Featured billing sync failed'))
+    setTimeout(tick, 5_000).unref()
+    setInterval(tick, 60_000).unref()
+  }
   const rewards = new Rewards(accounts.accounts.db, { mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com', promoterCode: (code) => Boolean(promoters.byCode(code)) })
-  const app = createApp({ keys: keysFromEnv(), crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

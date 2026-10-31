@@ -84,7 +84,7 @@ describe('<name>.pit.world', () => {
 
   it('adds the stylesheet and the join-Moshpit footer to every page, escaped', () => {
     const html = decorate('<html><head><title>x</title></head><body><p>hi</p></body></html>', 'family.ancestry', 'family.ancestry.pit.world')
-    expect(html).toContain('<link rel="stylesheet" href="/.pit/proxy.css">\n</head>')
+    expect(html).toMatch(/<link rel="stylesheet" href="\/\.pit\/proxy\.css(?:\?v=[^"]+)?">\n<\/head>/)
     expect(html.indexOf('class="pit-foot"')).toBeLessThan(html.indexOf('</body>'))
     expect(html).toContain('https://dns.moshcode.sh/dns-query')
     expect(html).toContain('https://pit.world/connect')
