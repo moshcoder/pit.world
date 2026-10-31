@@ -76,7 +76,7 @@ function jsonLdOrganization(html: string, domain: string): { phone: string; emai
       if (typeof row.url !== 'string' || !officialUrl(row.url, domain)) continue
       const phone = clean(row.telephone, 40)
       const email = businessEmail(`mailto:${String(row.email ?? '')}`, domain)
-      return { phone: /^[+\d ()-.]{7,40}$/.test(phone) ? phone : '', email }
+      return { phone: /^[+\d ().-]{7,40}$/.test(phone) ? phone : '', email }
     }
   }
   return { phone: '', email: '' }
