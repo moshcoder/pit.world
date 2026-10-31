@@ -57,6 +57,7 @@ function details(l: Listing, track?: { domain: string; via: string }): string {
     l.phone && `<li><b>Phone</b> <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}"${beacon}>${esc(l.phone)}</a></li>`,
     l.moshpit && `<li><b>On Moshpit</b> ${ext(`https://${l.moshpit}/`, l.moshpit)} · ${ext(proxyUrl(l.moshpit), `${l.moshpit}.pit.world`)} <span class="muted">(any browser)</span></li>`,
     l.feed && `<li><b>Feed</b> ${ext(l.feed, bare(l.feed))}</li>`,
+    l.researchTopics.length && `<li><b>Public web topics</b> ${esc(l.researchTopics.join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'NicheDB / OutreachGraph source')}` : ''}${l.researchedAt ? ` · checked ${day(l.researchedAt)}` : ''}</li>`,
     ...l.links.filter((u) => u !== siteUrl(l)).map((u) => `<li>${ext(u, bare(u))}</li>`),
   ].filter(Boolean)
   return rows.length ? `<ul class="facts">${rows.join('')}</ul>` : ''
@@ -125,7 +126,7 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
     : l.seeded
       ? `<section class="claim" id="claim">
   <h2>Is this your business? Claim it</h2>
-  <p>pit.world listed ${esc(title)} in the <a href="/pros">pro directory</a> from public records: its own website and its state license. Nobody at ${esc(l.domain)} wrote or paid for this page. Claim it to take it over: rewrite it, add your services, hours and links, turn on quote requests, or take it out of the directory. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
+  <p>pit.world listed ${esc(title)} in the <a href="/pros">pro directory</a> using public information, such as the business's own website, licensing or permit records when available, and public company directories. Source links appear on this page. Nobody at ${esc(l.domain)} wrote or paid for this page. Claim it to take it over: rewrite it, add your services, hours and links, turn on quote requests, or take it out of the directory. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
   <form action="/b/${p(l.domain)}/claim" method="post"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">Claim this listing</button></form>
 </section>`
       : `<section class="claim" id="claim">
@@ -328,6 +329,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   ${l.description ? `<p>${esc(l.description.length > 220 ? `${l.description.slice(0, 217)}…` : l.description)}</p>` : ''}
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
   ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
+  ${l.researchTopics.length ? `<p class="small">${esc(l.researchTopics.slice(0, 4).join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'Source')}` : ''}</p>` : ''}
   <p class="row"><a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
 </li>`
     })
@@ -342,7 +344,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
     noindex: Boolean(options.q || options.near || options.page > 1),
     body: `<p class="kicker">Pro directory</p>
 <h1>${esc(heading)}</h1>
-<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> ones were listed by pit.world from public records (a state license, the business's own website) and are waiting for their owner. Featured businesses pay $19/month and are labeled “Paid placement”. Other listings keep their editorial order. Payment does not buy a verified-owner badge, license verification or reviews. Get in touch with a person, not a lead broker.</p>
+<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> listings were assembled by pit.world from public information, including licensing records where available, business websites and public company directories. Source links appear on each listing. Featured businesses pay $19/month and are labeled “Paid placement”. Other listings keep their editorial order. Payment does not buy a verified-owner badge, license verification or reviews. Get in touch with a person, not a lead broker.</p>
 <p><a class="btn" href="/featured">Feature your business · $19/month</a> <a href="/b">Claim a free listing</a></p>
 <form class="listing-lookup" action="${cat ? `/pros/${p(cat.slug)}` : '/pros'}" method="get">
   <input name="q" value="${esc(options.q)}" placeholder="What do you need? (plumber, tax prep, web app)" aria-label="What you need" maxlength="120">
