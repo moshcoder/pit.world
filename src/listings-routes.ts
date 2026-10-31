@@ -215,6 +215,7 @@ export function mountListings(
     }
     return directory(c, undefined)
   })
+  app.get('/pro', (c) => c.redirect('/pros', 301))
   app.get('/pros/:category', (c) => (categoryOf(c.req.param('category')) ? directory(c, c.req.param('category')) : c.notFound()))
 
   // --- API -----------------------------------------------------------------------
