@@ -272,7 +272,8 @@ export function createApp(deps: Deps) {
   app.get('/snippets/:file{footer\\.(html|tmpl)}', (c) => {
     const html = snippetFor(c.req.query('site'))
     if (html === null) return c.text('?site=<your host> is required', 400)
-    // pit.world and Moshpit sites get the pit.world footer, every other site the clearnet one.
+    // Sites with the shared Profullstack footer get no second network footer.
+    // Other Moshpit sites get the pit.world one; clearnet members get the neutral one.
     return c.body(html, 200, { 'content-type': 'text/html; charset=utf-8', 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=3600' })
   })
 

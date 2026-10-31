@@ -732,19 +732,15 @@ describe('the Moshpit ring', () => {
     expect(await subdomain.text()).toBe('')
     const res = await request('/snippets/footer.html?site=pit.world')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
-    const html = await res.text()
-    expect(html.startsWith('<style>')).toBe(true)
-    expect(html).toContain('<b>pit.world</b> is part of the pit.world network')
-    expect(html).toContain('data-pit-footer')
-    expect(html).not.toContain('How do I use this?')
-    expect(html).not.toContain('<script')
+    expect(await res.text()).toBe('')
     // A Moshpit name, by itself or by its pit.world host, gets the how-to.
-    for (const site of ['family.ancestry', 'family.ancestry.pit.world', 'https://www.Family.Ancestry.pit.world/t/x']) {
+    for (const site of ['foo.bar.pit.world', 'https://www.Foo.Bar.pit.world/t/x']) {
       const moshpit = await (await request(`/snippets/footer.html?site=${encodeURIComponent(site)}`)).text()
-      expect(moshpit).toContain('<b>family.ancestry</b> is a Moshpit name')
+      expect(moshpit).toContain('<b>foo.bar</b> is a Moshpit name')
       expect(moshpit).toContain('How do I use this?')
     }
-    expect(await (await request('/snippets/footer.html?site=ad.network.pit.world')).text()).toContain('<b>ad.network.pit.world</b> is part of')
+    expect(await (await request('/snippets/footer.html?site=ad.network.pit.world')).text()).toBe('')
+    expect(await (await request('/snippets/footer.html?site=family.ancestry.pit.world')).text()).toBe('')
     expect((await request('/snippets/footer.html?site=%3Cx%3E')).status).toBe(400)
     expect((await request('/snippets/footer.html')).status).toBe(400)
     expect((await request('/snippets/footer.tmpl?site=a.b.pit.world')).status).toBe(200)

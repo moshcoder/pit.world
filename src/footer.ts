@@ -77,8 +77,8 @@ export function footerSnippet(site: { name: string; moshpit: boolean }): string 
 
 const PROFULLSTACK = 'https://profullstack.com'
 
-// Plain-domain properties already render @profullstack/footer. This snapshot
-// follows https://profullstack.com/list; subdomains inherit the same ownership.
+// Fleet properties already render @profullstack/footer. This snapshot follows
+// https://profullstack.com/list; subdomains and their Moshpit aliases share ownership.
 // Keep third-party clearnet ring members on the network footer.
 const PROFULLSTACK_PROPERTIES = new Set([
   'b1dz.com', 'bl0ggers.com', 'brisk.news', 'c0mpute.com', 'c0ncerts.com', 'c0upons.com',
@@ -100,7 +100,15 @@ const PROFULLSTACK_PROPERTIES = new Set([
 
 function isProfullstackProperty(host: string): boolean {
   for (const domain of PROFULLSTACK_PROPERTIES) {
-    if (host === domain || host.endsWith(`.${domain}`)) return true
+    if (host === domain || (domain !== 'pit.world' && host.endsWith(`.${domain}`))) return true
+    // A fleet property may be reached directly on its Moshpit name or through
+    // the corresponding .pit.world alias. Match that alias exactly by suffix;
+    // treating every arbitrary .pit.world host as a fleet property would hide
+    // the network footer from unrelated Moshpit members.
+    if (domain.endsWith('.pit.world')) {
+      const name = domain.slice(0, -'.pit.world'.length)
+      if (name && (host === name || host.endsWith(`.${name}`))) return true
+    }
   }
   return false
 }
@@ -123,8 +131,8 @@ export function snippetFor(value: string | null | undefined): string | null {
   const site = footerSite(value)
   if (!site) return null
   // These sites use the shared npm footer. Returning an empty 200 response
-  // makes older PitFooter fetchers harmless without affecting other members.
-  if (!onPit(value) && isProfullstackProperty(hostOf(value))) return ''
+  // keeps older PitFooter fetchers harmless without adding a second footer.
+  if (isProfullstackProperty(hostOf(value))) return ''
   return onPit(value) ? footerSnippet(site) : clearnetSnippet(site)
 }
 
