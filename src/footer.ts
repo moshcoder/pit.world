@@ -77,6 +77,34 @@ export function footerSnippet(site: { name: string; moshpit: boolean }): string 
 
 const PROFULLSTACK = 'https://profullstack.com'
 
+// Plain-domain properties already render @profullstack/footer. This snapshot
+// follows https://profullstack.com/list; subdomains inherit the same ownership.
+// Keep third-party clearnet ring members on the network footer.
+const PROFULLSTACK_PROPERTIES = new Set([
+  'b1dz.com', 'bl0ggers.com', 'brisk.news', 'c0mpute.com', 'c0ncerts.com', 'c0upons.com',
+  'coinpayportal.com', 'crawlproof.com', 'd0rz.com', 'logicsrc.com', 'marksyncr.com',
+  'bittorrented.com', 'naallo.com', 'pairux.com', 'phonenumbers.bot', 'postammo.com',
+  'profullstack.com', 'qaaas.dev', 'qrypt.chat', 'recipepdfs.com', 'saasrow.com', 'sh1pt.com',
+  'smshub.dev', 'threatcrush.com', 'ugig.net', 'vu1nz.com', 'weedforcrypto.com', 'tronbrowser.dev',
+  'goingbroke.now', 'infernetprotocol.com', 'moshcode.sh', 'moshcoding.com', 'aiornot.vote',
+  'advis0r.com', 'spl00f.com', 'bbs.profullstack.com', 'outreachgraph.com', 'reeleel.com',
+  'rssamplifier.com', 'bufferoverride.com', 'tipoffwatch.com', 'genrewatch.com', 'p0dcasters.com',
+  'd3vices.com', 'diskpush.com', 'hqtui.com', 'chovy.com', 'nichedb.dev', 'readm3.com',
+  'watchnews.now', 'nixamp.com', 'agenticjobs.work', 'nightcell7.com', 'r4ck.dev',
+  'mediaanalyzer.pro', 'demo.movie', 'bg0ne.com', 'meshhook.com', 'vipvap.xyz', 'complymist.com',
+  'typeheard.com', 'pwamart.com', 'tleehealth.com', 'hqterm.sh', 'wx93.me', 'sysops.ceo',
+  'datamart.help', 'hdtilt.com', 'ringhuman.com', 'airdpx.com', 'submitfleet.com', 'ch4nnels.com',
+  'pit.world', 'ad.network.pit.world', 'built.indie.pit.world', 'pay.agent.pit.world',
+  'family.ancestry.pit.world', 'seo.rank.pit.world', 'cigarunderground.org', 'search.peptides.pit.world',
+])
+
+function isProfullstackProperty(host: string): boolean {
+  for (const domain of PROFULLSTACK_PROPERTIES) {
+    if (host === domain || host.endsWith(`.${domain}`)) return true
+  }
+  return false
+}
+
 /** The clearnet footer markup, for ICANN sites: the Profullstack network, no pit.world or Moshpit. */
 export function clearnetMarkup(site: { name: string }): string {
   return `<nav class="net-foot" aria-label="The Profullstack network" data-pit-footer data-net-footer>
@@ -94,6 +122,9 @@ export function clearnetSnippet(site: { name: string }): string {
 export function snippetFor(value: string | null | undefined): string | null {
   const site = footerSite(value)
   if (!site) return null
+  // These sites use the shared npm footer. Returning an empty 200 response
+  // makes older PitFooter fetchers harmless without affecting other members.
+  if (!onPit(value) && isProfullstackProperty(hostOf(value))) return ''
   return onPit(value) ? footerSnippet(site) : clearnetSnippet(site)
 }
 
