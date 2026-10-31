@@ -22,7 +22,9 @@ export class FeaturedBusinesses {
       domain TEXT PRIMARY KEY, email TEXT NOT NULL, renew INTEGER NOT NULL DEFAULT 1, created_at INTEGER NOT NULL)`)
     listings.db.run(`CREATE TABLE IF NOT EXISTS featured_invoices (
       id TEXT PRIMARY KEY, domain TEXT NOT NULL, provider_id TEXT UNIQUE, url TEXT, status TEXT NOT NULL,
-      description TEXT NOT NULL, created_at INTEGER NOT NULL, paid_at INTEGER)`)
+      description TEXT NOT NULL, created_at INTEGER NOT NULL, paid_at INTEGER, checked_at INTEGER NOT NULL DEFAULT 0)`)
+    const columns = listings.db.query<{name:string},[]>('PRAGMA table_info(featured_invoices)').all()
+    if (!columns.some(c=>c.name==='checked_at')) listings.db.run('ALTER TABLE featured_invoices ADD COLUMN checked_at INTEGER NOT NULL DEFAULT 0')
     listings.db.run('CREATE INDEX IF NOT EXISTS featured_invoice_domain ON featured_invoices(domain, status)')
   }
   private current(domain: string): Invoice | null {
@@ -87,11 +89,12 @@ export class FeaturedBusinesses {
     try {
       // A timeout or restart can lose the create response. Recover only an exact merchant
       // invoice match, never create a replacement while the outcome is ambiguous.
-      const uncertain = this.listings.db.query<Invoice,[number]>("SELECT * FROM featured_invoices WHERE status='unknown' OR (status='creating' AND created_at<?) LIMIT 25").all(this.now()-60_000)
+      const uncertain = this.listings.db.query<Invoice,[number]>("SELECT * FROM featured_invoices WHERE status='unknown' OR (status='creating' AND created_at<?) ORDER BY checked_at,created_at LIMIT 25").all(this.now()-60_000)
       if (uncertain.length) {
         try {
           const found = await this.call('/api/v1/invoices')
           for (const local of uncertain) {
+            this.listings.db.run('UPDATE featured_invoices SET checked_at=? WHERE id=?',[this.now(),local.id])
             const match = (Array.isArray(found.invoices) ? found.invoices : []).find((i:any) => i.description===local.description && i.amount_usd===FEATURED_USD)
             if (!match || typeof match.id!=='string' || typeof match.url!=='string') continue
             const url = new URL(match.url)
@@ -100,8 +103,9 @@ export class FeaturedBusinesses {
           }
         } catch { /* Try reconciliation on the next tick; never assume payment. */ }
       }
-      const pending = this.listings.db.query<Invoice, []>("SELECT * FROM featured_invoices WHERE status = 'open' ORDER BY created_at LIMIT 25").all()
+      const pending = this.listings.db.query<Invoice, []>("SELECT * FROM featured_invoices WHERE status = 'open' ORDER BY checked_at,created_at LIMIT 25").all()
       for (const invoice of pending) {
+        this.listings.db.run('UPDATE featured_invoices SET checked_at=? WHERE id=?',[this.now(),invoice.id])
         try {
           const verified = await this.call(`/api/v1/invoices/${encodeURIComponent(invoice.provider_id!)}`)
           if (verified.id !== invoice.provider_id || verified.amount_usd !== FEATURED_USD || verified.description !== invoice.description) continue
