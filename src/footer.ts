@@ -100,7 +100,7 @@ const PROFULLSTACK_PROPERTIES = new Set([
 
 function isProfullstackProperty(host: string): boolean {
   for (const domain of PROFULLSTACK_PROPERTIES) {
-    if (host === domain || host.endsWith(`.${domain}`)) return true
+    if (host === domain || (domain !== 'pit.world' && host.endsWith(`.${domain}`))) return true
     // A fleet property may be reached directly on its Moshpit name or through
     // the corresponding .pit.world alias. Match that alias exactly by suffix;
     // treating every arbitrary .pit.world host as a fleet property would hide
