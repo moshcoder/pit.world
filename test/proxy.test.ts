@@ -98,6 +98,8 @@ describe('<name>.pit.world', () => {
     // A site that prints the global footer itself is left alone.
     const own = '<html><body><nav class="pit-foot" data-pit-footer></nav></body></html>'
     expect(decorate(own, 'a.b', 'a.b.pit.world').match(/data-pit-footer/g)?.length).toBe(1)
+    const profullstack = '<html><body><footer data-pfs-footer="0.6.15"></footer></body></html>'
+    expect(decorate(profullstack, 'a.b', 'a.b.pit.world')).not.toContain('class="pit-foot"')
   })
 })
 

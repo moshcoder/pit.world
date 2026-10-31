@@ -13,7 +13,8 @@
  * and Referer the browser sends back (so the site's own CSRF checks still pass).
  *
  * Every proxied page ends with the pit.world global footer (footer.ts) unless the site
- * already prints it; "How do I use this?" opens the steps for opening the name directly.
+ * already prints it or the Profullstack footer; "How do I use this?" opens the steps
+ * for opening the name directly.
  *
  * Certificates: a TLS wildcard covers one label, and these hosts have at least two
  * (family.ancestry.pit.world), so each name gets its own Let's Encrypt certificate.
@@ -75,8 +76,9 @@ export function decorate(html: string, name: string, proxyHost: string): string 
   let out = rewriteUrls(html, name, proxyHost)
   const link = `<link rel="stylesheet" href="${ASSET}">`
   out = /<\/head>/i.test(out) ? out.replace(/<\/head>/i, `${link}\n</head>`) : `${link}\n${out}`
-  // A site that already prints the global footer itself keeps its own copy.
+  // A site that already prints either shared footer keeps just its own copy.
   if (/\bdata-pit-footer\b/.test(out)) return out
+  if (/\bdata-pfs-footer\b/.test(out)) return out
   const footer = joinFooter(name)
   const at = out.search(/<\/body>(?![\s\S]*<\/body>)/i)
   return at >= 0 ? `${out.slice(0, at)}${footer}\n${out.slice(at)}` : `${out}\n${footer}`
