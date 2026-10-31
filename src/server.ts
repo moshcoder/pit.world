@@ -24,7 +24,8 @@ import { FeaturedBusinesses } from './business-featured.js'
 import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
-import { applyCuratedSeeds, readCuratedSeeds } from './curated-seeds.js'
+import { ensurePublicDirectorySeeds } from './directory-seeds.js'
+import { enrichNicheDb } from './nichedb.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
@@ -78,7 +79,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC}; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
+    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC}; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
@@ -494,8 +495,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const rootPem = readFileSync(new URL('../public/moshpit-root-ca.crt', import.meta.url), 'utf8')
   const mailer = env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null
   const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }), undefined, { mailer })
-  // Editorial seed data is imported once per domain; owners can claim or opt out.
-  applyCuratedSeeds(listings, readCuratedSeeds(new URL('../data/curated-listings.json', import.meta.url)))
+  ensurePublicDirectorySeeds(listings)
   const ringSync = env.RSSAMPLIFIER_API_KEY
     ? new RingSync({ apiKey: env.RSSAMPLIFIER_API_KEY, ...(env.RSSAMPLIFIER_URL ? { base: env.RSSAMPLIFIER_URL } : {}), ...(env.RSSAMPLIFIER_RING ? { slug: env.RSSAMPLIFIER_RING } : {}) })
     : undefined
@@ -537,6 +537,12 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   }
   setTimeout(daily, 60_000).unref()
   setInterval(daily, 24 * 3600 * 1000).unref()
+  // Refresh public company topics once a day; the importer accepts exact domain matches only.
+  const refreshDirectoryResearch = () => void enrichNicheDb(listings)
+    .then((r) => console.log(`NicheDB / OutreachGraph: checked ${r.checked}, matched ${r.matched}, unmatched ${r.unmatched}, failed ${r.failed}`))
+    .catch(() => console.error('NicheDB / OutreachGraph refresh failed'))
+  setTimeout(refreshDirectoryResearch, 10_000).unref()
+  setInterval(refreshDirectoryResearch, 24 * 3600 * 1000).unref()
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   // Last good target per name, on disk: the relay keeps serving names while the registry is down.
   const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts(), targets: new Targets(`${dataDir}/relay-targets.json`) }

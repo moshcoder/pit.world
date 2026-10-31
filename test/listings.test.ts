@@ -4,6 +4,7 @@ import { PitClient } from '../src/client.ts'
 import { cleanLinks, isPublicAddress, Listings, normalizeDomain, readMeta, type Verifier } from '../src/listings.ts'
 import { looksLikeName } from '../src/moshpit.ts'
 import { createApp } from '../src/server.ts'
+import { ensurePublicDirectorySeeds } from '../src/directory-seeds.ts'
 
 function fakeVerifier(state: { txt?: Record<string, string[]>; pages?: Record<string, string> } = {}): Verifier & { state: typeof state } {
   return {
@@ -179,6 +180,36 @@ describe('listings: listed by pit.world (seeded)', () => {
     expect(page).toContain('(408) 555-0100')
     expect(page).not.toContain('id="quote"')
     expect(await (await h.request('/sitemap.xml')).text()).toContain('/b/acme-builders.com')
+  })
+
+  it('adds Trial Stack AI from its public site without inventing a location or license', async () => {
+    const h = harness()
+    expect(ensurePublicDirectorySeeds(h.listings)).toBe(1)
+    expect(ensurePublicDirectorySeeds(h.listings)).toBe(0)
+    const listing = h.listings.toPublic('trialstack.davidts.ai')!
+    expect(listing).toMatchObject({ name: 'Trial Stack AI', category: 'software', seeded: true, country: '', license: '' })
+    expect(listing.description).toContain('Tracks 200+ AI x Bio companies')
+    const page = await (await h.request('/b/trialstack.davidts.ai')).text()
+    expect(page).toContain('public company directories')
+    expect(page).not.toContain('active when pit.world checked')
+    const directory = await (await h.request('/pros/software')).text()
+    expect(directory).toContain('Trial Stack AI')
+  })
+
+  it('stores only attributed web research for an existing listed domain', async () => {
+    const h = harness()
+    seedAcme(h)
+    expect(h.listings.enrichWebResearch('acme-builders.com', { topics: ['Construction', 'wordpress'], sourceUrl: 'https://example.com/i/123' })).toBe(false)
+    expect(h.listings.enrichWebResearch('another-builder.com', { topics: ['Construction'], sourceUrl: 'https://nichedb.dev/i/123' })).toBe(false)
+    expect(h.listings.enrichWebResearch('acme-builders.com', { topics: ['Construction', 'wordpress', 'Construction'], sourceUrl: 'https://nichedb.dev/i/123' })).toBe(true)
+    const listing = h.listings.toPublic('acme-builders.com')!
+    expect(listing.researchTopics).toEqual(['Construction', 'wordpress'])
+    expect(listing.researchUrl).toBe('https://nichedb.dev/i/123')
+    expect(listing.researchedAt).toBeTruthy()
+    expect(h.listings.directory({ q: 'wordpress' }).total).toBe(1)
+    const page = await (await h.request('/b/acme-builders.com')).text()
+    expect(page).toContain('Public web topics')
+    expect(page).toContain('NicheDB / OutreachGraph source')
   })
 
   it('keeps what pit.world wrote instead of the homepage, never sends quotes, and stays out of the ring and the claims feed', async () => {

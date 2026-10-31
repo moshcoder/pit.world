@@ -201,7 +201,7 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("frame-ancestors 'none'")
     // The footer's built.indie badge is a cross-origin image; CSP must let it load.
     expect(footer).toContain('https://built.indie.pit.world/for.svg')
-    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com;")
+    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com;")
   })
 
   it('runs no analytics on search results, and the one ad never sees the query', async () => {
@@ -419,7 +419,7 @@ describe('categories: images, videos, music, live', () => {
     expect(html).not.toContain('tracker.example/pixel')
     // Nothing loads from another origin, except the footer's built.indie and pwamart badges, which are
     // ours, and the one sandboxed crawlproof ad frame, which is told only that it is on pit.world.
-    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|crawlproof\.com\/api\/ads\/frame\?)/)
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|profullstack\.com\/assets\/logo\.svg|crawlproof\.com\/api\/ads\/frame\?)/)
   })
 
   it('puts PairUX first, then nixamp, above live results', async () => {
@@ -714,16 +714,22 @@ describe('the Moshpit ring', () => {
     expect(html).toContain('moshcode deploy shop.yourname --user yourname')
   })
 
-  it('serves the global footer at /snippets/footer.html for any fleet site', async () => {
+  it('leaves Profullstack properties to the shared footer and keeps network footers for other members', async () => {
     const { request } = app()
-    // A plain ICANN domain is not on pit.world: it gets the clearnet footer, with no pit.world or Moshpit in it.
+    // Profullstack properties render @profullstack/footer locally; legacy fetchers get an empty 200.
     const icann = await request('/snippets/footer.html?site=hqterm.sh')
     expect(icann.status).toBe(200)
-    const clear = await icann.text()
-    expect(clear).toContain('<b>hqterm.sh</b> is part of the Profullstack network')
+    expect(await icann.text()).toBe('')
+    const member = await request('/snippets/footer.html?site=example.org')
+    expect(member.status).toBe(200)
+    const clear = await member.text()
+    expect(clear).toContain('<b>example.org</b> is part of the Profullstack network')
     expect(clear).toContain('data-net-footer')
     expect(clear).not.toMatch(/pit\.world|moshpit|moshcode/i)
     expect(clear).not.toContain('<script')
+    const subdomain = await request('/snippets/footer.html?site=docs.pairux.com')
+    expect(subdomain.status).toBe(200)
+    expect(await subdomain.text()).toBe('')
     const res = await request('/snippets/footer.html?site=pit.world')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const html = await res.text()

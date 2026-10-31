@@ -205,7 +205,6 @@ export function mountListings(
     const { total, listings: found } = listings.directory({ category, q, near, limit: perPage, offset: (page - 1) * perPage })
     return c.html(prosPage({ listings: found, total, category: category ?? '', q, near, page, perPage, counts: listings.categoryCounts() }))
   }
-  app.get('/pro', (c) => c.redirect('/pros', 301))
   app.get('/pros', (c) => {
     const cat = categoryOf(c.req.query('c') ?? c.req.query('category'))
     if (cat) {
@@ -216,6 +215,7 @@ export function mountListings(
     }
     return directory(c, undefined)
   })
+  app.get('/pro', (c) => c.redirect('/pros', 301))
   app.get('/pros/:category', (c) => (categoryOf(c.req.param('category')) ? directory(c, c.req.param('category')) : c.notFound()))
 
   // --- API -----------------------------------------------------------------------

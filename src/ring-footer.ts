@@ -37,6 +37,15 @@ export function ringFooterOptions(links: { label: string; href: string }[]): Foo
     since: 2026,
     tagline: 'No logs. No profile. No cookies unless you sign in.',
     css: false,
+    badges: [
+      {
+        href: 'https://built.indie.pit.world/',
+        src: 'https://built.indie.pit.world/for.svg',
+        alt: 'Built Indie',
+        width: 32,
+        height: 32,
+      },
+    ],
   }
 }
 

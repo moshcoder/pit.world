@@ -33,7 +33,7 @@
     "@modelcontextprotocol/sdk": "^1.32.2",
     "@profullstack/affiliates": "0.2.0",
     "@profullstack/bridges": "0.2.0",
-    "@profullstack/footer": "0.4.0",
+    "@profullstack/footer": "latest",
     "@profullstack/form-guard": "0.3.0",
     "@profullstack/hqtui": "^0.11.0",
     "@profullstack/openprofile": "0.2.0",

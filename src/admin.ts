@@ -1,7 +1,8 @@
 /**
  * Server-side listing admin, run on the box that holds listings.db (it opens the database directly, no API):
  *
- *   bun src/admin.ts seed FILE.json    list businesses pit.world found in public records (an array of SeedInput)
+ *   bun src/admin.ts seed FILE.json    list businesses pit.world found in public sources (an array of SeedInput)
+ *   bun src/admin.ts enrich-nichedb [--force]  refresh exact-domain matches from NicheDB's public company directory
  *   bun src/admin.ts unseed DOMAIN     take one of those back out
  *   bun src/admin.ts views             every directory listing with its view count, as JSON
  *   bun src/admin.ts subscribers [SITE]  newsletter signups per property (confirmed, pending), or the confirmed
@@ -12,6 +13,7 @@
 import { readFileSync } from 'node:fs'
 import { Listings, type SeedInput } from './listings.js'
 import { Newsletter, normalizeSource } from './newsletter.js'
+import { enrichNicheDb } from './nichedb.js'
 
 export async function admin(args: string[], listings: Listings, out: Pick<Console, 'log' | 'error'> = console, newsletter?: () => Newsletter): Promise<number> {
   const [command, arg] = args
@@ -40,6 +42,11 @@ export async function admin(args: string[], listings: Listings, out: Pick<Consol
     }
     return failed ? 1 : 0
   }
+  if (command === 'enrich-nichedb') {
+    const result = await enrichNicheDb(listings, fetch, 4, arg === '--force')
+    out.log(`NicheDB / OutreachGraph: checked ${result.checked}, matched ${result.matched}, unmatched ${result.unmatched}, failed ${result.failed}`)
+    return result.failed ? 1 : 0
+  }
   if (command === 'unseed' && arg) {
     const ok = listings.unseed(arg)
     out.log(ok ? `removed ${arg}` : `${arg} is not a listing pit.world wrote`)
@@ -50,7 +57,7 @@ export async function admin(args: string[], listings: Listings, out: Pick<Consol
     out.log(JSON.stringify(all.filter(Boolean).map((l) => ({ domain: l!.domain, name: l!.name, claimed: l!.claimed, views: l!.views, url: `https://pit.world/b/${l!.domain}` })), null, 2))
     return 0
   }
-  out.error('usage: bun src/admin.ts seed FILE.json | unseed DOMAIN | views | subscribers [SITE]')
+  out.error('usage: bun src/admin.ts seed FILE.json | enrich-nichedb [--force] | unseed DOMAIN | views | subscribers [SITE]')
   return 2
 }
 

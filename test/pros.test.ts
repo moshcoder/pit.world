@@ -224,6 +224,9 @@ describe('pros: the directory', () => {
     expect(words).toContain('<a href="/b/lawyer.example">')
     expect(words).not.toContain('<a href="/b/acme-plumbing.com">')
     expect((await h.request('/pros/casino')).status).toBe(404)
+    const shortUrl = await h.request('/pro')
+    expect(shortUrl.status).toBe(301)
+    expect(shortUrl.headers.get('location')).toBe('/pros')
   })
 
   it('serves the directory and categories as JSON and through the CLI', async () => {

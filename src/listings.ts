@@ -51,7 +51,7 @@ export type Listing = {
   moshpitOnly: boolean
   claimed: boolean
   /**
-   * Listed by pit.world from public records before the owner claimed it (see seed()). Shown in the
+   * Listed by pit.world from public information before the owner claimed it (see seed()). Shown in the
    * directory, marked as unclaimed, never routed quote requests. Claiming hands it to the owner.
    */
   seeded: boolean
@@ -63,6 +63,12 @@ export type Listing = {
   license: string
   /** When pit.world last saw that license active at the issuer. */
   licenseCheckedAt: number | null
+  /** Public company directory topics attached only after an exact website-domain match. */
+  researchTopics: string[]
+  /** The NicheDB item page that attributes this public OutreachGraph directory record. */
+  researchUrl: string
+  /** When pit.world last refreshed the public directory record. */
+  researchedAt: number | null
   /** Page views of /b/<domain> by people (crawlers and scripts are not counted). */
   views: number
   updatedAt: number | null
@@ -312,6 +318,9 @@ const MIGRATIONS: Array<[string, string]> = [
   ['featured_paid_until', 'ALTER TABLE listings ADD COLUMN featured_paid_until INTEGER'],
   ['license', "ALTER TABLE listings ADD COLUMN license TEXT NOT NULL DEFAULT ''"],
   ['license_checked_at', 'ALTER TABLE listings ADD COLUMN license_checked_at INTEGER'],
+  ['research_topics', "ALTER TABLE listings ADD COLUMN research_topics TEXT NOT NULL DEFAULT '[]'"],
+  ['research_url', "ALTER TABLE listings ADD COLUMN research_url TEXT NOT NULL DEFAULT ''"],
+  ['researched_at', 'ALTER TABLE listings ADD COLUMN researched_at INTEGER'],
   ['views', 'ALTER TABLE listings ADD COLUMN views INTEGER NOT NULL DEFAULT 0'],
   ['directory_opt_out', 'ALTER TABLE listings ADD COLUMN directory_opt_out INTEGER NOT NULL DEFAULT 0'],
 ]
@@ -395,6 +404,9 @@ export class Listings {
       sponsoredUntil: (row?.featured_paid_until ?? 0) > this.now() ? row.featured_paid_until : null,
       license: row?.license ?? '',
       licenseCheckedAt: row?.license_checked_at ?? null,
+      researchTopics: row?.research_topics ? JSON.parse(row.research_topics) : [],
+      researchUrl: row?.research_url ?? '',
+      researchedAt: row?.researched_at ?? null,
       views: row?.views ?? 0,
       updatedAt: row?.updated_at ?? null,
     }
@@ -652,7 +664,7 @@ export class Listings {
       })
       .filter((l) => {
         if (!terms.length) return true
-        const text = [l.domain, l.name, l.description, l.company, l.services.join(' '), categoryOf(l.category)?.label ?? ''].join(' ').toLowerCase()
+        const text = [l.domain, l.name, l.description, l.company, l.services.join(' '), l.researchTopics.join(' '), categoryOf(l.category)?.label ?? ''].join(' ').toLowerCase()
         return terms.every((w) => text.includes(w))
       })
     const offset = Math.max(0, Math.trunc(query.offset ?? 0))
@@ -675,7 +687,7 @@ export class Listings {
   }
 
   /**
-   * List a business pit.world found in public records (a contractor's license, its own website), before
+   * List a business pit.world found in public information (a contractor's license, its own website or a public directory), before
    * its owner has claimed it. Refuses a claimed listing: once the owner has it, pit.world never writes to
    * it again. Re-seeding the same domain updates what pit.world wrote and keeps its view count.
    */
@@ -714,6 +726,32 @@ export class Listings {
     const domain = normalizeDomain(input)
     if (!domain) return false
     return this.db.run('DELETE FROM listings WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NOT NULL', [domain]).changes > 0
+  }
+
+  /** Attach a public directory record only to its exact, already listed website domain. */
+  enrichWebResearch(input: unknown, data: { topics?: unknown; sourceUrl?: unknown }): boolean {
+    const domain = normalizeDomain(input)
+    const row = domain ? this.row(domain) : null
+    if (!domain || !row || (!row.claimed_at && !row.seeded_at)) return false
+    const topics = Array.isArray(data.topics)
+      ? [...new Set(data.topics.map((topic) => clean(topic, 80)).filter(Boolean))].slice(0, 20)
+      : []
+    let sourceUrl = ''
+    try {
+      const url = new URL(String(data.sourceUrl ?? ''))
+      if (url.protocol === 'https:' && url.hostname === 'nichedb.dev' && /^\/i\/\d+$/.test(url.pathname)) sourceUrl = url.href
+    } catch {}
+    if (!sourceUrl) return false
+    this.db.run('UPDATE listings SET research_topics = ?, research_url = ?, researched_at = ? WHERE domain = ?', [JSON.stringify(topics), sourceUrl, this.now(), domain])
+    return true
+  }
+
+  /** Refresh public directory data once a day; missing matches are retried on the same cadence. */
+  needsWebResearchRefresh(input: unknown, maxAgeMs = 24 * 60 * 60 * 1000): boolean {
+    const domain = normalizeDomain(input)
+    if (!domain) return false
+    const row = this.row(domain)
+    return Boolean(row && (row.claimed_at || row.seeded_at) && (!row.researched_at || row.researched_at < this.now() - maxAgeMs))
   }
 
   /** Count one view of a listing that is in the directory. Bare unclaimed pages are not counted. */
