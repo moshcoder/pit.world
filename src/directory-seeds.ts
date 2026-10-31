@@ -20,7 +20,7 @@ export const PUBLIC_DIRECTORY_SEEDS: SeedInput[] = [
       'Data center and industrial electrical infrastructure',
       'Engineering, commissioning and maintenance',
     ],
-    links: ['https://www.powellind.com/'],
+    links: ['https://www.powellind.com/', 'https://www.powellind.com/contact'],
   },
   {
     domain: 'trialstack.davidts.ai',
