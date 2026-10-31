@@ -714,16 +714,22 @@ describe('the Moshpit ring', () => {
     expect(html).toContain('moshcode deploy shop.yourname --user yourname')
   })
 
-  it('serves the global footer at /snippets/footer.html for any fleet site', async () => {
+  it('leaves Profullstack properties to the shared footer and keeps network footers for other members', async () => {
     const { request } = app()
-    // A plain ICANN domain is not on pit.world: it gets the clearnet footer, with no pit.world or Moshpit in it.
+    // Profullstack properties render @profullstack/footer locally; legacy fetchers get an empty 200.
     const icann = await request('/snippets/footer.html?site=hqterm.sh')
     expect(icann.status).toBe(200)
-    const clear = await icann.text()
-    expect(clear).toContain('<b>hqterm.sh</b> is part of the Profullstack network')
+    expect(await icann.text()).toBe('')
+    const member = await request('/snippets/footer.html?site=example.org')
+    expect(member.status).toBe(200)
+    const clear = await member.text()
+    expect(clear).toContain('<b>example.org</b> is part of the Profullstack network')
     expect(clear).toContain('data-net-footer')
     expect(clear).not.toMatch(/pit\.world|moshpit|moshcode/i)
     expect(clear).not.toContain('<script')
+    const subdomain = await request('/snippets/footer.html?site=docs.pairux.com')
+    expect(subdomain.status).toBe(200)
+    expect(await subdomain.text()).toBe('')
     const res = await request('/snippets/footer.html?site=pit.world')
     expect(res.headers.get('access-control-allow-origin')).toBe('*')
     const html = await res.text()
