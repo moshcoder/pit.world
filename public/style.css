@@ -352,3 +352,21 @@ form .btn { border: 0; cursor: pointer; }
 .hits .summarize[disabled] { cursor: progress; text-decoration: none; }
 .hits .summary { margin: 6px 0 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); font-size: 14px; }
 .hits .summary.wait, .hits .summary.err { border-left-color: var(--line); background: none; color: var(--muted); }
+/* ▲ ▼ votes on every listing */
+.vote { display: inline-flex; align-items: center; gap: 2px; margin: 6px 0 0; font: 12px var(--mono); color: var(--muted); vertical-align: middle; }
+.vote button { appearance: none; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 11px/1 var(--mono); width: 26px; height: 22px; border-radius: 6px; cursor: pointer; padding: 0; }
+.vote button:hover, .vote button:focus-visible { color: var(--text); border-color: var(--accent); }
+.vote button.up[aria-pressed="true"] { color: var(--accent-ink, #000); background: var(--accent); border-color: var(--accent); }
+.vote button.down[aria-pressed="true"] { color: #fff; background: var(--danger, #c33); border-color: var(--danger, #c33); }
+.vote .n { min-width: 2ch; text-align: center; padding: 0 3px; }
+.vote .vote-note { margin-left: 6px; }
+.hits .vote, .videos .vote, .books .vote { display: flex; }
+.promo li { display: flex; flex-direction: column; }
+.promo li > a { flex: 1; }
+.promo .vote { margin-top: 4px; }
+.images li, .shop li { display: flex; flex-direction: column; }
+.ad-slot { display: flex; align-items: center; gap: 8px; }
+.ad-slot iframe { flex: 1; min-width: 0; }
+.ad-slot .vote { margin: 0; flex: none; }
+.card .row .vote, .pros .row .vote, .prose .row .vote { margin: 0 0 0 auto; }
+.business-preview .vote { display: flex; }
