@@ -15,6 +15,7 @@ import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from 
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { MEDIA_SOURCES, thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 import { voteBox, type VoteView } from './vote-html.js'
+import { embedFor, type Player } from './players.js'
 
 export const SITE = 'https://pit.world'
 
@@ -324,6 +325,23 @@ function metaLine(m: Media): string {
   return esc([m.host, m.channel, m.author, m.address, m.date, m.extra, stars(m)].filter(Boolean).join(' · '))
 }
 
+/**
+ * Play / Listen / Read here: a button that app.js turns into the player, in place, only when pressed. Hidden
+ * without script. It says who the player comes from, since that site sees the visitor once it loads.
+ */
+export function playButton(p: Player | undefined | null): string {
+  if (!p) return ''
+  const label = p.kind === 'episodes' ? 'Play episodes' : p.kind === 'audio' || p.shape === 'audio' ? 'Listen here' : p.shape === 'book' ? 'Read here' : 'Play here'
+  const data =
+    p.kind === 'embed'
+      ? `data-kind="embed" data-shape="${p.shape}" data-src="${esc(p.src)}"`
+      : p.kind === 'audio'
+        ? `data-kind="audio" data-src="/audio?u=${esc(encodeURIComponent(p.src))}"`
+        : `data-kind="episodes" data-show="${esc(p.show)}"`
+  const note = p.kind === 'embed' ? `from ${esc(p.host)}, which sees your IP once it loads` : 'streamed through pit.world'
+  return `<div class="play-row" hidden><button type="button" class="play" ${data}>${label}</button> <small class="play-note">${note}</small></div>`
+}
+
 function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: VoteView): string {
   const vote = (m: Media) => voteBox('result', m.url, view, m.title)
   if (vertical === 'images') {
@@ -343,7 +361,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
       .map(
         (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}</a>
     <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
-    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div>${vote(m)}</div></li>`,
+    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div>${m.player ? `<div class="url">Public domain: free to read</div>` : ''}${playButton(m.player)}${vote(m)}</div></li>`,
       )
       .join('')}</ol>`
   }
@@ -355,6 +373,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
       <a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
       <div class="url">${metaLine(m)}</div>
       ${m.description ? `<p>${esc(m.description)}</p>` : ''}
+      ${playButton(m.player)}
       ${vote(m)}
     </li>`,
       )
@@ -365,7 +384,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
       (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}${m.duration ? `<span class="dur">${esc(m.duration)}</span>` : ''}</a>
     <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
     <div class="url">${esc([m.host, m.channel, m.date].filter(Boolean).join(' · '))}</div>
-    ${m.description ? `<p>${esc(m.description)}</p>` : ''}${vote(m)}</div></li>`,
+    ${m.description ? `<p>${esc(m.description)}</p>` : ''}${playButton(m.player)}${vote(m)}</div></li>`,
     )
     .join('')}</ol>`
 }
@@ -436,6 +455,7 @@ function hitItem(h: SearchResult['hits'][number], summaries = false, view?: Vote
       <div class="url">${esc(h.host)}${h.featured ? '<span class="src featured" title="A W3BS network site, featured on pit.world. Not an ad.">Featured</span>' : ''}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
       ${h.description ? `<p>${esc(h.description)}</p>` : ''}
       ${summarize}
+      ${playButton(embedFor(h.url))}
       ${voteBox('result', h.url, view, h.title)}
     </li>`
 }
@@ -498,6 +518,7 @@ export function privacyPage(): string {
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 <li><b>Summarize</b> under a result asks <a href="https://c0mpute.com/">c0mpute</a>, a peer network of inference nodes, for two or three sentences about that page. pit.world reads the page itself first, through <a href="https://tronbrowser.dev/">TronBrowser</a>'s page reader (the same one c0mpute's chat uses for web search), which is sent the page address only. The node is then sent the page's text and address only: never your search words, your IP address or your account. Summaries are kept by page address so the next person gets the same one instantly. Without an account you get a few an hour; signed in, more; with the <a href="/pass">$1 weekly pass</a>, up to 1,000 a week. The pass keeps only a count of summaries per account and time, never which pages.</li>
+<li id="players"><b>Play here, Listen here, Read here</b> under a video, song, podcast or book plays it on the results page. Nothing loads until you press the button. Videos, Spotify, SoundCloud and Internet Archive books then load in the site's own player (YouTube through youtube-nocookie.com, Vimeo with do-not-track), and that site sees your IP address and pit.world as the page you came from, never your search. Song previews and podcast episodes are streamed through pit.world, so the publisher sees our server, not you.</li>
 </ol>
 <h2>Moshpit names</h2>
 <p>When a search looks like a name (<code>chovy.hacker</code>), pit.world also asks the public Moshpit registry whether it exists. That lookup is the name only, from our server.</p>

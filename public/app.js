@@ -36,6 +36,99 @@
   if (tabs && current && tabs.scrollWidth > tabs.clientWidth) {
     tabs.scrollLeft = Math.max(0, current.offsetLeft - tabs.offsetLeft - (tabs.clientWidth - current.offsetWidth) / 2)
   }
+  // Play / Listen / Read here (src/players.ts): nothing loads until the button is pressed, then the player
+  // opens under the result. Pressing again closes it, and opening one closes any other.
+  const closePlayers = (except) => {
+    for (const box of document.querySelectorAll('.player')) {
+      if (box === except) continue
+      const b = box.previousElementSibling?.querySelector?.('.play')
+      if (b) {
+        b.setAttribute('aria-expanded', 'false')
+        b.textContent = b.dataset.label
+      }
+      box.remove()
+    }
+  }
+  const audioEl = (src) => {
+    const a = document.createElement('audio')
+    a.controls = true
+    a.autoplay = true
+    a.preload = 'none'
+    a.src = src
+    return a
+  }
+  const clock = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}` : `${Math.floor(s / 60)}`) + `:${String(s % 60).padStart(2, '0')}`
+  for (const row of document.querySelectorAll('.play-row')) {
+    row.hidden = false
+    const button = row.querySelector('.play')
+    const label = button.textContent
+    button.dataset.label = label
+    button.setAttribute('aria-expanded', 'false')
+    button.addEventListener('click', async () => {
+      const open = row.nextElementSibling?.classList.contains('player') ? row.nextElementSibling : null
+      if (open) {
+        open.remove()
+        button.setAttribute('aria-expanded', 'false')
+        button.textContent = label
+        return
+      }
+      const box = document.createElement('div')
+      box.className = `player ${button.dataset.kind === 'embed' ? `shape-${button.dataset.shape}` : 'shape-audio-file'}`
+      closePlayers(box)
+      row.after(box)
+      button.setAttribute('aria-expanded', 'true')
+      button.textContent = 'Close'
+      const kind = button.dataset.kind
+      if (kind === 'embed') {
+        const frame = document.createElement('iframe')
+        frame.src = button.dataset.src
+        frame.title = `Player: ${row.closest('li')?.querySelector('.title')?.textContent ?? 'media'}`
+        // The site's own player needs to know the page it is on (YouTube refuses without), never the search.
+        frame.referrerPolicy = 'strict-origin'
+        frame.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture'
+        frame.allowFullscreen = true
+        frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox')
+        box.append(frame)
+      } else if (kind === 'audio') {
+        box.append(audioEl(button.dataset.src))
+      } else if (kind === 'episodes') {
+        box.textContent = 'Loading episodes…'
+        try {
+          const res = await fetch(`/api/episodes?show=${encodeURIComponent(button.dataset.show)}`)
+          const body = await res.json()
+          if (!res.ok || !body.episodes?.length) throw new Error(body.error || 'No episodes found.')
+          box.textContent = ''
+          const now = document.createElement('p')
+          now.className = 'now-playing'
+          const player = audioEl(body.episodes[0].src)
+          const list = document.createElement('ol')
+          list.className = 'episodes'
+          const pick = (i) => {
+            now.textContent = body.episodes[i].title
+            for (const [j, li] of [...list.children].entries()) li.firstChild.setAttribute('aria-current', String(i === j))
+          }
+          body.episodes.forEach((e, i) => {
+            const li = document.createElement('li')
+            const b = document.createElement('button')
+            b.type = 'button'
+            b.textContent = e.seconds ? `${e.title} (${clock(e.seconds)})` : e.title
+            b.addEventListener('click', () => {
+              player.src = e.src
+              player.play().catch(() => {})
+              pick(i)
+            })
+            li.append(b)
+            list.append(li)
+          })
+          box.append(now, player, list)
+          pick(0)
+        } catch (error) {
+          box.textContent = error.message || 'Episodes unavailable. Try again.'
+          box.classList.add('err')
+        }
+      }
+    })
+  }
   // Summarize: ask pit.world for a c0mpute summary of one result, then poll until a node has written it.
   const show = (box, text, kind) => {
     box.hidden = false

@@ -13,6 +13,7 @@
  */
 import { Cache, normalizeQuery, SearchUnavailable, type Keys } from './search.js'
 import { makeSnippet } from './snippet.js'
+import { bookReader, embedFor, peertubeEmbed, previewPlayer, readableScans, showPage, type Player } from './players.js'
 
 type Fetch = typeof fetch
 
@@ -67,6 +68,14 @@ export type Media = {
   address?: string
   /** One more short fact: "41 episodes · weekly", "35 editions", "Cited by 120". */
   extra?: string
+  /** Play, listen or read in the results (players.ts); loaded only when the visitor presses the button. */
+  player?: Player
+}
+
+/** `{ player }` when the address is one of the fixed embeddable players, else nothing (keeps rows without one unchanged). */
+const playable = (url: string): { player?: Player } => {
+  const player = embedFor(url)
+  return player ? { player } : {}
 }
 
 export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive' | 'gdelt' | 'itunes' | 'osm'
@@ -195,6 +204,7 @@ export function parseSerperVideos(body: any): Media[] {
         duration: str(r?.duration) || undefined,
         date: str(r?.date) || undefined,
         channel: str(r?.channel) || undefined,
+        ...playable(url),
       },
     ]
   })
@@ -205,7 +215,7 @@ export function parseSerperWeb(body: any): Media[] {
   return rows.flatMap((r) => {
     const url = httpUrl(r?.link)
     if (!url) return []
-    return [{ url, title: str(r?.title) || host(url), host: host(url), description: str(r?.snippet) || undefined, date: str(r?.date) || undefined }]
+    return [{ url, title: str(r?.title) || host(url), host: host(url), description: str(r?.snippet) || undefined, date: str(r?.date) || undefined, ...playable(url) }]
   })
 }
 
@@ -363,6 +373,19 @@ export function parseOpenLibrary(body: any): Media[] {
   })
 }
 
+/** Works Open Library says anyone may read (`ebook_access: public`), with the scans it lists for each, by work URL. */
+export function openLibraryScans(body: any): Map<string, string[]> {
+  const docs: any[] = Array.isArray(body?.docs) ? body.docs : []
+  const out = new Map<string, string[]>()
+  for (const d of docs) {
+    const key = str(d?.key)
+    if (!/^\/works\/OL\d+W$/.test(key) || d?.ebook_access !== 'public' || !Array.isArray(d?.ia)) continue
+    const ids = d.ia.filter((i: unknown) => typeof i === 'string')
+    if (ids.length) out.set(`https://openlibrary.org${key}`, ids)
+  }
+  return out
+}
+
 /** p0dcasters.com /api/search: shows, each linked to its p0dcasters page (which links the publisher and the feed). */
 export function parseP0dcasters(body: any): Media[] {
   const shows: any[] = Array.isArray(body?.shows) ? body.shows : []
@@ -382,6 +405,7 @@ export function parseP0dcasters(body: any): Media[] {
         channel: str(s?.category) || undefined,
         date: day(s?.newestAt),
         extra: [episodes ? `${episodes.toLocaleString('en-US')} episodes` : '', str(s?.cadence)].filter(Boolean).join(' · ') || undefined,
+        ...(showPage(url) && episodes !== 0 ? { player: { kind: 'episodes', show: showPage(url)!, host: str(s?.host) || 'p0dcasters.com' } as Player } : {}),
       },
     ]
   })
@@ -456,6 +480,7 @@ export function parseSepia(body: any): Media[] {
         duration: v?.isLive ? 'LIVE' : seconds ? clock(seconds) : undefined,
         date: day(v?.publishedAt),
         channel: str(v?.channel?.displayName) || str(v?.account?.displayName) || undefined,
+        ...(peertubeEmbed(url) ? { player: peertubeEmbed(url)! } : {}),
       },
     ]
   })
@@ -481,6 +506,7 @@ export function parseArchiveMovies(body: any): Media[] {
         description: description || undefined,
         date: day(d?.date) ?? (num(d?.year) ? String(d.year) : undefined),
         channel: str(Array.isArray(d?.creator) ? d.creator[0] : d?.creator) || undefined,
+        ...playable(`https://archive.org/details/${id}`),
       },
     ]
   })
@@ -542,6 +568,7 @@ export function parseItunes(body: any): Media[] {
         channel: artist || undefined,
         duration: ms ? clock(ms / 1000) : undefined,
         date: day(r?.releaseDate),
+        ...(previewPlayer(r?.previewUrl) ? { player: previewPlayer(r?.previewUrl)! } : {}),
       },
     ]
   })
@@ -733,11 +760,19 @@ export async function searchMedia(
   try {
     switch (vertical) {
       case 'books': {
-        const params = new URLSearchParams({ q, limit: String(limit), fields: 'key,title,author_name,first_publish_year,cover_i,edition_count,first_sentence' })
+        const params = new URLSearchParams({ q, limit: String(limit), fields: 'key,title,author_name,first_publish_year,cover_i,edition_count,first_sentence,ebook_access,ia' })
         const url = `https://openlibrary.org/search.json?${params}`
         // Open Library is free and sometimes slow (several seconds, the odd 5xx): one patient retry before giving up.
         const body = await fetchJson(fetchImpl, url, { headers: OURS }, 10_000).catch(() => fetchJson(fetchImpl, url, { headers: OURS }, 15_000))
-        result = make('openlibrary', parseOpenLibrary(body))
+        // Public-domain works get "Read here": one Internet Archive search finds a scan anyone may open. Books still list without it.
+        const scans = await readableScans(openLibraryScans(body), fetchImpl).catch(() => new Map<string, string>())
+        result = make(
+          'openlibrary',
+          parseOpenLibrary(body).map((b) => {
+            const reader = scans.has(b.url) ? bookReader(scans.get(b.url)!) : null
+            return reader ? { ...b, player: reader } : b
+          }),
+        )
         break
       }
       case 'images':

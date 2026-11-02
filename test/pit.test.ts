@@ -271,7 +271,8 @@ describe('crawlproof analytics and ads', () => {
     const csp = res.headers.get('content-security-policy')!
     expect(csp).toContain("script-src 'self' https://crawlproof.com 'sha256-")
     expect(csp).toContain("connect-src 'self' https://pit.world https://crawlproof.com;")
-    expect(csp).toContain('frame-src https://crawlproof.com;')
+    expect(csp).toContain('frame-src https://crawlproof.com https://www.youtube-nocookie.com https://player.vimeo.com https://archive.org https://open.spotify.com https://w.soundcloud.com;')
+    expect(csp).toContain("media-src 'self';")
     expect(csp).toContain("frame-ancestors 'none'")
     // The universal footer's built.indie and PwaMart icons are cross-origin images; CSP must let them
     // load. The PwaMart link is also pit.world's PwaMart ownership proof.
