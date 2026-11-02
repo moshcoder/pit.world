@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { Listings, type Verifier } from '../src/listings.ts'
 import { listingPage } from '../src/listings-html.ts'
 import { categoryFor, importCandidate, importNicheDb, IMPORT_SOURCE } from '../src/nichedb-import.ts'
@@ -160,5 +163,21 @@ describe('nichedb import: directory, pages and sitemap', () => {
     expect(listings.toPublic('store.example')!.category).toBe('retail')
     expect(listings.toPublic('acme-builders.com')!.category).toBe('construction')
     expect(listings.recategorizeImported(categoryFor, '2')).toBe(0)
+  })
+
+  it('reopens an existing database without re-adding the generated quality column (0.23.0 crash loop)', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pit-listings-'))
+    try {
+      const path = join(dir, 'listings.db')
+      const first = new Listings(path, verifier)
+      first.importListings([{ domain: 'kept.example', name: 'Kept', category: 'retail', sourceUrl: 'https://nichedb.dev/i/1' }])
+      first.db.close()
+      const again = new Listings(path, verifier)
+      expect(again.toPublic('kept.example')).toMatchObject({ imported: true, category: 'retail' })
+      again.db.close()
+      expect(() => new Listings(path, verifier).db.close()).not.toThrow()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
