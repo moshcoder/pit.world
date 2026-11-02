@@ -48,6 +48,7 @@ import { mountPromote } from './promoters-routes.js'
 import { Rewards } from './rewards.js'
 import { mountRewards, rewardsOnSignIn, rewardsSections } from './rewards-routes.js'
 import { Boards, serviceRequest } from './services.js'
+import { createDailyStitcher, DAILY_STITCHER_HOST } from './daily-stitcher.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 import { AudioRegistry, embedHosts, FIXED_FRAME_HOSTS, proxyAudio, showEpisodes, showPage } from './players.js'
@@ -1144,7 +1145,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     site,
     coinpay: env.PIT_COINPAY_CLIENT_ID && env.PIT_COINPAY_CLIENT_SECRET ? { clientId: env.PIT_COINPAY_CLIENT_ID, clientSecret: env.PIT_COINPAY_CLIENT_SECRET } : null,
     bridgeKey: env.PIT_BRIDGE_KEY ?? null,
-    extraClients: (env.PIT_BRIDGE_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean),
+    extraClients: [...new Set([...((env.PIT_BRIDGE_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)), DAILY_STITCHER_HOST])],
     admins: (env.PIT_ADMIN_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   }
   const promotion = new Promotion(listings, site)
@@ -1252,7 +1253,11 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   }
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   // Last good target per name, on disk: the relay keeps serving names while the registry is down.
-  const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts(), targets: new Targets(`${dataDir}/relay-targets.json`) }
+  const certs = liveCerts()
+  const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs, targets: new Targets(`${dataDir}/relay-targets.json`) }
+  // This is a pit.world-owned exact host, not a claimed Moshpit registry name.
+  // Provision its dedicated multi-label certificate before HSTS browsers connect.
+  if (import.meta.main && !certs.has(DAILY_STITCHER_HOST)) certs.issue(DAILY_STITCHER_HOST)
   // Certificates for every reachable name before its first visit (HSTS browsers never make the http one).
   if (env.PIT_CERT_SWEEP !== 'off') {
     const sweep = registrySweep(proxyDeps.access, proxyDeps.certs, undefined, proxyDeps.targets)
@@ -1270,6 +1275,11 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     socialUrl: env.PIT_SOCIAL_URL === 'off' ? null : (env.PIT_SOCIAL_URL ?? 'http://127.0.0.1:8794'),
     boards: env.PIT_BBS === 'off' ? null : new Boards(env.PIT_BOARDS_DB ?? `${dataDir}/boards.db`, { max: Number(env.PIT_BBS_MAX ?? 100) }),
   }
+  const dailyStitcher = createDailyStitcher({
+    dbPath: env.STITCHER_DB ?? `${dataDir}/daily-stitcher.db`,
+    ownerSub: env.STITCHER_OWNER_SUB ?? null,
+    bridgeKey: env.PIT_BRIDGE_KEY ?? null,
+  })
   const server = Bun.serve({
     port: options.port ?? Number(process.env.PORT ?? 8787),
     hostname: options.hostname ?? process.env.HOST ?? '127.0.0.1',
@@ -1282,6 +1292,17 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       const local = trustProxy && (peer === '127.0.0.1' || peer === '::1')
       const forwarded = local ? request.headers.get('x-real-ip') : null
       const proto = (local && request.headers.get('x-forwarded-proto')) || 'http'
+      const host = String(request.headers.get('host') ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '')
+      if (host === DAILY_STITCHER_HOST) {
+        if (proto !== 'https') {
+          const url = new URL(request.url)
+          url.protocol = 'https:'
+          url.host = DAILY_STITCHER_HOST
+          return Response.redirect(url, 301)
+        }
+        // threatcrush-disable-next-line js-ssrf-outbound-request  not an outbound request: Hono's in-process dispatch of the incoming storefront request
+        return dailyStitcher.app.fetch(request)
+      }
       // social.<name>.pit.world and bbs.<name>.pit.world are ours (src/services.ts), checked before the relay.
       const svc = serviceHost(request.headers.get('host'))
       if (svc) return serviceRequest(request, svc, forwarded || peer, proto, serviceDeps)
