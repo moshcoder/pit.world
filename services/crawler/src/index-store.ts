@@ -343,9 +343,9 @@ export class IndexStore {
     return { items, next_cursor: done ? null : String(scannedTo), resume_cursor: String(scannedTo), total_matches: total, total_capped: capped }
   }
 
-  /** Corpus counts for harvesters: cached for ten minutes (each is an index scan). */
+  /** Corpus counts for harvesters: cached for five minutes (each is an index scan). */
   corpusStats(now = Date.now()): Record<string, unknown> {
-    if (this.statsCache && now - this.statsCache.at < 900_000) return this.statsCache.value
+    if (this.statsCache && now - this.statsCache.at < 300_000) return this.statsCache.value
     const byTrain = this.db.query('SELECT train, count(*) AS n FROM page_policy GROUP BY train').all() as Array<{ train: number | null; n: number }>
     const n = (t: number | null) => byTrain.find((r) => r.train === t)?.n ?? 0
     const sites = (this.db.query('SELECT count(DISTINCT site) AS n FROM page_policy WHERE train = 1').get() as { n: number }).n
