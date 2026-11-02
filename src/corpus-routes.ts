@@ -57,7 +57,7 @@ export function mountCorpus(app: Hono<Env>, d: CorpusDeps) {
 
   let statsCache: { at: number; value: Record<string, any> } | null = null
   const stats = async (): Promise<Record<string, any> | null> => {
-    if (statsCache && Date.now() - statsCache.at < 300_000) return statsCache.value
+    if (statsCache && Date.now() - statsCache.at < 60_000) return statsCache.value
     try {
       const r = await doFetch(`${base}/api/v1/corpus/stats`, { signal: AbortSignal.timeout(20_000) })
       if (!r.ok) return statsCache?.value ?? null
