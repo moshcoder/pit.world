@@ -96,3 +96,15 @@ describe('crawler status', () => {
     expect(await r.text()).toContain('crawl-health-offline')
   })
 })
+
+describe('footer', () => {
+  it('links the crawler status and pitbot pages, and the sitemap lists them', async () => {
+    const app = createApp({ keys: {} })
+    const home = await (await app.request('/about')).text()
+    expect(home).toContain('href="/status"')
+    expect(home).toContain('href="/bot"')
+    const sitemap = await (await app.request('/sitemap.xml')).text()
+    expect(sitemap).toContain('https://pit.world/status')
+    expect(sitemap).toContain('https://pit.world/bot')
+  })
+})
