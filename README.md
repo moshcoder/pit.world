@@ -158,7 +158,7 @@ Every listing has a ▲ and a ▼: web results and every tab's results, the feat
 - **Ranking** (`src/votes.ts`): `score = (up + 5) / (up + down + 10) − 0.5`; a result moves `6 × score(this search) + 2 × score(its site, one vote per device per site)` places, capped at 3, then results are re-ordered by `position − moved`. The featured network site leading a search keeps its place. `/pros` listings move by `6 × score`, capped at 3, only among unpaid, non-campaign listings. Sponsored and featured slots are never re-ordered: their votes are a quality signal.
 - **Storage**: table `votes` in the listings SQLite database, created additively at startup. Back up the live database with SQLite's backup API before rollout.
 
-Other anonymous writes (`/subscribe`, `/api/subscribe`, `/b/<domain>/claim`, `/api/listing/claim`, `/b/<domain>/quote`, `/api/listing/quote`, `/submit`, `/api/submit`, `/build/invoice`) carry the same fingerprint when JavaScript is on (`app.js` adds an `fp` field; APIs may send `x-fingerprint`) and are limited per device with a looser per-network ceiling (`src/visitor.ts`). Without one they fall back to the old per-address limit.
+Other anonymous writes (`/subscribe`, `/api/subscribe`, `/b/<domain>/claim`, `/api/listing/claim`, `/b/<domain>/quote`, `/api/listing/quote`, `/submit`, `/api/submit`, `/build/invoice`, and the anonymous allowance of `POST /api/summarize`) carry the same fingerprint when JavaScript is on (`app.js` adds an `fp` field; APIs may send `x-fingerprint`) and are limited per device with a looser per-network ceiling (`src/visitor.ts`). Without one they fall back to the old per-address limit.
 
 ## Surfaces
 
