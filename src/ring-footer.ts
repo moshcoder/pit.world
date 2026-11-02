@@ -37,16 +37,9 @@ export function ringFooterOptions(links: { label: string; href: string }[]): Foo
     links,
     since: 2026,
     tagline: 'No logs. No profile. No cookies unless you sign in.',
+    // The built.indie and pwamart icons come from the universal template itself (footer 0.6.16),
+    // so no site badges here: passing one would show it twice.
     css: false,
-    badges: [
-      {
-        href: 'https://built.indie.pit.world/',
-        src: 'https://built.indie.pit.world/for.svg',
-        alt: 'Built Indie',
-        width: 32,
-        height: 32,
-      },
-    ],
   }
 }
 

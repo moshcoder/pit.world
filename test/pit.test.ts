@@ -199,9 +199,12 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("connect-src 'self' https://pit.world https://crawlproof.com;")
     expect(csp).toContain('frame-src https://crawlproof.com;')
     expect(csp).toContain("frame-ancestors 'none'")
-    // The footer's built.indie badge is a cross-origin image; CSP must let it load.
-    expect(footer).toContain('https://built.indie.pit.world/for.svg')
-    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com;")
+    // The universal footer's built.indie and PwaMart icons are cross-origin images; CSP must let them
+    // load. The PwaMart link is also pit.world's PwaMart ownership proof.
+    expect(footer).toContain('href="https://pwamart.com/for?site=https://pit.world/"')
+    expect(footer).toContain('href="https://built.indie.pit.world/for?site=https://pit.world/"')
+    expect(footer).toContain('https://logicsrc.com/openicon/set/hq/svg/pwamart.svg')
+    expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com;")
   })
 
   it('runs no analytics on search results, and no ad ever sees the query', async () => {
@@ -421,9 +424,9 @@ describe('categories: images, videos, music, live', () => {
     expect(html).toContain('src="/img?u=https%3A%2F%2Fencrypted-tbn0.gstatic.com%2Fimages%3Fq%3Dtbn%3Aabc"')
     // A thumbnail host outside the allowlist gets no <img> at all.
     expect(html).not.toContain('tracker.example/pixel')
-    // Nothing loads from another origin, except the footer's built.indie and pwamart badges, which are
-    // ours, and the one sandboxed crawlproof ad frame, which is told only that it is on pit.world.
-    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|profullstack\.com\/assets\/logo\.svg|crawlproof\.com\/api\/ads\/frame\?)/)
+    // Nothing loads from another origin, except the footer's built.indie and pwamart icons (OpenIcon SVGs on
+    // logicsrc.com, ours), and the one sandboxed crawlproof ad frame, which is told only that it is on pit.world.
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|logicsrc\.com\/openicon\/|profullstack\.com\/assets\/logo\.svg|crawlproof\.com\/api\/ads\/frame\?)/)
   })
 
   it('puts PairUX first, then nixamp, above live results', async () => {

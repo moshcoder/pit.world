@@ -8,7 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.32.2",
         "@profullstack/affiliates": "0.2.0",
         "@profullstack/bridges": "0.2.0",
-        "@profullstack/footer": "0.6.15",
+        "@profullstack/footer": "0.6.16",
         "@profullstack/form-guard": "0.3.0",
         "@profullstack/hqtui": "^0.11.0",
         "@profullstack/openprofile": "0.2.0",
@@ -60,7 +60,7 @@
 
     "@profullstack/bridges": ["@profullstack/bridges@0.2.0", "", { "bin": { "bridges": "bin/bridges.js" } }, "sha512-ai74Zl1mQN2WZDVb93qiwfpqjCDCg/TZkxgFHFn4Rb/Cxdgg2kUst9ep0B609WoulnNjsXN3IU4IMhpzmypg7w=="],
 
-    "@profullstack/footer": ["@profullstack/footer@0.6.15", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-kkkSG8Xw0VnyzYk76ko0aiIgVT/MXmKkKUiJ5u1DZkeLZcDh0d2GjFShwTcCd8AsQr5fBet39wbzSwPeUYwuWg=="],
+    "@profullstack/footer": ["@profullstack/footer@0.6.16", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-uZZbU1cPdBn3/MOLqNGCrSbZmi2NsSfL5Im7Gcuys3pE+mPofj4V9sfLgLR8gBqqRc0zjsq3X1m2q6fBHoUY2w=="],
 
     "@profullstack/form-guard": ["@profullstack/form-guard@0.3.0", "", {}, "sha512-/rn5xd4mMG6eXGe85BmPfhz7zz3mmsmNV7U6a1bNhATIpVtKKEUEGF4QPrFx8sg6YDtpFkzmvjNEaFJm3DbFxg=="],
 
