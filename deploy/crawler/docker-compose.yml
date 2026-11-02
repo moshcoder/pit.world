@@ -14,10 +14,10 @@ name: pit-crawler
 services:
   redis:
     image: redis:8-alpine
-    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '1gb', '--maxmemory-policy', 'noeviction']
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '2gb', '--maxmemory-policy', 'noeviction']
     volumes: ['redis:/data']
     ports: ['127.0.0.1:6396:6379']
-    mem_limit: 1536m
+    mem_limit: 2560m
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']

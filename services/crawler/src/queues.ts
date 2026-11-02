@@ -32,6 +32,11 @@ export const QUEUES = {
   publish: 'pit-crawl-publish',
 } as const
 
+/** addBulk in chunks: one call with half a million jobs is one enormous Redis script run. */
+async function addInChunks<T>(items: T[], add: (chunk: T[]) => Promise<unknown>, size = 1_000): Promise<void> {
+  for (let i = 0; i < items.length; i += size) await add(items.slice(i, i + size))
+}
+
 const JOB_DEFAULTS = {
   attempts: 3,
   backoff: { type: 'exponential' as const, delay: 30_000 },
@@ -63,7 +68,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     render: new Queue(QUEUES.render, opts),
     publish: new Queue(QUEUES.publish, opts),
   }
-  const frontier = new RedisFrontier(redis, config.maxPages, config.recrawlDays * 86_400_000)
+  const frontier = new RedisFrontier(redis, config.maxPages, Math.min(config.seenTtlMs, config.recrawlDays * 86_400_000))
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
   const index = new IndexStore(config.indexPath)
   const crawler = createCrawler({
@@ -71,14 +76,18 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     frontier,
     renderer: pool,
     index,
+    async pageBacklog() {
+      const c = await queues.page.getJobCounts('waiting', 'prioritized', 'delayed')
+      return (c.waiting ?? 0) + (c.prioritized ?? 0) + (c.delayed ?? 0)
+    },
     log,
     enqueue: {
       async sites(jobs: SiteJob[]) {
-        await queues.site.addBulk(jobs.map((data) => ({ name: 'site', data })))
+        await addInChunks(jobs, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data }))))
       },
       async pages(jobs: PageJob[]) {
-        await queues.page.addBulk(
-          jobs.map((data) => ({ name: 'page', data, opts: { jobId: `p-${urlId(data.url)}`, priority: Math.min(data.depth + 1, 100) } })),
+        await addInChunks(jobs, (chunk) =>
+          queues.page.addBulk(chunk.map((data) => ({ name: 'page', data, opts: { jobId: `p-${urlId(data.url)}`, priority: Math.min(data.depth + 1, 100) } }))),
         )
       },
       async render(job: PageJob) {
@@ -124,10 +133,12 @@ export async function startWorkers(config: Config, log: (line: string) => void =
     workers.push(
       new Worker<SiteJob>(
         QUEUES.site,
-        async (job) => {
-          const out = await crawler.crawlSite(job.data)
-          log(`site ${job.data.site}: ${out.outcome}, ${out.admitted} pages queued`)
-        },
+        (job, token) =>
+          politely(job, token, async () => {
+            const out = await crawler.crawlSite(job.data)
+            if (!out.delayMs) log(`site ${job.data.site}: ${out.outcome}, ${out.admitted} pages queued`)
+            return out
+          }),
         { ...common, connection: workerConnection(), concurrency: Math.max(2, Math.ceil(config.concurrency / 4)) },
       ),
     )

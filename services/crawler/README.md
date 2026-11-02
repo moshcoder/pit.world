@@ -46,6 +46,9 @@ bun services/crawler/src/cli.ts worker
 bun services/crawler/src/cli.ts seed example.com other.example
 bun services/crawler/src/cli.ts seed --from nichedb      # backfill: every site nichedb keeps
 bun services/crawler/src/cli.ts seed --from ring
+bun services/crawler/src/cli.ts seed --from rssamplifier   # every site behind every feed in its OPML
+bun services/crawler/src/cli.ts seed --from p0dcasters
+bun services/crawler/src/cli.ts seed --opml https://example.com/feeds.opml
 bun services/crawler/src/cli.ts stats
 bun services/crawler/src/cli.ts read https://example.com/ [--render]
 ```
@@ -60,7 +63,9 @@ bun services/crawler/src/cli.ts read https://example.com/ [--render]
 | `CRAWL_CONCURRENCY` | 16 | pages at once per process |
 | `CRAWL_HOST_DELAY_MS` | 1500 | gap between two requests to one site |
 | `CRAWL_RECRAWL_DAYS` | 30 | a site is read again this often |
-| `CRAWL_DISCOVER` | 0 | 1: crawl linked sites too, up to `CRAWL_MAX_SITES` (100,000) |
+| `CRAWL_DISCOVER` | 0 | 1: crawl linked sites too, up to `CRAWL_MAX_SITES` (1,000,000) |
+| `CRAWL_MAX_PAGE_BACKLOG` | 50000 | site starts wait while more page jobs than this are queued |
+| `CRAWL_SEEN_TTL_HOURS` | 72 | a site's seen-set lives this long after its last new page |
 | `OBSCURA_MCP_URLS` | none | comma-separated `obscura mcp --http` endpoints |
 | `OBSCURA_MCP_TOKEN` | none | Obscura's bearer token (32+ bytes) |
 | `NICHEDB_URL` / `NICHEDB_API_KEY` | nichedb.dev / none | an admin key; without one records wait in the outbox |

@@ -30,6 +30,10 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     expect(verdicts.filter((v) => v === 'new').length).toBe(5)
     expect(verdicts.filter((v) => v === 'full').length).toBe(3)
     expect(await redis.pttl('pitcrawl:seen:race.example')).toBeGreaterThan(0)
+    // Sliding: every new page pushes the expiry out again.
+    await redis.pexpire('pitcrawl:seen:race.example', 1_000)
+    await frontier.admit('race.example', 'https://race.example/new')
+    expect(await redis.pttl('pitcrawl:seen:race.example')).toBeGreaterThan(50_000)
   })
 
   test('the site lease spaces requests; sites are scheduled once per cycle', async () => {

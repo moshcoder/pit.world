@@ -33,6 +33,10 @@ export type Config = {
   /** Where records go. Without a key they wait in the Redis outbox (bounded). */
   nichedbUrl: string
   nichedbKey: string
+  /** How long a site's seen-set outlives its last new page (sliding). */
+  seenTtlMs: number
+  /** Site starts wait while more page jobs than this are queued: backpressure for big seeds. */
+  maxPageBacklog: number
   /** Follow links to other sites and crawl those too, up to maxSites. */
   discover: boolean
   maxSites: number
@@ -72,7 +76,9 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     nichedbUrl: (env.NICHEDB_URL ?? 'https://nichedb.dev').replace(/\/+$/, ''),
     nichedbKey: env.NICHEDB_API_KEY ?? '',
     discover: env.CRAWL_DISCOVER === '1',
-    maxSites: num(env.CRAWL_MAX_SITES, 100_000, 1),
+    maxSites: num(env.CRAWL_MAX_SITES, 1_000_000, 1),
+    seenTtlMs: num(env.CRAWL_SEEN_TTL_HOURS, 72, 1) * 3_600_000,
+    maxPageBacklog: num(env.CRAWL_MAX_PAGE_BACKLOG, 50_000, 1),
     outboxMax: num(env.CRAWL_OUTBOX_MAX, 200_000, 1),
     roles: roles.length ? roles : ['site', 'page', 'render', 'publish'],
     healthPort: num(env.CRAWL_HEALTH_PORT, 8797, 0),

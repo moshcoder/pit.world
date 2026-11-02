@@ -5,6 +5,8 @@
  *   pit-crawler worker                       run the roles in CRAWL_ROLES (default all) until stopped
  *   pit-crawler seed <site...>               crawl these sites
  *   pit-crawler seed --from nichedb|ring     backfill: every site nichedb keeps, or the ring
+ *   pit-crawler seed --from rssamplifier|p0dcasters   every site behind every feed in that directory's OPML
+ *   pit-crawler seed --opml <url|path>       any OPML file
  *   pit-crawler seed --file <path>           one site per line
  *   pit-crawler stats                        queue depths and counters, as JSON
  *   pit-crawler read <url> [--render]        read one page now and print its record (no Redis)
@@ -15,7 +17,7 @@ import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
 import { createRuntime, report, snapshot, startWorkers } from './queues.ts'
-import { sitesFromNichedb, sitesFromRing, sitesFromText } from './seed.ts'
+import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
 import { normalizeUrl, resolvesPublic, siteOf } from './url.ts'
 
 const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`)
@@ -89,7 +91,10 @@ async function seed(args: string[]) {
   let sites: string[] = []
   if (from === 'nichedb') sites = await sitesFromNichedb(config.nichedbUrl, { ...(limit ? { limit } : {}) })
   else if (from === 'ring') sites = sitesFromRing()
-  else if (from) throw new Error(`unknown --from ${from} (nichedb or ring)`)
+  else if (from && OPML_SOURCES[from]) sites = sitesFromOpml(await opmlText(from))
+  else if (from) throw new Error(`unknown --from ${from} (nichedb, ring, ${Object.keys(OPML_SOURCES).join(', ')})`)
+  const opml = flag(args, '--opml')
+  if (opml) sites.push(...sitesFromOpml(await opmlText(opml)))
   if (file) sites.push(...sitesFromText(readFileSync(file, 'utf8')))
   sites.push(...sitesFromText(args.filter((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--')).join(' ')))
   if (limit) sites = sites.slice(0, limit)

@@ -79,13 +79,15 @@ const K = {
   log: 'pitcrawl:log',
 }
 
+// The seen-set and count live ARGV[3] ms past the site's last new page (a sliding
+// window): a site being crawled keeps them, a finished one lets them go. At hundreds of
+// thousands of sites, sets held for the whole 30-day cycle would be gigabytes of Redis;
+// the site's own schedule (pitcrawl:sites) is what stops it starting again early.
 const ADMIT = `
 if redis.call('SADD', KEYS[1], ARGV[1]) == 0 then return 0 end
 local n = redis.call('INCR', KEYS[2])
-if n == 1 then
-  redis.call('PEXPIRE', KEYS[1], ARGV[3])
-  redis.call('PEXPIRE', KEYS[2], ARGV[3])
-end
+redis.call('PEXPIRE', KEYS[1], ARGV[3])
+redis.call('PEXPIRE', KEYS[2], ARGV[3])
 if n > tonumber(ARGV[2]) then return -1 end
 return n
 `
@@ -97,7 +99,7 @@ export class RedisFrontier implements Frontier {
   constructor(
     redis: Redis,
     private readonly maxPages: number,
-    private readonly cycleMs: number,
+    private readonly seenTtlMs: number,
   ) {
     // A fixed script registered once (EVALSHA after the first call), never built from input.
     if (!('pitcrawlAdmit' in redis)) redis.defineCommand('pitcrawlAdmit', { numberOfKeys: 2, lua: ADMIT })
@@ -105,7 +107,7 @@ export class RedisFrontier implements Frontier {
   }
 
   async admit(site: string, url: string) {
-    const n = Number(await this.redis.pitcrawlAdmit(K.seen(site), K.count(site), urlId(url), this.maxPages, this.cycleMs))
+    const n = Number(await this.redis.pitcrawlAdmit(K.seen(site), K.count(site), urlId(url), this.maxPages, this.seenTtlMs))
     return n === 0 ? 'seen' : n < 0 ? 'full' : 'new'
   }
 
