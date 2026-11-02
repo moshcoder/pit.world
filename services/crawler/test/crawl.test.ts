@@ -189,3 +189,24 @@ describe('publishing to nichedb', () => {
     expect(frontier.counters.published).toBe(2)
   })
 })
+
+import { spreadDelay } from '../src/crawler.ts'
+
+describe('waiting for a busy site', () => {
+  test('a page waits for the slot plus a random share of the site backlog, capped', () => {
+    expect(spreadDelay(800, 0, 1500, () => 0.99)).toBe(800)
+    expect(spreadDelay(800, 1, 1500, () => 0.99)).toBe(800)
+    expect(spreadDelay(800, 101, 1500, () => 0)).toBe(800)
+    expect(spreadDelay(800, 101, 1500, () => 0.5)).toBe(800 + 50 * 1500)
+    expect(spreadDelay(800, 1000, 3000, () => 0.99)).toBe(30 * 60_000)
+  })
+
+  test('so a site with a long queue wakes about one page per gap, not all of them', () => {
+    const wakes = new Map<number, number>()
+    for (let i = 0; i < 200; i++) {
+      const slot = Math.floor(spreadDelay(0, 200, 1500) / 1500)
+      wakes.set(slot, (wakes.get(slot) ?? 0) + 1)
+    }
+    expect(Math.max(...wakes.values())).toBeLessThan(10)
+  })
+})
