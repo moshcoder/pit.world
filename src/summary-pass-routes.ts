@@ -61,6 +61,8 @@ export function mountSummaryPass(app: Hono<any>, d: { passes: SummaryPasses; acc
 <li>A summary someone already asked for is free and does not count.</li>
 <li>Searching stays free, without an account.</li>
 </ul>
+<h2>For bots and agents: x402</h2>
+<p>No account needed. Over the free limit, <code>POST /api/summarize</code> answers <code>402</code> with an x402 offer: $${PASS_USD} in USDC for the same pass. Retry with the <code>PAYMENT-SIGNATURE</code> (or <code>X-PAYMENT</code>) header and the summary starts. The response carries your pass token in the <code>x-summary-pass</code> header; send it on later calls. <code>GET /api/summary-pass</code> is the offer on its own, <code>POST</code> with a payment buys a token, and <code>GET</code> with your token shows what is left. Payments are verified and settled by CoinPay.</p>
 <p>${me ? '<a class="btn" href="/account#summary-pass">Buy a week →</a>' : '<a class="btn" href="/signin?next=%2Faccount%23summary-pass">Sign in with CoinPay to buy →</a>'}</p>`,
       }),
     )
