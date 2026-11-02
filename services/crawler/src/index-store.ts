@@ -297,15 +297,19 @@ export class IndexStore {
     if (!match && query.site) {
       // One site: its own index, no windows needed.
       const rows = this.db
+        // threatcrush-disable-next-line sql-template-interpolation  only fixed column filters and "?" placeholders are interpolated; every value is bound
         .query(`SELECT pp.id FROM page_policy pp WHERE pp.train = 1 AND pp.id > ?${where} ORDER BY pp.site, pp.id LIMIT ?`)
         .all(start, ...params, limit) as Array<{ id: number }>
       for (const r of rows) ids.push(r.id)
       scannedTo = rows.length === limit ? rows[rows.length - 1]!.id : maxId
     } else {
-      const sql = match
-        ? `SELECT f.rowid AS id FROM pages_fts f CROSS JOIN page_policy pp ON pp.id = f.rowid
-           WHERE pages_fts MATCH ? AND f.rowid > ? AND f.rowid <= ? AND pp.train = 1${where} ORDER BY f.rowid LIMIT ?`
-        : `SELECT pp.id FROM page_policy pp WHERE pp.train = 1 AND pp.id > ? AND pp.id <= ?${where} ORDER BY pp.id LIMIT ?`
+      const ftsSql =
+        // threatcrush-disable-next-line sql-template-interpolation  only fixed column filters and "?" placeholders are interpolated; every value is bound
+        `SELECT f.rowid AS id FROM pages_fts f CROSS JOIN page_policy pp ON pp.id = f.rowid WHERE pages_fts MATCH ? AND f.rowid > ? AND f.rowid <= ? AND pp.train = 1${where} ORDER BY f.rowid LIMIT ?`
+      const allSql =
+        // threatcrush-disable-next-line sql-template-interpolation  only fixed column filters and "?" placeholders are interpolated; every value is bound
+        `SELECT pp.id FROM page_policy pp WHERE pp.train = 1 AND pp.id > ? AND pp.id <= ?${where} ORDER BY pp.id LIMIT ?`
+      const sql = match ? ftsSql : allSql
       const stmt = this.db.query(sql)
       let window = 50_000
       let lo = start
@@ -324,6 +328,7 @@ export class IndexStore {
     const items: CorpusItem[] = []
     if (ids.length) {
       const rows = this.db
+        // threatcrush-disable-next-line sql-template-interpolation  only "?" placeholders are interpolated; every id is bound
         .query(`SELECT id, url, title, site, kind, language, fetched_at, substr(body, 1, ?) AS text FROM pages WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY id`)
         .all(textMax, ...ids) as CorpusItem[]
       items.push(...rows)
@@ -331,7 +336,7 @@ export class IndexStore {
     let total: number | null = null
     let capped = false
     if (match && start === 0) {
-      total = (this.db.query(`SELECT count(*) AS n FROM (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ? LIMIT ${TOTAL_CAP})`).get(match) as { n: number }).n
+      total = (this.db.query('SELECT count(*) AS n FROM (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ? LIMIT ?)').get(match, TOTAL_CAP) as { n: number }).n
       capped = total >= TOTAL_CAP
     }
     const done = scannedTo >= maxId && ids.length < limit
