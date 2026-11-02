@@ -418,6 +418,12 @@ export class Summarizer {
     while (this.texts.size > 20_000) this.texts.delete(this.texts.keys().next().value!)
   }
 
+  /** The title pit.world showed for a recent result, or null. */
+  title(url: string): string | null {
+    const entry = this.texts.get(summaryKey(url))
+    return entry ? (entry.text.split('\n')[0] ?? '').trim() || null : null
+  }
+
   /** Whether pit.world recently returned this URL in a result. */
   known(url: string): boolean {
     const entry = this.texts.get(summaryKey(url))
@@ -465,8 +471,8 @@ export class Summarizer {
     return this.status(url)
   }
 
-  private async run(key: string, url: string): Promise<void> {
-    const snippet = (this.texts.get(key)?.text ?? '').replace(/\s+/g, ' ').trim()
+  /** A page's text, read the way summaries read it (the relay, then a direct fetch). "" when it cannot be read. */
+  async pageText(url: string): Promise<string> {
     const read =
       this.options.pageText ??
       ((u: string) =>
@@ -474,7 +480,12 @@ export class Summarizer {
           ...(this.options.pageRelayUrl !== undefined ? { relayUrl: this.options.pageRelayUrl } : {}),
           ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
         }))
-    const page = (await read(url).catch(() => '')).trim()
+    return (await read(url).catch(() => '')).trim()
+  }
+
+  private async run(key: string, url: string): Promise<void> {
+    const snippet = (this.texts.get(key)?.text ?? '').replace(/\s+/g, ' ').trim()
+    const page = await this.pageText(url)
     // The page is what gets summarized. The snippet stands in only when no page could be read.
     let text: string
     let source: 'page' | 'snippet'

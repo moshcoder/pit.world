@@ -418,7 +418,7 @@ function viaLine(label: string, result: MediaResult): string {
   }
 }
 
-export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView }): string {
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView; speech?: boolean }): string {
   const { query, vertical, result, promos, error, votes: view } = options
   const hits = result?.hits ?? []
   const label = VERTICALS.find((v) => v.id === vertical)!.label
@@ -427,7 +427,7 @@ export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 
   ${searchForm(query, false, vertical)}
 </header>
 ${tabs(query, vertical)}
-<main class="results ${vertical}" data-q="${esc(query)}">
+<main class="results ${vertical}" data-q="${esc(query)}"${options.speech ? ' data-speech="1"' : ''}>
   ${featuredBox(options.featured, view)}
   ${promoStrip(promos, vertical, view)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
@@ -445,11 +445,12 @@ ${tabs(query, vertical)}
 /** Web results before the one ad line: in the content, never at the top, never by the footer. */
 const AD_AFTER = 3
 
-function hitItem(h: SearchResult['hits'][number], summaries = false, view?: VoteView): string {
-  // Summarize: hidden until app.js shows it (it needs script), and only when the server has c0mpute.
-  const summarize = summaries
-    ? `<div class="summary-row"><button type="button" class="summarize" data-url="${esc(h.url)}" hidden>Summarize</button><p class="summary" hidden aria-live="polite"></p></div>`
-    : ''
+function hitItem(h: SearchResult['hits'][number], summaries = false, view?: VoteView, listen = false): string {
+  // Summarize and Listen: hidden until app.js shows them (they need script), and only when the server has c0mpute.
+  const summarize =
+    summaries || listen
+      ? `<div class="summary-row">${summaries ? `<button type="button" class="summarize" data-url="${esc(h.url)}" hidden>Summarize</button>` : ''}${listen ? `<button type="button" class="listen" data-url="${esc(h.url)}" data-title="${esc(h.title)}" data-host="${esc(h.host)}" hidden>Listen</button>` : ''}<p class="summary" hidden aria-live="polite"></p></div>`
+      : ''
   return `<li${h.featured ? ' class="featured-hit"' : ''}>
       <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
       <div class="url">${esc(h.host)}${h.featured ? '<span class="src featured" title="A W3BS network site, featured on pit.world. Not an ad.">Featured</span>' : ''}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
@@ -460,9 +461,9 @@ function hitItem(h: SearchResult['hits'][number], summaries = false, view?: Vote
     </li>`
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; votes?: VoteView }): string {
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; listen?: boolean; votes?: VoteView }): string {
   const { query, result, resolution, error, votes: view } = options
-  const item = (h: SearchResult['hits'][number]) => hitItem(h, options.summaries, view)
+  const item = (h: SearchResult['hits'][number]) => hitItem(h, options.summaries, view, options.listen)
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
   const body = `<header class="bar">
@@ -470,7 +471,7 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
   ${searchForm(query)}
 </header>
 ${tabs(query, 'web')}
-<main class="results" data-q="${esc(query)}">
+<main class="results" data-q="${esc(query)}"${options.listen ? ' data-speech="1"' : ''}>
   ${resolution?.registered ? moshpitCard(resolution) : ''}
   ${featuredBox(options.featured, view)}
   ${options.card ?? ''}
@@ -519,6 +520,7 @@ export function privacyPage(): string {
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 <li><b>Summarize</b> under a result asks <a href="https://c0mpute.com/">c0mpute</a>, a peer network of inference nodes, for two or three sentences about that page. pit.world reads the page itself first, through <a href="https://tronbrowser.dev/">TronBrowser</a>'s page reader (the same one c0mpute's chat uses for web search), which is sent the page address only. The node is then sent the page's text and address only: never your search words, your IP address or your account. Summaries are kept by page address so the next person gets the same one instantly. Without an account you get a few an hour; signed in, more; with the <a href="/pass">$1 weekly pass</a>, up to 1,000 a week. The pass keeps only a count of summaries per account and time, never which pages.</li>
 <li id="players"><b>Play here, Listen here, Read here</b> under a video, song, podcast or book plays it on the results page. Nothing loads until you press the button. Videos, Spotify, SoundCloud and Internet Archive books then load in the site's own player (YouTube through youtube-nocookie.com, Vimeo with do-not-track), and that site sees your IP address and pit.world as the page you came from, never your search. Song previews and podcast episodes are streamed through pit.world, so the publisher sees our server, not you.</li>
+<li id="speech"><b>Listen and Transcript</b> are written by <a href="https://c0mpute.com/">c0mpute</a>'s speech workers. Listen sends a page's text (its summary, or the start of the page pit.world read) to be read aloud; Transcript sends a podcast episode's audio, which pit.world fetches itself, to be written down. Neither is sent your search or who you are. Both are kept by page or episode address only, so the next person to ask gets them instantly; nothing records who asked. The pass counts uses per account and time, the same way it counts summaries.</li>
 </ol>
 <h2>Moshpit names</h2>
 <p>When a search looks like a name (<code>chovy.hacker</code>), pit.world also asks the public Moshpit registry whether it exists. That lookup is the name only, from our server.</p>
