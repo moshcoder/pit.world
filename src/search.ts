@@ -23,6 +23,13 @@ export type Provider = 'serper' | 'bing' | 'brave' | 'tavily' | 'ceramic' | 'exa
 
 export type Keys = Partial<Record<Provider, string>>
 
+import { makeSnippet } from './snippet.js'
+
+/** Each hit's description cut to a short, query-biased snippet (src/snippet.ts). */
+export function withSnippets(hits: Hit[], query: string): Hit[] {
+  return hits.map((h) => ({ ...h, description: makeSnippet(h.description, { title: h.title, query }) }))
+}
+
 export type SearchResult = {
   query: string
   /** The engine, or engines joined with +, that answered: `serper+bing`, `serper`, `linkup`. */
@@ -373,7 +380,14 @@ function fail(failures: SearchResult['failures'], provider: Provider, error: unk
 export async function search(
   query: string,
   keys: Keys,
-  options: { limit?: number; cache?: Cache; fetch?: Fetch; order?: Provider[] } = {},
+  options: {
+    limit?: number
+    cache?: Cache
+    fetch?: Fetch
+    order?: Provider[]
+    /** Told the engines' full text per hit before it is cut to a snippet (the summarizer reads it). */
+    onText?: (hits: Hit[]) => void
+  } = {},
 ): Promise<SearchResult> {
   const q = normalizeQuery(query)
   const limit = Math.min(20, Math.max(1, options.limit ?? 10))
@@ -396,7 +410,7 @@ export async function search(
       const result: SearchResult = {
         query: q,
         provider: answers.map((a) => a.provider).join('+'),
-        hits: mergeResults(answers, limit),
+        hits: finish(mergeResults(answers, limit), q, options.onText),
         failures,
         cached: false,
       }
@@ -408,7 +422,7 @@ export async function search(
   }
   for (const provider of fallbacks) {
     try {
-      const hits = (await callProvider(provider, keys[provider]!, q, limit, options.fetch)).map((h) => ({ ...h, sources: [provider] }))
+      const hits = finish((await callProvider(provider, keys[provider]!, q, limit, options.fetch)).map((h) => ({ ...h, sources: [provider] })), q, options.onText)
       const result: SearchResult = { query: q, provider, hits, failures, cached: false }
       options.cache?.set(cacheKey, result)
       return result
@@ -417,4 +431,11 @@ export async function search(
     }
   }
   throw new SearchUnavailable(`Every search provider failed: ${failures.map((f) => `${f.provider} ${f.error}`).join('; ')}`)
+}
+
+function finish(hits: Hit[], query: string, onText?: (hits: Hit[]) => void): Hit[] {
+  try {
+    onText?.(hits)
+  } catch {}
+  return withSnippets(hits, query)
 }

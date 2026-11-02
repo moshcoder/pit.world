@@ -12,6 +12,7 @@
  * on-demand video (promoted.ts) sits on top of Videos, Music and Live.
  */
 import { Cache, normalizeQuery, SearchUnavailable, type Keys } from './search.js'
+import { makeSnippet } from './snippet.js'
 
 type Fetch = typeof fetch
 
@@ -32,8 +33,11 @@ export const VERTICALS: Array<{ id: Vertical; label: string }> = [
   { id: 'scholar', label: 'Scholar' },
 ]
 
-/** The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing. */
-const SERPER_ONLY: Vertical[] = ['images', 'videos', 'music', 'live', 'shopping', 'places']
+/**
+ * The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing.
+ * Images, Videos and Live are not here: they fall back to open indexes (Wikimedia Commons, PeerTube, the Internet Archive).
+ */
+const SERPER_ONLY: Vertical[] = ['music', 'shopping', 'places']
 
 type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs'>
 
@@ -65,7 +69,7 @@ export type Media = {
   extra?: string
 }
 
-export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex'
+export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive'
 
 export type MediaResult = {
   query: string
@@ -84,6 +88,9 @@ export const MEDIA_SOURCES: Record<MediaProvider, string> = {
   p0dcasters: 'the p0dcasters.com directory',
   openlibrary: 'Open Library',
   openalex: 'OpenAlex',
+  commons: 'Wikimedia Commons',
+  peertube: 'PeerTube (Sepia Search) and the Internet Archive',
+  archive: 'the Internet Archive',
 }
 
 export const MUSIC_SITES = ['bandcamp.com', 'soundcloud.com', 'open.spotify.com', 'music.apple.com', 'music.youtube.com', 'audiomack.com', 'mixcloud.com']
@@ -102,6 +109,9 @@ const THUMB_HOSTS = [
   /^covers\.openlibrary\.org$/,
   /^archive\.org$/,
   /^ia\d+\.us\.archive\.org$/,
+  // Wikimedia Commons thumbnails (the Images tab without Google).
+  /^upload\.wikimedia\.org$/,
+  /^thumb\.wikimedia\.org$/,
 ]
 
 export function thumbAllowed(raw: string): URL | null {
@@ -332,9 +342,11 @@ export function parseOpenLibrary(body: any): Media[] {
     const cover = num(d?.cover_i)
     const editions = num(d?.edition_count)
     const year = num(d?.first_publish_year)
+    const first = Array.isArray(d?.first_sentence) ? str(d.first_sentence[0]) : str(d?.first_sentence)
     return [
       {
         url: `https://openlibrary.org${key}`,
+        description: first || undefined,
         title,
         host: 'openlibrary.org',
         author: authors.slice(0, 3).join(', ') || undefined,
@@ -399,6 +411,99 @@ export function parseRssAmplifier(body: any): { posts: Media[]; sites: Media[] }
   return { posts, sites }
 }
 
+/** Wikimedia Commons file search (generator=search, namespace 6, with imageinfo): free pictures, linked to their Commons page. */
+export function parseCommonsImages(body: any): Media[] {
+  const pages: any[] = body?.query?.pages ? Object.values(body.query.pages) : []
+  return pages
+    .sort((a, b) => (num(a?.index) ?? 0) - (num(b?.index) ?? 0))
+    .flatMap((p) => {
+      const info = Array.isArray(p?.imageinfo) ? p.imageinfo[0] : null
+      const url = httpUrl(info?.descriptionurl)
+      if (!url || !/^image\//.test(str(info?.mime))) return []
+      const title = str(p?.title).replace(/^File:/i, '').replace(/\.[a-z0-9]{2,5}$/i, '').replace(/_/g, ' ')
+      return [
+        {
+          url,
+          title: title || 'Wikimedia Commons file',
+          host: 'commons.wikimedia.org',
+          thumbnail: httpUrl(info?.thumburl) || undefined,
+          width: num(info?.width),
+          height: num(info?.height),
+        },
+      ]
+    })
+}
+
+/** PeerTube's Sepia Search (sepiasearch.org, every federated instance): videos and live streams. */
+export function parseSepia(body: any): Media[] {
+  const rows: any[] = Array.isArray(body?.data) ? body.data : []
+  return rows.flatMap((v) => {
+    const url = httpUrl(v?.url)
+    const title = str(v?.name)
+    if (!url || !title || v?.nsfw === true) return []
+    const seconds = num(v?.duration)
+    return [
+      {
+        url,
+        title,
+        host: str(v?.channel?.host) || host(url),
+        description: str(v?.description).replace(/\s+/g, ' ') || undefined,
+        duration: v?.isLive ? 'LIVE' : seconds ? clock(seconds) : undefined,
+        date: day(v?.publishedAt),
+        channel: str(v?.channel?.displayName) || str(v?.account?.displayName) || undefined,
+      },
+    ]
+  })
+}
+
+/** Internet Archive advancedsearch (mediatype:movies): thumbnails from archive.org/services/img, which /img may fetch. */
+export function parseArchiveMovies(body: any): Media[] {
+  const docs: any[] = Array.isArray(body?.response?.docs) ? body.response.docs : []
+  return docs.flatMap((d) => {
+    const id = str(d?.identifier)
+    const title = str(Array.isArray(d?.title) ? d.title[0] : d?.title)
+    if (!/^[A-Za-z0-9._-]{1,100}$/.test(id) || !title) return []
+    const description = str(Array.isArray(d?.description) ? d.description[0] : d?.description)
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return [
+      {
+        url: `https://archive.org/details/${id}`,
+        title,
+        host: 'archive.org',
+        thumbnail: `https://archive.org/services/img/${id}`,
+        description: description || undefined,
+        date: day(d?.date) ?? (num(d?.year) ? String(d.year) : undefined),
+        channel: str(Array.isArray(d?.creator) ? d.creator[0] : d?.creator) || undefined,
+      },
+    ]
+  })
+}
+
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.trunc(seconds))
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = String(s % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`
+}
+
+/** Two lists, alternating, without repeats. */
+function interleave(a: Media[], b: Media[]): Media[] {
+  const out: Media[] = []
+  const seen = new Set<string>()
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    for (const m of [a[i], b[i]]) {
+      if (m && !seen.has(m.url)) {
+        seen.add(m.url)
+        out.push(m)
+      }
+    }
+  }
+  return out
+}
+
 /** What Serper is asked for each tab. */
 export function serperRequest(vertical: SerperVertical, q: string, limit: number): { endpoint: string; body: Record<string, unknown> } {
   switch (vertical) {
@@ -443,8 +548,8 @@ const LIMITS: Partial<Record<Vertical, { max: number; default: number }>> = {
 /** Our own requests say who we are and nothing about who asked. */
 const OURS = { 'user-agent': 'pit.world search (https://pit.world/privacy)', accept: 'application/json' }
 
-async function fetchJson(fetchImpl: Fetch, url: string, init: RequestInit = {}): Promise<any> {
-  const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(8_000) })
+async function fetchJson(fetchImpl: Fetch, url: string, init: RequestInit = {}, timeoutMs = 8_000): Promise<any> {
+  const response = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(timeoutMs) })
   if (!response.ok) throw new Error(`HTTP ${response.status}`)
   return response.json()
 }
@@ -457,6 +562,35 @@ async function askSerper(fetchImpl: Fetch, key: string, vertical: SerperVertical
     body: JSON.stringify(body),
   })
   return PARSERS[endpoint]!(json)
+}
+
+/** Images without Google: Wikimedia Commons' file search. */
+async function askCommons(fetchImpl: Fetch, q: string, limit: number): Promise<Media[]> {
+  const params = new URLSearchParams({
+    action: 'query',
+    format: 'json',
+    generator: 'search',
+    gsrnamespace: '6',
+    gsrsearch: `${q} filetype:bitmap|drawing`,
+    gsrlimit: String(Math.min(50, limit)),
+    prop: 'imageinfo',
+    iiprop: 'url|size|mime',
+    iiurlwidth: '320',
+  })
+  return parseCommonsImages(await fetchJson(fetchImpl, `https://commons.wikimedia.org/w/api.php?${params}`, { headers: OURS }))
+}
+
+/** Videos (or live streams) without Google: PeerTube's Sepia Search, with the Internet Archive's films beside it. */
+async function askOpenVideo(fetchImpl: Fetch, q: string, limit: number, live: boolean): Promise<Media[]> {
+  const sepia = new URLSearchParams({ search: q, count: String(Math.min(50, limit)), sort: '-match', nsfw: 'false', ...(live ? { isLive: 'true' } : {}) })
+  const archive = new URLSearchParams({ q: `(${q}) AND mediatype:movies`, rows: String(Math.min(50, limit)), output: 'json' })
+  for (const f of ['identifier', 'title', 'description', 'date', 'year', 'creator']) archive.append('fl[]', f)
+  const [peertube, ia] = await Promise.all([
+    fetchJson(fetchImpl, `https://sepiasearch.org/api/v1/search/videos?${sepia}`, { headers: OURS }).then(parseSepia, () => null),
+    live ? Promise.resolve([] as Media[]) : fetchJson(fetchImpl, `https://archive.org/advancedsearch.php?${archive}`, { headers: OURS }).then(parseArchiveMovies, () => null),
+  ])
+  if (!peertube && !ia) throw new Error('no open video index answered')
+  return interleave(peertube ?? [], ia ?? [])
 }
 
 async function askRssAmplifier(fetchImpl: Fetch, kind: 'blogs' | 'news', q: string): Promise<{ posts: Media[]; sites: Media[] }> {
@@ -482,7 +616,8 @@ export async function searchMedia(
     query: q,
     vertical,
     provider,
-    hits: hits.slice(0, limit),
+    // Video and paper descriptions can run to pages: the same short, query-biased snippet as web results.
+    hits: hits.slice(0, limit).map((h) => (h.description ? { ...h, description: makeSnippet(h.description, { title: h.title, query: q }) || undefined } : h)),
     ...(sites?.length ? { sites: sites.slice(0, 6) } : {}),
     cached: false,
   })
@@ -490,8 +625,26 @@ export async function searchMedia(
   try {
     switch (vertical) {
       case 'books': {
-        const params = new URLSearchParams({ q, limit: String(limit), fields: 'key,title,author_name,first_publish_year,cover_i,edition_count' })
-        result = make('openlibrary', parseOpenLibrary(await fetchJson(fetchImpl, `https://openlibrary.org/search.json?${params}`, { headers: OURS })))
+        const params = new URLSearchParams({ q, limit: String(limit), fields: 'key,title,author_name,first_publish_year,cover_i,edition_count,first_sentence' })
+        const url = `https://openlibrary.org/search.json?${params}`
+        // Open Library is free and sometimes slow (several seconds, the odd 5xx): one patient retry before giving up.
+        const body = await fetchJson(fetchImpl, url, { headers: OURS }, 10_000).catch(() => fetchJson(fetchImpl, url, { headers: OURS }, 15_000))
+        result = make('openlibrary', parseOpenLibrary(body))
+        break
+      }
+      case 'images':
+      case 'videos':
+      case 'live': {
+        // Google first; open indexes when it is not configured, out of credits, or does not answer.
+        const google = key ? await askSerper(fetchImpl, key, vertical, q, limit).catch(() => null) : null
+        if (google?.length) result = make('serper', google)
+        else if (vertical === 'images') result = make('commons', await askCommons(fetchImpl, q, limit))
+        else {
+          let videos = await askOpenVideo(fetchImpl, q, limit, vertical === 'live')
+          // Few PeerTube streams are live at any moment: then recorded streams, as Google's Live tab does.
+          if (vertical === 'live' && !videos.length) videos = await askOpenVideo(fetchImpl, `${q} live stream`, limit, false)
+          result = make('peertube', videos)
+        }
         break
       }
       case 'podcasts':

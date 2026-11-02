@@ -28,6 +28,17 @@ export function createMcpServer(client = new PitClient()): McpServer {
   )
 
   server.tool(
+    'summarize',
+    'A 2-3 sentence summary of a web page from a pit.world search result, written by c0mpute (peer inference nodes, never a paid provider). Search first: only pages pit.world just returned can be summarized. Can take up to a couple of minutes; cached summaries are instant. Anonymous callers get a few an hour.',
+    { url: z.string().url().max(2000) },
+    async ({ url }: { url: string }) => {
+      const r = await client.summarize(url)
+      const ok = r.status === 'done'
+      return { content: [{ type: 'text', text: ok ? r.summary! : r.status === 'pending' ? 'Still being written; ask again in a minute.' : (r.error ?? `No summary (${r.status}).`) }], ...(ok || r.status === 'pending' ? {} : { isError: true }) }
+    },
+  )
+
+  server.tool(
     'submit_urls',
     "Put sites, pages, RSS/Atom/JSON feeds, sitemaps or OPML files into pit.world's own search index (pitbot reads them; feeds are also listed on rssamplifier.com). Up to 1,000 addresses; each is answered with what it looks like and queued.",
     { urls: z.array(z.string().min(3).max(2000)).min(1).max(1000) },

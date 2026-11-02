@@ -44,6 +44,8 @@ import { mountRewards, rewardsOnSignIn, rewardsSections } from './rewards-routes
 import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
+import { Summarizer, SummaryStore } from './summarize.js'
+import { createThrottle } from '@profullstack/throttle'
 
 export type Deps = {
   keys: Keys
@@ -82,6 +84,10 @@ export type Deps = {
   internalIps?: string[]
   /** The x402 crawl gateway (src/crawl-gate.ts); unset means training crawlers read free. */
   crawlGate?: CrawlGate | null
+  /** Result summaries by c0mpute (src/summarize.ts); unset or keyless means the Summarize button is off. */
+  summarizer?: Summarizer
+  /** Summaries a visitor may start per hour: anonymous per address, signed in per account, and all anonymous visitors together. */
+  summaryLimits?: { anon: number; signedIn: number; anonTotal: number }
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -139,7 +145,12 @@ export function createApp(deps: Deps) {
     try {
       // Our index's network pages are asked alongside the engines (loopback, capped at 1.5 s).
       const fromIndex = networkPagesFromIndex(query, deps.keys.pit, network, deps.fetch)
-      const result = await search(query, deps.keys, { cache, limit, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      const result = await search(query, deps.keys, {
+        cache,
+        limit,
+        ...(deps.fetch ? { fetch: deps.fetch } : {}),
+        ...(deps.summarizer ? { onText: (hits) => deps.summarizer!.remember(hits) } : {}),
+      })
       logFailures(result.failures)
       const preferred = featuredFor(query, 1)[0]
       return { result: featureNetwork(result, network, await fromIndex, preferred), error: null }
@@ -372,7 +383,7 @@ export function createApp(deps: Deps) {
     const leadHost = result?.hits[0]?.featured ? result.hits[0].host : null
     const featured = featuredFor(query).filter((s) => !leadHost || new URL(siteHref(s, false)).hostname !== leadHost)
     const backfill = featured.length || leadHost ? undefined : backfillFor(query)
-    return c.html(resultsPage({ query, result, resolution, error, featured, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+    return c.html(resultsPage({ query, result, resolution, error, featured, summaries: !!deps.summarizer?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
   })
 
   // --- JSON API ---------------------------------------------------------------
@@ -417,6 +428,68 @@ export function createApp(deps: Deps) {
 
   app.get('/api/bangs', (c) => c.json(BANGS.map((b) => ({ name: b.name, bangs: b.aliases, url: b.url }))))
 
+  // --- summaries (src/summarize.ts) ------------------------------------------------
+  // POST starts one (throttled; a cached summary is free and instant), GET polls it. Never blocks a search.
+  const summarizer = deps.summarizer
+  const summaryLimits = deps.summaryLimits ?? { anon: 5, signedIn: 60, anonTotal: 300 }
+  // Each counts against `x-pit-who`, set below from the address or the account; none multiplies by headroom.
+  const hourly = (limit: number) =>
+    createThrottle({ limit, windowSeconds: 3600, headroom: 1, credential: false, subresources: false, identify: (r) => r.headers.get('x-pit-who') })
+  const anonPerIp = hourly(summaryLimits.anon)
+  const anonTotal = hourly(summaryLimits.anonTotal)
+  const perAccount = hourly(summaryLimits.signedIn)
+  const over = async (throttle: ReturnType<typeof hourly>, who: string) =>
+    !!(await throttle.handle(new Request('http://pit.world/api/summarize', { method: 'POST', headers: { 'x-pit-who': who } })))
+  const summaryAccount = (c: Context<Env>) => {
+    const a = deps.accounts?.accounts
+    if (!a) return null
+    const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '')
+    return (bearer ? a.tokenAccount(bearer) : null) ?? a.sessionAccount(parseCookies(c.req.header('cookie'))[SESSION_COOKIE])
+  }
+  const summaryUrl = (raw: unknown): string | null => {
+    if (typeof raw !== 'string' || raw.length > 2000) return null
+    try {
+      const u = new URL(raw.trim())
+      return /^https?:$/.test(u.protocol) ? u.href : null
+    } catch {
+      return null
+    }
+  }
+
+  app.get('/api/summarize', (c) => {
+    if (!summarizer?.enabled) return c.json({ error: 'Summaries are off on this server.' }, 503)
+    const url = summaryUrl(c.req.query('url'))
+    if (!url) return c.json({ error: 'url must be an http(s) address' }, 400)
+    return c.json(summarizer.status(url))
+  })
+
+  app.post('/api/summarize', async (c) => {
+    if (!summarizer?.enabled) return c.json({ error: 'Summaries are off on this server.' }, 503)
+    const type = c.req.header('content-type') ?? ''
+    const body: any = type.includes('json') ? await c.req.json().catch(() => ({})) : await c.req.parseBody().catch(() => ({}))
+    const url = summaryUrl(body?.url ?? c.req.query('url'))
+    if (!url) return c.json({ error: 'url must be an http(s) address' }, 400)
+    const now = summarizer.status(url)
+    // Already written or being written: free.
+    if (now.status === 'done') return c.json(now)
+    if (now.status === 'pending') return c.json(now, 202)
+    if (!summarizer.known(url)) return c.json({ status: 'refused', url, error: 'Only a page from a recent pit.world result can be summarized. Search for it first.' }, 404)
+    const me = summaryAccount(c)
+    if (me) {
+      if (await over(perAccount, `acct:${me.id}`)) {
+        c.header('retry-after', '3600')
+        return c.json({ status: 'limited', url, error: `That is ${summaryLimits.signedIn} summaries this hour. More in an hour.` }, 429)
+      }
+    } else {
+      const ip = c.env?.ip || 'unknown'
+      if ((await over(anonPerIp, `ip:${ip}`)) || (await over(anonTotal, 'anon'))) {
+        c.header('retry-after', '3600')
+        return c.json({ status: 'limited', url, signIn: '/signin', error: `Free summaries are ${summaryLimits.anon} an hour without an account. Sign in for ${summaryLimits.signedIn} an hour.` }, 429)
+      }
+    }
+    return c.json(summarizer.start(url), 202)
+  })
+
   // Thumbnails for the Images/Videos/Live/Shopping/News tabs and Open Library's book covers, fetched by us so
   // the visitor's browser never talks to Google, YouTube or Open Library. Only the hosts in thumbAllowed():
   // a redirect is followed by hand (covers.openlibrary.org -> archive.org -> ia<N>.us.archive.org), and every
@@ -428,7 +501,7 @@ export function createApp(deps: Deps) {
       let upstream: Response | null = null
       for (let hop = 0; hop < 4; hop++) {
         // threatcrush-disable-next-line js-ssrf-outbound-request  fixed allowlist of public thumbnail hosts (thumbAllowed), https only, every redirect hop re-checked
-        const response: Response = await (deps.fetch ?? fetch)(url.href, { redirect: 'manual', signal: AbortSignal.timeout(6_000) })
+        const response: Response = await (deps.fetch ?? fetch)(url.href, { redirect: 'manual', signal: AbortSignal.timeout(6_000), headers: { 'user-agent': 'pit.world image proxy (https://pit.world/privacy)' } })
         if (response.status < 300 || response.status >= 400) {
           upstream = response
           break
@@ -578,7 +651,14 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     setInterval(tick, 60_000).unref()
   }
   const rewards = new Rewards(accounts.accounts.db, { mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com', promoterCode: (code) => Boolean(promoters.byCode(code)) })
-  const app = createApp({ keys: keysFromEnv(), crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  // c0mpute only (AGENTS.md): no key, no summaries; never a paid provider.
+  const summarizer = new Summarizer({
+    ...(env.C0MPUTE_API_KEY ? { apiKey: env.C0MPUTE_API_KEY } : {}),
+    model: env.C0MPUTE_MODEL ?? 'qwen2.5:7b',
+    ...(env.C0MPUTE_URL ? { baseUrl: env.C0MPUTE_URL } : {}),
+    store: new SummaryStore(env.PIT_SUMMARIES_DB ?? `${dataDir}/summaries.db`),
+  })
+  const app = createApp({ keys: keysFromEnv(), summarizer, crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

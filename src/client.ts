@@ -62,6 +62,28 @@ export class PitClient {
     return data as T
   }
 
+  /**
+   * A c0mpute summary of a page pit.world returned in a result: starts one, then polls until a node has
+   * written it (up to `waitMs`). `token` (from `pit login`) lifts the anonymous hourly allowance.
+   */
+  async summarize(url: string, options: { token?: string; waitMs?: number; pollMs?: number } = {}): Promise<{ status: string; url: string; summary?: string; model?: string; error?: string }> {
+    const auth: Record<string, string> = options.token ? { authorization: `Bearer ${options.token}` } : {}
+    const response = await this.fetchImpl(`${this.base}/api/summarize`, {
+      method: 'POST',
+      headers: { accept: 'application/json', 'content-type': 'application/json', ...auth },
+      body: JSON.stringify({ url }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    let body = (await response.json().catch(() => ({}))) as any
+    if (!response.ok && response.status !== 202) throw new Error(body?.error ?? `HTTP ${response.status}`)
+    const until = Date.now() + (options.waitMs ?? 150_000)
+    while (body?.status === 'pending' && Date.now() < until) {
+      await new Promise((r) => setTimeout(r, options.pollMs ?? 3_000))
+      body = await this.get(`/api/summarize?url=${encodeURIComponent(url)}`)
+    }
+    return body
+  }
+
   /** Put sites, pages, feeds, sitemaps or OPML into pit.world's own index (up to 1,000). */
   submit(urls: string[]): Promise<{ ok: boolean; accepted: Array<{ url: string; kind: string }>; rejected: Array<{ url: string; error: string }>; queued: number; message?: string }> {
     return this.post('/api/submit', { urls })
