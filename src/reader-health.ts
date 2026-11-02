@@ -87,6 +87,7 @@ export class ReaderHealth {
     const out = new Map<string, Health>()
     if (!unique.length) return out
     const rows = this.db
+      // threatcrush-disable-next-line sql-template-interpolation  only "?" placeholders are interpolated; every value is bound
       .query(`SELECT domain, blocked, ok, updated_at, last_blocked_at, last_ok_at FROM reader_health WHERE domain IN (${unique.map(() => '?').join(',')})`)
       .all(...unique) as Array<{ domain: string; blocked: number; ok: number; updated_at: number; last_blocked_at: number | null; last_ok_at: number | null }>
     for (const r of rows) {
