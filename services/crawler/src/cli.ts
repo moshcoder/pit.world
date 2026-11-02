@@ -49,7 +49,15 @@ async function worker() {
         hostname: config.healthHost,
         port: config.healthPort,
         async fetch(request) {
-          const path = new URL(request.url).pathname
+          const url = new URL(request.url)
+          const path = url.pathname
+          if (path === '/api/v1/search') {
+            // The same shape as nichedb's search, so pit.world reads either.
+            const q = (url.searchParams.get('q') ?? '').slice(0, 512)
+            const limit = Number(url.searchParams.get('limit')) || 10
+            const items = q ? runtime.index.search(q, limit) : []
+            return Response.json({ q, count: items.length, items })
+          }
           if (path !== '/healthz' && path !== '/stats') return new Response('not found', { status: 404 })
           try {
             // /healthz is the cheap one (Docker asks every 30 s); /stats is what pit.world/status reads.

@@ -41,6 +41,8 @@ export type Config = {
   roles: Role[]
   healthPort: number
   healthHost: string
+  /** The local search mirror (SQLite FTS5) the publish role writes and /api/v1/search reads. */
+  indexPath: string
   userAgent: string
 }
 
@@ -76,6 +78,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     healthPort: num(env.CRAWL_HEALTH_PORT, 8797, 0),
     // Loopback on a host; 0.0.0.0 inside a container, whose port is published on the host's loopback.
     healthHost: env.CRAWL_HEALTH_HOST ?? '127.0.0.1',
+    indexPath: env.CRAWL_INDEX_PATH ?? './data/index.db',
     userAgent: env.CRAWL_USER_AGENT ?? USER_AGENT,
   }
 }
