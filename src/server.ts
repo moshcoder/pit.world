@@ -29,6 +29,7 @@ import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
+import { importNicheDb } from './nichedb-import.js'
 import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
@@ -373,7 +374,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,
@@ -843,6 +844,27 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   setInterval(refreshCompanyMetadata, 24 * 3600 * 1000).unref()
   setTimeout(refreshDirectoryResearch, 10_000).unref()
   setInterval(refreshDirectoryResearch, 24 * 3600 * 1000).unref()
+  // Companies from NicheDB's directory (OutreachGraph's public half) become unclaimed listings, a few
+  // pages a run: every 5 minutes while behind, hourly once caught up. One run at a time.
+  if (env.PIT_DIRECTORY_IMPORT !== 'off') {
+    let running = false
+    const importDirectory = async () => {
+      if (running) return
+      running = true
+      let caughtUp = false
+      try {
+        const r = await importNicheDb(listings, { pages: Number(env.PIT_DIRECTORY_IMPORT_PAGES ?? 10) || 10 })
+        caughtUp = r.caughtUp
+        console.log(`NicheDB directory import: read ${r.read}, companies ${r.candidates}, resolving ${r.resolved}, written ${r.imported}, after id ${r.cursor ?? 0}${r.caughtUp ? ', caught up' : ''}`)
+      } catch (err) {
+        console.error(`NicheDB directory import failed: ${(err as Error).message}`)
+      } finally {
+        running = false
+        setTimeout(importDirectory, caughtUp ? 3600_000 : 5 * 60_000).unref()
+      }
+    }
+    setTimeout(importDirectory, 90_000).unref()
+  }
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   // Last good target per name, on disk: the relay keeps serving names while the registry is down.
   const proxyDeps = { access: { resolve: (name: string) => registry.resolve(name), rootPem }, certs: liveCerts(), targets: new Targets(`${dataDir}/relay-targets.json`) }

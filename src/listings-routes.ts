@@ -284,7 +284,9 @@ export function mountListings(
     const page = pageNumber(c.req.query('page'))
     const category = c.req.query('c') ?? c.req.query('category') ?? ''
     if (category && !categoryOf(category)) return c.json({ error: 'unknown category; see GET /api/pros/categories' }, 400)
-    const { total, listings: results } = listings.directory({ category, q: c.req.query('q'), near: c.req.query('near'), limit: n, offset: (page - 1) * n })
+    // source=pit: claimed and pit.world-written listings only (what OutreachGraph reads back); nichedb: imported only.
+    const source = c.req.query('source') === 'pit' ? 'pit' : c.req.query('source') === 'nichedb' ? 'nichedb' : ''
+    const { total, listings: results } = listings.directory({ category, q: c.req.query('q'), near: c.req.query('near'), limit: n, offset: (page - 1) * n, source })
     return c.json({ total, page, results: results.map((l) => ({ ...l, openprofile: openProfileUrl(l.domain) })) })
   })
 

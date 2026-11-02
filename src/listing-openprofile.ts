@@ -44,7 +44,7 @@ export function listingOpenProfile(l: Listing): string {
         Moshpit: l.moshpit || null,
         Parent: l.company ? (l.companyUrl ? `[${l.company}](${l.companyUrl})` : l.company) : l.companyUrl || null,
         Listing: page,
-        Status: l.claimed ? 'claimed by the owner' : 'listed by pit.world from public records, unclaimed',
+        Status: l.claimed ? 'claimed by the owner' : l.imported ? 'unclaimed listing, data from nichedb.dev (OutreachGraph public directory)' : 'listed by pit.world from public records, unclaimed',
       },
       headline: l.description || null,
       sections: [

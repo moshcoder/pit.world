@@ -34,7 +34,8 @@ export const PUBLIC_DIRECTORY_SEEDS: SeedInput[] = [
 export function ensurePublicDirectorySeeds(listings: Pick<Listings, 'toPublic' | 'seed'>): number {
   let added = 0
   for (const row of PUBLIC_DIRECTORY_SEEDS) {
-    if (listings.toPublic(row.domain)) continue
+    const have = listings.toPublic(row.domain)
+    if (have && !have.imported) continue
     if (listings.seed(row)) added++
   }
   return added
