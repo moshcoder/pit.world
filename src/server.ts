@@ -29,7 +29,7 @@ import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
-import { Shares } from './shares.js'
+import { resultPath, Shares } from './shares.js'
 import { CATEGORY_RULES_VERSION, categoryFor, importNicheDb } from './nichedb-import.js'
 import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
@@ -67,7 +67,7 @@ import { playerCss, playerJs } from './player-bundle.js'
 import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-routes.js'
 import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
-import { AD_SLOT, featuredTarget, TOP_ADS, votePage } from './html.js'
+import { AD_SLOT, esc, featuredTarget, TOP_ADS, votePage } from './html.js'
 
 export type Deps = {
   keys: Keys
@@ -344,13 +344,16 @@ export function createApp(deps: Deps) {
   app.get('/share', (c) => {
     const slug = shares.save({ u: c.req.query('u'), t: c.req.query('t'), d: c.req.query('d'), i: c.req.query('i'), s: c.req.query('s') })
     if (!slug) return c.html(shareMissingPage('That share link does not check out', 'It is broken or was changed. Search again and use Share under the result.'), 400)
-    return c.redirect(`/result/${slug}`, 303)
+    return c.redirect(resultPath(slug), 303)
   })
   app.get('/result/*', (c) => {
-    const slug = decodeURIComponent(c.req.path.slice('/result/'.length))
+    let slug = ''
+    try {
+      slug = decodeURIComponent(c.req.path.slice('/result/'.length))
+    } catch {}
     const shared = slug ? shares.get(slug) : null
     if (!shared) return c.html(shareMissingPage('Not shared yet', 'Nobody has shared that result. Search for it, then use Share under it.'), 404)
-    const back = `/result/${shared.slug}`
+    const back = resultPath(shared.slug)
     const view = voteView([['result', shared.url]], back, '')
     const listing = deps.listings?.toPublic(shared.host) ? shared.host : null
     return c.html(sharedResultPage(shared, view, listing))
@@ -447,12 +450,12 @@ export function createApp(deps: Deps) {
   // pwamart.com store listing: ownership proof for https://pit.world
   app.get('/.well-known/pwamart.txt', (c) => c.body('19278327af99806655813c4a\n', 200, { 'content-type': 'text/plain; charset=utf-8' }))
   app.get('/robots.txt', (c) =>
-    c.body('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
+    c.body('User-agent: *\nDisallow: /search\nDisallow: /share\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
-        .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : []), ...shares.slugs().map(resultPath)]
+        .map((p) => `<url><loc>https://pit.world${esc(p)}</loc></url>`)
         .join('')}</urlset>`,
       200,
       { 'content-type': 'application/xml; charset=utf-8' },

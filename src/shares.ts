@@ -25,6 +25,9 @@ const DAY = 86_400_000
 /** pitbot's public record for a page it indexed (the same link /status gives). */
 export const nichedbRecord = (url: string) => `https://nichedb.dev/c/sites/${url.replace(/^https?:\/\//, '')}`
 
+/** A shared result's page path. The slug can hold "?" and "&" (a result's query string), so it is encoded; /result/* decodes it. */
+export const resultPath = (slug: string) => `/result/${encodeURI(slug).replace(/\?/g, '%3F').replace(/#/g, '%23')}`
+
 const clip = (s: string, n: number) => (s.length > n ? s.slice(0, n) : s)
 
 export class Shares {
@@ -75,6 +78,11 @@ export class Shares {
       )
       .run(slug, url, title, description, host, indexed ? 1 : 0, Math.floor(this.now() / DAY))
     return slug
+  }
+
+  /** Every shared result's slug, newest first, for the sitemap. */
+  slugs(limit = 20_000): string[] {
+    return (this.db.query('SELECT slug FROM shared_results ORDER BY day DESC, slug LIMIT ?').all(limit) as Array<{ slug: string }>).map((r) => r.slug)
   }
 
   get(slug: string): SharedResult | null {

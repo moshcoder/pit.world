@@ -3,11 +3,11 @@ import { Database } from 'bun:sqlite'
 import { Listings } from '../src/listings.ts'
 import { Registry } from '../src/moshpit.ts'
 import { createApp } from '../src/server.ts'
-import { nichedbRecord, Shares } from '../src/shares.ts'
+import { nichedbRecord, resultPath, Shares } from '../src/shares.ts'
 import { SHARED_WEIGHT, Votes } from '../src/votes.ts'
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-const HITS = Array.from({ length: 6 }, (_, i) => ({ title: `Result ${i}`, link: `https://site${i}.example/page`, snippet: `About ${i}` }))
+const HITS = [...Array.from({ length: 6 }, (_, i) => ({ title: `Result ${i}`, link: `https://site${i}.example/page`, snippet: `About ${i}` })), { title: 'With a query', link: 'https://q.example/p?b=2&c=3', snippet: 'Q' }]
 const fake = (async (input: any) => {
   if (String(input).startsWith('https://google.serper.dev')) return new Response(JSON.stringify({ organic: HITS }), { headers: { 'content-type': 'application/json' } })
   return new Response('{}', { status: 404 })
@@ -67,7 +67,10 @@ describe('shares: the pages', () => {
     expect(page).toContain('<form class="vote" method="post" action="/vote" data-item="result:site2.example/page">')
     expect(page).toContain('name="back" value="/result/site2.example/page"')
     expect(page).toContain('value="https://pit.world/result/site2.example/page"')
-    expect(page).toContain('<meta name="robots" content="noindex">')
+    expect(page).not.toContain('<meta name="robots" content="noindex">')
+    expect(page).toContain('<link rel="canonical" href="https://pit.world/result/site2.example/page">')
+    expect(await (await req('/sitemap.xml')).text()).toContain('<loc>https://pit.world/result/site2.example/page</loc>')
+    expect(await (await req('/robots.txt')).text()).toContain('Disallow: /share')
     expect(page).not.toContain('nichedb.dev/c/sites')
     // A tampered link is refused, and keeps nothing.
     expect((await req(links[3]!.replace('t=Result+3', 't=Fake'))).status).toBe(400)
@@ -86,5 +89,21 @@ describe('shares: votes on a shared page move the result on every search', () =>
     expect(move).toBeGreaterThanOrEqual(Math.floor(SHARED_WEIGHT * shared.score))
     const hits = Array.from({ length: 8 }, (_, i) => ({ url: `https://s${i}.example/` }))
     expect(v.rerank(hits, 'another search').findIndex((h) => h.url === 'https://s5.example/')).toBeLessThan(5)
+  })
+})
+
+describe('shares: a result with a query string', () => {
+  it('round-trips through the redirect, the page and the sitemap', async () => {
+    expect(resultPath('a.example/p?b=2&c=a%20b')).toBe('/result/a.example/p%3Fb=2&c=a%2520b')
+    const { req } = setup()
+    const serp = await (await req('/search?q=things')).text()
+    const link = [...serp.matchAll(/<a class="share" href="([^"]+)"/g)].map((m) => unescape(m[1]!)).find((l) => l.includes('q.example'))!
+    const hop = await req(link)
+    expect(hop.headers.get('location')).toBe('/result/q.example/p%3Fb=2&c=3')
+    const page = await (await req('/result/q.example/p%3Fb=2&c=3')).text()
+    expect(page).toContain('<h1><a href="https://q.example/p?b=2&amp;c=3"')
+    expect(page).toContain('<link rel="canonical" href="https://pit.world/result/q.example/p%3Fb=2&amp;c=3">')
+    expect(await (await req('/sitemap.xml')).text()).toContain('<loc>https://pit.world/result/q.example/p%3Fb=2&amp;c=3</loc>')
+    expect((await req('/result/%E0%A4%A')).status).toBe(404)
   })
 })

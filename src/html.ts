@@ -15,7 +15,7 @@ import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from 
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { MEDIA_SOURCES, thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 import { voteBox, type VoteView } from './vote-html.js'
-import { nichedbRecord, type SharedResult } from './shares.js'
+import { nichedbRecord, resultPath, type SharedResult } from './shares.js'
 import { embedFor, type Player } from './players.js'
 
 export const SITE = 'https://pit.world'
@@ -501,13 +501,12 @@ ${tabs(query, 'web')}
 
 /** A shared result's own page: what it is, its ▲ ▼ (votes here nudge it on every search), and a link to pass on. */
 export function sharedResultPage(r: SharedResult, view?: VoteView, listing?: string | null): string {
-  const here = `https://pit.world/result/${r.slug}`
+  const here = `https://pit.world${resultPath(r.slug)}`
   return layout({
     title: `${r.title} · pit.world`,
     description: r.description || `${r.title}, on ${r.host}: a result shared from pit.world.`,
-    path: `/result/${r.slug}`,
+    path: resultPath(r.slug),
     bodyClass: 'doc shared-result',
-    noindex: true,
     body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
 <main class="prose">
 <p class="kicker">A shared result</p>
@@ -595,7 +594,7 @@ export function privacyPage(): string {
 <ul>
 <li><b>Your searches.</b> The web server does not write access logs for pit.world, and the application logs no queries.</li>
 <li><b>Your IP address.</b> It is not stored anywhere. Rate limiting uses a keyed hash of it, held in memory, under a random key that is thrown away every hour, so the counters cannot be turned back into addresses or linked across hours.</li>
-<li id="share"><b>Shared results.</b> Share under a result keeps that one result (its address, title and snippet, and the day it was first shared) so it has a page of its own to pass on and vote on. Nothing is kept until you click Share, and never the search it came from or who clicked.</li>
+<li id="share"><b>Shared results.</b> Share under a result keeps that one result (its address, title and snippet, and the day it was first shared) so it has a public page of its own to pass on and vote on, listed in our sitemap for search engines. Nothing is kept until you click Share, and never the search it came from or who clicked.</li>
 <li id="votes"><b>Votes, and forms you send.</b> Anonymous ▲ ▼ votes are tied to a salted, hashed fingerprint of your device (things like your screen size, graphics card, installed fonts, timezone and languages, hashed together with a secret key), used only to stop one device voting many times or flooding our forms. We never store the fingerprint itself, only that hash, and it is not linked to anything you search. A vote on a result also keeps a keyed hash of the search it was cast on, so the vote can nudge that search's order; the words themselves are not stored. A vote cast while signed in also records your account, so it shows in your vote history and can earn points; votes cast signed out are not linked to any account. Sign-ups, listing claims, quote requests, submissions and free result summaries sent with JavaScript on are limited by the same hash, held in memory and gone on restart; without JavaScript they are limited by address as above.</li>
 <li><b>Cookies, to search.</b> Searching sets none and reads none. The only cookie pit.world ever sets is the sign-in one, and only after you press Sign in (below).</li>
 <li><b>Your searches, to anyone else.</b> Search results pages load nothing from a third party.</li>
