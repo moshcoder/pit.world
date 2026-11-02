@@ -13,6 +13,8 @@ export type Fetched = {
   body: string
   /** Redirected to another site: not read, handed back so that site can be crawled instead. */
   offsite?: string
+  /** The page's own opt-out headers (X-Robots-Tag, TDMRep's tdm-reservation), lowercased. */
+  optOut?: { robotsTag: string; tdmReservation: string }
 }
 
 type Fetch = typeof fetch
@@ -72,7 +74,8 @@ export async function politeGet(
     const textual = /text\/|html|xml|json/.test(contentType) || contentType === ''
     const body = textual ? await readCapped(response, options.maxBytes ?? MAX_BYTES) : ''
     if (!textual) await response.body?.cancel().catch(() => {})
-    return { url, finalUrl: current, status: response.status, contentType, body }
+    const optOut = { robotsTag: (response.headers.get('x-robots-tag') ?? '').toLowerCase(), tdmReservation: (response.headers.get('tdm-reservation') ?? '').trim() }
+    return { url, finalUrl: current, status: response.status, contentType, body, optOut }
   }
   throw new Error('too many redirects')
 }

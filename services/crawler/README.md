@@ -24,6 +24,16 @@ seed (nichedb sites, ring, file, names)
   description), word and link counts, whether it was rendered, link depth, and a hash of the
   text: an unchanged page is not written again.
 
+## Training opt-outs
+
+Every page gets a training verdict at crawl time (`trainingFor` in `src/crawler.ts`), kept in the
+local index's `page_policy` table: reserved when `X-Robots-Tag` or meta robots says `noai`, when
+TDMRep reserves it (`tdm-reservation` header or meta, `/.well-known/tdmrep.json`, read with
+robots.txt once a day), or when robots.txt keeps an AI-training crawler (`AI_TRAINING_AGENTS`) off
+the path. Search uses every page; `/api/v1/corpus` (pit.world's `/api/corpus`) only open ones.
+Pages indexed before verdicts existed are mapped by a worker thread and judged per site by a
+background backfill (robots.txt + tdmrep.json); until then they count as unknown and stay out.
+
 ## Manners
 
 User agent `Mozilla/5.0 (compatible; pitbot/0.1; +https://pit.world/bot)`. robots.txt (a
@@ -51,6 +61,8 @@ bun services/crawler/src/cli.ts seed --from p0dcasters
 bun services/crawler/src/cli.ts seed --opml https://example.com/feeds.opml
 bun services/crawler/src/cli.ts stats
 bun services/crawler/src/cli.ts read https://example.com/ [--render]
+curl '127.0.0.1:8807/api/v1/corpus?q=saas,crypto&limit=20&cursor=0'   # loopback, unmetered
+curl 127.0.0.1:8807/api/v1/corpus/stats
 ```
 
 ## Settings

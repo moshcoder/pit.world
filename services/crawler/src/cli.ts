@@ -17,9 +17,11 @@ import { configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
-import { createRuntime, enqueueSubmissions, report, snapshot, startWorkers } from './queues.ts'
+import { createRuntime, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
 import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
 import { normalizeUrl, resolvesPublic, siteOf } from './url.ts'
+import { trainingFor } from './crawler.ts'
+import { pathOf } from './robots.ts'
 
 const log = (line: string) => console.log(`${new Date().toISOString()} ${line}`)
 
@@ -68,6 +70,28 @@ async function worker() {
             if (!urls.length) return Response.json({ error: 'send { "urls": [ ... ] }' }, { status: 400 })
             return Response.json({ queued: await enqueueSubmissions(runtime, urls) }, { status: 202 })
           }
+          if (path === '/api/v1/corpus') {
+            // Loopback only: pit.world's /api/corpus meters and sells this. Pages whose publishers reserved AI training are never in it.
+            const p = url.searchParams
+            const cursor = Number(p.get('cursor') ?? 0)
+            if (!Number.isFinite(cursor) || cursor < 0) return Response.json({ error: 'cursor must be a cursor this API returned' }, { status: 400 })
+            const since = p.get('since') ?? ''
+            if (since && Number.isNaN(Date.parse(since))) return Response.json({ error: 'since must be an ISO date, e.g. 2026-11-01' }, { status: 400 })
+            const page = runtime.index.corpus({
+              q: (p.get('q') ?? '').slice(0, 512),
+              site: (p.get('site') ?? '').slice(0, 253),
+              kind: (p.get('kind') ?? '').slice(0, 40),
+              lang: (p.get('lang') ?? '').slice(0, 20),
+              ...(since ? { since: new Date(since).toISOString() } : {}),
+              limit: Number(p.get('limit')) || 20,
+              cursor,
+              textMax: Number(p.get('text_max')) || 24_000,
+            })
+            return Response.json(page)
+          }
+          if (path === '/api/v1/corpus/stats') {
+            return Response.json(runtime.index.corpusStats())
+          }
           if (path === '/api/v1/media') {
             const q = (url.searchParams.get('q') ?? '').slice(0, 512)
             const kind = url.searchParams.get('kind') === 'video' ? 'video' : 'image'
@@ -87,15 +111,71 @@ async function worker() {
       })
     : null
 
+  // Pages indexed before training verdicts were recorded: give each a row, then judge each site's
+  // pages on its robots.txt and tdmrep.json (re-crawls add the page's own headers and meta).
+  const backfill = config.roles.includes('publish') ? startPolicyBackfill(runtime, log, config.indexPath) : null
+
   const stop = async () => {
     log('stopping')
     clearInterval(watchdog)
+    backfill?.stop()
     server?.stop()
     await Promise.race([running.close(), new Promise((resolve) => setTimeout(resolve, 20_000))])
     process.exit(0)
   }
   process.on('SIGTERM', stop)
   process.on('SIGINT', stop)
+}
+
+function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, indexPath: string) {
+  let stopped = false
+  let mapping = true
+  const mapper = new Worker(new URL('./policy-map-worker.ts', import.meta.url).href, { env: { ...process.env, CRAWL_INDEX_PATH: indexPath } } as WorkerOptions)
+  mapper.onmessage = (event: MessageEvent) => {
+    const data = event.data as { done?: number; error?: string }
+    if (data.error) log(`policy map: ${data.error}`)
+    if (data.done !== undefined) {
+      mapping = false
+      log(`policy map: ${data.done} legacy pages given a row`)
+    }
+  }
+  let timer: ReturnType<typeof setTimeout> | null = null
+  const next = (ms: number) => {
+    if (!stopped) timer = setTimeout(run, ms)
+  }
+  const run = async () => {
+    try {
+      // Sites are judged as their pages are mapped; the mapper runs on its own thread.
+      const sites = runtime.index.unknownSites(8)
+      if (!sites.length) return next(mapping ? 30_000 : 10 * 60_000)
+      await Promise.all(
+        sites.map(async (site) => {
+          const robots = await runtime.crawler.robotsFor(site).catch(() => 'unavailable' as const)
+          const pages = runtime.index.unknownPagesOf(site)
+          if (robots === 'unavailable' || robots.read === 'error') return runtime.index.setPolicies(site, [])
+          runtime.index.setPolicies(
+            site,
+            pages.map((p) => {
+              const verdict = trainingFor({ robots, path: pathOf(p.url), noai: false, tdmMeta: false })
+              return { id: p.id, allowed: verdict.allowed, reason: verdict.allowed ? 'site allows (backfill)' : `${verdict.reason} (backfill)` }
+            }),
+          )
+        }),
+      )
+      next(500)
+    } catch (error) {
+      log(`policy backfill: ${(error as Error).message}`)
+      next(60_000)
+    }
+  }
+  next(30_000)
+  return {
+    stop() {
+      stopped = true
+      if (timer) clearTimeout(timer)
+      mapper.terminate()
+    },
+  }
 }
 
 async function seed(args: string[]) {

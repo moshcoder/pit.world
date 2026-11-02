@@ -9,14 +9,42 @@ import { extract, needsRender, type Extracted } from './extract.ts'
 import { politeGet, readSitemapXml } from './fetcher.ts'
 import type { Frontier } from './frontier.ts'
 import type { Rendered } from './obscura.ts'
-import { allows, EMPTY, parseRobots, pathOf, type Robots } from './robots.ts'
+import { aiDisallowed, allows, EMPTY, parseRobots, parseTdmrep, pathOf, tdmReserved, type Robots } from './robots.ts'
 import { sitesFromOpml } from './seed.ts'
 import { feedLinks, guessKind, sniff, type SubmitKind } from './submit.ts'
 import { crawlable, normalizeUrl, resolvesPublic, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
 
 /** `first`: ahead of everything already waiting (seed --first). */
 export type SiteJob = { site: string; source: string; first?: boolean }
-export type PageJob = { url: string; site: string; depth: number; rendered?: boolean }
+/** `optOut`: a training reservation the page's headers made when it was first fetched (a render has no headers). */
+export type PageJob = { url: string; site: string; depth: number; rendered?: boolean; optOut?: string }
+
+export type Training = { allowed: boolean; reason: string }
+
+/** A header reservation: X-Robots-Tag `noai`, or TDMRep's `tdm-reservation: 1`. '' when none. */
+export function headerOptOut(headers: { robotsTag: string; tdmReservation: string } | null | undefined): string {
+  if (!headers) return ''
+  if (/(^|[\s,;:])noai\b/.test(headers.robotsTag)) return 'x-robots-tag: noai'
+  if (headers.tdmReservation === '1') return 'tdm-reservation header'
+  return ''
+}
+
+/**
+ * Whether a page may go into the training corpus (/api/corpus). Search is a different use:
+ * a page is indexed either way. Any reservation the publisher made wins: X-Robots-Tag or
+ * meta robots `noai`, TDMRep (header, meta, /.well-known/tdmrep.json), or a robots.txt
+ * group that keeps an AI-training crawler (AI_TRAINING_AGENTS) off the path.
+ */
+export function trainingFor(input: { robots: Robots; path: string; optOut?: string; noai: boolean; tdmMeta: boolean }): Training {
+  if (input.optOut) return { allowed: false, reason: input.optOut }
+  if (input.noai) return { allowed: false, reason: 'meta robots: noai' }
+  if (input.tdmMeta) return { allowed: false, reason: 'tdm-reservation meta' }
+  if (tdmReserved(input.robots.tdm, input.path)) return { allowed: false, reason: 'tdmrep.json' }
+  const ai = aiDisallowed(input.robots, input.path)
+  if (ai === null) return { allowed: false, reason: 'unknown: robots.txt not read for AI crawlers' }
+  if (ai) return { allowed: false, reason: 'robots.txt disallows AI crawlers' }
+  return { allowed: true, reason: 'no reservation' }
+}
 
 export type Enqueue = {
   sites(jobs: SiteJob[]): Promise<void>
@@ -88,7 +116,8 @@ export function createCrawler(deps: Deps) {
 
   async function robotsFor(site: string): Promise<Robots | 'unavailable'> {
     const kept = await frontier.getRobots(site)
-    if (kept) return kept
+    // Cached before AI-crawler rules were kept: read again, so a training opt-out is never missed.
+    if (kept && kept.ai) return kept
     let robots: Robots = EMPTY
     try {
       const r = await get(`https://${site}/robots.txt`, site, 'text/plain,*/*;q=0.5')
@@ -96,8 +125,17 @@ export function createCrawler(deps: Deps) {
       if (r.status >= 500) return 'unavailable'
       if (r.status < 400 && !/html/.test(r.contentType)) robots = parseRobots(r.body)
     } catch {
-      robots = EMPTY
+      robots = { ...EMPTY, read: 'error' }
     }
+    // TDMRep's site-wide file: rarely there, read with robots.txt once a day.
+    let tdm: Robots['tdm'] = []
+    try {
+      const t = await get(`https://${site}/.well-known/tdmrep.json`, site, 'application/json,*/*;q=0.1')
+      if (t.status < 400 && /json|text\/plain|^$/.test(t.contentType)) tdm = parseTdmrep(t.body)
+    } catch {
+      tdm = []
+    }
+    robots = { ...robots, tdm }
     await frontier.setRobots(site, robots)
     return robots
   }
@@ -172,6 +210,7 @@ export function createCrawler(deps: Deps) {
   /** What a read page becomes: a record waiting for nichedb, and the next pages. */
   async function accept(doc: Extracted, job: PageJob, robots: Robots): Promise<string> {
     const rendered = doc.enrichment.rendered
+    doc.enrichment.training = trainingFor({ robots, path: pathOf(doc.record.url), noai: doc.noai, tdmMeta: doc.tdmReserved, ...(job.optOut ? { optOut: job.optOut } : {}) })
     if (!doc.noindex) {
       await frontier.push([{ record: doc.record, enrichment: doc.enrichment }], config.outboxMax)
       await frontier.bump(rendered ? 'pages_rendered' : 'pages_indexed')
@@ -226,12 +265,13 @@ export function createCrawler(deps: Deps) {
     if (!/html/.test(r.contentType)) return { outcome: `not a page (${r.contentType || 'no type'})` }
     const finalUrl = normalizeUrl(r.finalUrl) ?? job.url
     const doc = extract(r.body, finalUrl, { depth: job.depth, crawler: config.userAgent })
+    const optOut = headerOptOut(r.optOut)
     if (!job.rendered && deps.renderer?.size && needsRender(r.body, doc.textLength)) {
-      await enqueue.render({ ...job, rendered: true })
+      await enqueue.render({ ...job, rendered: true, ...(optOut ? { optOut } : {}) })
       await frontier.bump('render_queued')
       return { outcome: 'needs a browser' }
     }
-    return { outcome: await accept(doc, job, robots) }
+    return { outcome: await accept(doc, optOut ? { ...job, optOut } : job, robots) }
   }
 
   async function renderPage(job: PageJob): Promise<PageOutcome> {
@@ -272,7 +312,10 @@ export function createCrawler(deps: Deps) {
       const outgoing = raw.map((line) => {
         try {
           const entry = JSON.parse(line)
-          if (entry?.enrichment) delete entry.enrichment.text
+          if (entry?.enrichment) {
+            delete entry.enrichment.text
+            delete entry.enrichment.training
+          }
           return JSON.stringify(entry)
         } catch {
           return line
@@ -393,7 +436,7 @@ export function createCrawler(deps: Deps) {
     return out
   }
 
-  return { scheduleSites, crawlSite, crawlPage, renderPage, publish, recrawl, submit }
+  return { scheduleSites, crawlSite, crawlPage, renderPage, publish, recrawl, submit, robotsFor }
 }
 
 export type Crawler = ReturnType<typeof createCrawler>

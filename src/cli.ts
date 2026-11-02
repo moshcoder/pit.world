@@ -6,6 +6,7 @@
  *   pit summarize URL [--json]   a c0mpute summary of a result (search for it first)
  *   pit resolve NAME [--json]   a Moshpit name
  *   pit network [--json]        live Moshpit numbers
+ *   pit corpus [WORDS,ALT] [--limit N] [--cursor C] [--site S] [--lang L] [--since D]   training corpus (full text)
  *   pit subscribe EMAIL         newsletter signup (confirm by email)
  *   pit pros [WORDS] [--category C] [--near PLACE]   the pro directory
  *   pit edit DOMAIN --key K --field VALUE ...        edit your listing
@@ -27,6 +28,10 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit summarize URL            2-3 sentence c0mpute summary of a result (search first)
   pit resolve NAME             look up a Moshpit name (chovy.hacker)
   pit network                  live numbers for the Moshpit network
+  pit corpus [WORDS[,ALT...]] [--limit N] [--cursor C] [--site S] [--kind K] [--lang L] [--since DATE]
+                               full page text from pit.world's own index, for training (opt-outs excluded);
+                               free: 20 short pages a day; PIT_CORPUS_KEY (a credit key or pit login token)
+                               for full text at $1 per 1,000 pages. pit corpus --stats for its size
   pit submit URL... [--file F] put sites, pages, feeds, sitemaps or OPML into pit.world's index (up to 1,000)
   pit listing DOMAIN           a business listing (pit.world/b)
   pit claim DOMAIN             claim your business listing
@@ -133,6 +138,34 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         out.log(`${r.queued} queued for pit.world's index. Watch it: https://pit.world/status`)
         for (const a of r.accepted.slice(0, 50)) out.log(`  ${a.kind.padEnd(8)} ${a.url}`)
         for (const x of r.rejected) out.log(`  refused  ${x.url}  (${x.error})`)
+        return 0
+      }
+      case 'corpus': {
+        if (words.includes('--stats')) {
+          out.log(JSON.stringify(await client.corpusStats(), null, 2))
+          return 0
+        }
+        const opts: Record<string, string> = {}
+        const plain: string[] = []
+        for (let i = 0; i < words.length; i++) {
+          const w = words[i]!
+          const m = /^--(cursor|site|kind|lang|since)$/.exec(w)
+          if (m) opts[m[1]!] = words[++i] ?? ''
+          else plain.push(w)
+        }
+        const saved = process.env.PIT_CORPUS_KEY ? null : (await import('./login.js')).savedToken()
+        const page = await client.corpus(plain.join(' ').trim(), {
+          ...opts,
+          limit: Number.isFinite(n) && nAt !== -1 ? n : 20,
+          ...(saved && saved.base === client.base ? { key: saved.token } : {}),
+        })
+        if (json) {
+          out.log(JSON.stringify(page, null, 2))
+          return 0
+        }
+        for (const item of page.items) out.log(`${item.url}\n  ${item.title} [${item.language ?? '?'}, ${item.fetched_at.slice(0, 10)}]\n  ${item.text.slice(0, 200).replace(/\s+/g, ' ')}…`)
+        out.log(`\n${page.items.length} pages (about ${page.total_estimate ?? '?'} in all)${page.next_cursor ? `. Next: --cursor ${page.next_cursor}` : '. End of the index.'}`)
+        if (page.access?.mode === 'preview') out.log(`Free preview: text cut short, ${page.access.free_pages_left_today} pages left today. Full text: https://pit.world/api#corpus`)
         return 0
       }
       case 'resolve':

@@ -39,6 +39,8 @@ export type ImageRef = { url: string; alt: string; width: number | null; height:
 export type VideoRef = { url: string; title: string; thumbnail: string | null; provider: string | null }
 
 export type Enrichment = {
+  /** Whether the publisher left AI training open on this page (src/crawler.ts trainingFor); set when it is accepted. */
+  training?: { allowed: boolean; reason: string }
   language: string | null
   keywords: string[]
   excerpt: string
@@ -63,6 +65,10 @@ export type Extracted = {
   external: string[]
   noindex: boolean
   nofollow: boolean
+  /** `noai` in meta robots (or a pitbot meta): no AI training on this page. */
+  noai: boolean
+  /** TDMRep in the page: <meta name="tdm-reservation" content="1">. */
+  tdmReserved: boolean
   /** Visible text length, which decides whether the page needs a browser. */
   textLength: number
 }
@@ -339,6 +345,8 @@ export function extract(
   const robotsMeta = `${metas.name.robots ?? ''} ${metas.name[`pitbot`] ?? ''}`.toLowerCase()
   const noindex = /\bnoindex\b|\bnone\b/.test(robotsMeta)
   const nofollow = /\bnofollow\b|\bnone\b/.test(robotsMeta)
+  const noai = /(^|[\s,;:])noai\b/.test(robotsMeta)
+  const tdmMeta = (metas.name['tdm-reservation'] ?? '').trim() === '1'
 
   const feeds = root
     .querySelectorAll('link[rel~="alternate"]')
@@ -411,6 +419,8 @@ export function extract(
     external: nofollow ? [] : [...external],
     noindex,
     nofollow,
+    noai,
+    tdmReserved: tdmMeta,
     textLength: all.length,
   }
 }

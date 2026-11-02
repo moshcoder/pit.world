@@ -147,7 +147,43 @@ The page says the same in plain words: [pit.world/privacy](https://pit.world/pri
 | `GET /api/votes/top?kind=listing&order=best\|worst&n=20` | best- or worst-voted items of a kind |
 | `GET /api/fp/challenge` · `POST /api/vote` | the browser's vote path: a challenge token, then `{ kind, target, value: 1\|-1\|0, toggle?, q?, fp }`. Needs the page's fingerprint, so it is not an API for scripts |
 
-No key. Rate limited per visitor (`429` with `Retry-After`).
+No key. Rate limited per visitor (`429` with `Retry-After`). Full docs: [pit.world/api](https://pit.world/api).
+
+## Training corpus: `/api/corpus`
+
+pit.world's own crawl index (pages pitbot read) as full text, paged, for training models. Served by
+pitbot's loopback index (`services/crawler`, `GET /api/v1/corpus`), metered and sold by pit.world
+(`src/corpus.ts`, `src/corpus-routes.ts`).
+
+```
+GET /api/corpus?q=saas,business,crypto&site=&kind=&lang=&since=&limit=1..100&cursor=
+-> { total_estimate, next_cursor, resume_cursor, items: [{ url, title, site, kind, language, fetched_at, text }], access }
+GET /api/corpus/stats      pages, excluded (and by which rule), sites, languages, kinds, last crawl (free)
+GET|POST /api/corpus/credits?pages=10000   x402 credit pack -> key (x-corpus-key)
+```
+
+- `q`: words that must all appear; **commas are alternatives** (`saas,business,crypto` = any). Each
+  token is quoted before it reaches FTS5 `MATCH`, so punctuation is never a syntax error. Empty `q`
+  pages the whole open corpus.
+- Keyset paging on the index id (never OFFSET): ids are stable across re-crawls, new pages get higher
+  ids, so `next_cursor` never shifts and `resume_cursor` picks up pages added later. A page can
+  hold fewer than `limit` items (rare matches are scanned in time-boxed slices); follow the cursor
+  until it is `null`.
+- **Price** (`PIT_CORPUS_USD_PER_1000`, default `1`): $1 per 1,000 pages returned. Free preview 20
+  pages a day per address with text cut to 500 characters. Over that, a `402` with the price, an x402
+  offer (body + `PAYMENT-REQUIRED`) and the other ways to pay: x402 on the request itself (`limit` x
+  per-page price; unreturned pages become credit on a key), an x402 credit pack, or a CoinPay invoice
+  from `/account` (balance used with a `pit login` token). `PIT_CORPUS_INTERNAL_KEY` as a bearer:
+  free and unmetered (Profullstack's harvesters; also in vault `global--shared` as `PIT_CORPUS_KEY`).
+- Rate limit (`@profullstack/throttle`): 60 requests a minute per address, 1,200 for everyone.
+- **Opt-outs** (never in the corpus, still in search): `noai` in `X-Robots-Tag` or meta robots;
+  TDMRep (`tdm-reservation: 1` header or meta, `/.well-known/tdmrep.json`); robots.txt keeping an
+  AI-training crawler (GPTBot, Google-Extended, CCBot, ClaudeBot, anthropic-ai, cohere-ai,
+  Bytespider, PerplexityBot, Applebot-Extended and more, `AI_TRAINING_AGENTS` in
+  `services/crawler/src/robots.ts`) off the path. Unknown is out: pages indexed before 0.28.0 are
+  judged by a backfill on their site's robots.txt and tdmrep.json (and fully when re-crawled), and a
+  robots.txt that could not be fetched keeps a site's pages out.
+- CLI `pit corpus "saas,crypto" --limit 100 [--cursor N]` (`PIT_CORPUS_KEY`), MCP tool `corpus`.
 
 ## Votes
 
