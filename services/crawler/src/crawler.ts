@@ -42,6 +42,19 @@ const LINKS_PER_PAGE = 300
 const SITES_PER_PAGE = 25
 const SITEMAP_DOCS = 6
 const BATCH = 200
+/** The longest a page waits for its turn at a busy site before asking again. */
+const MAX_SPREAD_MS = 30 * 60_000
+
+/**
+ * When a site's slot is busy, wait for it to free plus a random share of the
+ * site's backlog. Every page of a site waking each time the slot frees cost the
+ * queue a move per page per gap (measured 2026-11-02: ~30,000 Redis ops per page
+ * fetched, Redis pinned at one core); spread over the backlog, about one wakes per gap.
+ */
+export function spreadDelay(waitMs: number, pending: number, gapMs: number, random = Math.random): number {
+  const turns = Math.max(0, pending - 1)
+  return Math.min(MAX_SPREAD_MS, waitMs + Math.floor(random() * turns) * Math.max(gapMs, 1))
+}
 
 export function createCrawler(deps: Deps) {
   const { config, frontier, enqueue } = deps
@@ -176,8 +189,9 @@ export function createCrawler(deps: Deps) {
   async function crawlPage(job: PageJob): Promise<PageOutcome> {
     const robots = await robotsFor(job.site)
     if (robots === 'unavailable') return { outcome: 'robots.txt unavailable' }
-    const wait = await frontier.lease(job.site, gapFor(robots))
-    if (wait > 0) return { delayMs: wait, outcome: 'waiting for the site' }
+    const gap = gapFor(robots)
+    const slot = await frontier.lease(job.site, gap)
+    if (slot.waitMs > 0) return { delayMs: spreadDelay(slot.waitMs, slot.pending, gap), outcome: 'waiting for the site' }
     if (!allows(robots, pathOf(job.url))) {
       await frontier.bump('pages_disallowed')
       return { outcome: 'disallowed' }
@@ -207,8 +221,9 @@ export function createCrawler(deps: Deps) {
     if (!deps.renderer?.size) return { outcome: 'no renderer' }
     const robots = await robotsFor(job.site)
     if (robots === 'unavailable') return { outcome: 'robots.txt unavailable' }
-    const wait = await frontier.lease(job.site, gapFor(robots))
-    if (wait > 0) return { delayMs: wait, outcome: 'waiting for the site' }
+    const gap = gapFor(robots)
+    const slot = await frontier.lease(job.site, gap)
+    if (slot.waitMs > 0) return { delayMs: spreadDelay(slot.waitMs, slot.pending, gap), outcome: 'waiting for the site' }
     const rendered = await deps.renderer.render(job.url)
     const landed = normalizeUrl(rendered.url) ?? job.url
     if (!sameSite(landed, job.site)) return { outcome: `rendered onto ${siteOf(landed)}` }

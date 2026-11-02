@@ -38,8 +38,12 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
 
   test('the site lease spaces requests; sites are scheduled once per cycle', async () => {
     const frontier = new RedisFrontier(redis, 5, 60_000)
-    expect(await frontier.lease('slow.example', 2_000)).toBe(0)
-    expect(await frontier.lease('slow.example', 2_000)).toBeGreaterThan(1_000)
+    for (let i = 0; i < 4; i++) await frontier.admit('slow.example', `https://slow.example/${i}`)
+    expect(await frontier.lease('slow.example', 2_000)).toEqual({ waitMs: 0, pending: 0 })
+    const busy = await frontier.lease('slow.example', 2_000)
+    expect(busy.waitMs).toBeGreaterThan(1_000)
+    // Four admitted, one fetched: three still waiting for their turn.
+    expect(busy.pending).toBe(3)
     const twice = await Promise.all([frontier.noteSite('once.example', 10, 60_000), frontier.noteSite('once.example', 10, 60_000)])
     expect(twice.filter(Boolean).length).toBe(1)
     expect(await frontier.noteSite('once.example', 10, 0)).toBe(true)

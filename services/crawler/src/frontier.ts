@@ -45,8 +45,12 @@ const add = (into: Record<string, number>, from: Record<string, string | number>
 export interface Frontier {
   /** Admit a page to this cycle: 'new', 'seen', or 'full' (the site has had its maxPages). */
   admit(site: string, url: string): Promise<'new' | 'seen' | 'full'>
-  /** Take the site's request slot for gapMs; 0 when taken, else how long until it frees. */
-  lease(site: string, gapMs: number): Promise<number>
+  /**
+   * Take the site's request slot for gapMs. Taken: { waitMs: 0 } and the fetch is
+   * counted. Busy: how long until it frees, and how many of the site's admitted pages
+   * are not fetched yet, so the caller can spread its retry over the site's backlog.
+   */
+  lease(site: string, gapMs: number): Promise<{ waitMs: number; pending: number }>
   getRobots(site: string): Promise<Robots | null>
   setRobots(site: string, robots: Robots): Promise<void>
   /**
@@ -66,9 +70,24 @@ export interface Frontier {
   activity(): Promise<Activity>
 }
 
+// Take the slot (and count the fetch), or say how long until it frees and how much of the
+// site is still waiting. One call instead of SET + PTTL + two GETs.
+const LEASE = `
+if redis.call('SET', KEYS[1], '1', 'PX', ARGV[1], 'NX') then
+  redis.call('INCR', KEYS[3])
+  redis.call('PEXPIRE', KEYS[3], ARGV[2])
+  return {0, 0}
+end
+local left = redis.call('PTTL', KEYS[1])
+local count = math.min(tonumber(redis.call('GET', KEYS[2]) or '0'), tonumber(ARGV[3]))
+local done = tonumber(redis.call('GET', KEYS[3]) or '0')
+return {left, math.max(0, count - done)}
+`
+
 const K = {
   seen: (s: string) => `pitcrawl:seen:${s}`,
   count: (s: string) => `pitcrawl:count:${s}`,
+  done: (s: string) => `pitcrawl:done:${s}`,
   robots: (s: string) => `pitcrawl:robots:${s}`,
   lease: (s: string) => `pitcrawl:lease:${s}`,
   sites: 'pitcrawl:sites',
@@ -92,7 +111,10 @@ if n > tonumber(ARGV[2]) then return -1 end
 return n
 `
 
-type WithAdmit = Redis & { pitcrawlAdmit(seen: string, count: string, id: string, max: number, cycleMs: number): Promise<number> }
+type WithAdmit = Redis & {
+  pitcrawlAdmit(seen: string, count: string, id: string, max: number, cycleMs: number): Promise<number>
+  pitcrawlLease(lease: string, count: string, done: string, gapMs: number, ttlMs: number, max: number): Promise<[number, number]>
+}
 
 export class RedisFrontier implements Frontier {
   private readonly redis: WithAdmit
@@ -103,6 +125,7 @@ export class RedisFrontier implements Frontier {
   ) {
     // A fixed script registered once (EVALSHA after the first call), never built from input.
     if (!('pitcrawlAdmit' in redis)) redis.defineCommand('pitcrawlAdmit', { numberOfKeys: 2, lua: ADMIT })
+    if (!('pitcrawlLease' in redis)) redis.defineCommand('pitcrawlLease', { numberOfKeys: 3, lua: LEASE })
     this.redis = redis as WithAdmit
   }
 
@@ -112,11 +135,8 @@ export class RedisFrontier implements Frontier {
   }
 
   async lease(site: string, gapMs: number) {
-    if (gapMs <= 0) return 0
-    const ok = await this.redis.set(K.lease(site), '1', 'PX', gapMs, 'NX')
-    if (ok) return 0
-    const left = await this.redis.pttl(K.lease(site))
-    return Math.max(50, left)
+    const [left, pending] = await this.redis.pitcrawlLease(K.lease(site), K.count(site), K.done(site), Math.max(1, gapMs), this.seenTtlMs, this.maxPages)
+    return left === 0 ? { waitMs: 0, pending: 0 } : { waitMs: Math.max(50, Number(left)), pending: Number(pending) }
   }
 
   async getRobots(site: string) {
@@ -243,12 +263,18 @@ export class MemoryFrontier implements Frontier {
     set.add(id)
     return set.size > this.maxPages ? ('full' as const) : ('new' as const)
   }
+  fetched = new Map<string, number>()
   async lease(site: string, gapMs: number) {
     const until = this.leases.get(site) ?? 0
-    if (Date.now() < until) return until - Date.now()
+    if (Date.now() < until) {
+      const admitted = Math.min(this.seen.get(site)?.size ?? 0, this.maxPages)
+      return { waitMs: until - Date.now(), pending: Math.max(0, admitted - (this.fetched.get(site) ?? 0)) }
+    }
     this.leases.set(site, Date.now() + gapMs)
-    return 0
+    this.fetched.set(site, (this.fetched.get(site) ?? 0) + 1)
+    return { waitMs: 0, pending: 0 }
   }
+
   async getRobots(site: string) {
     return this.robots.get(site) ?? null
   }
