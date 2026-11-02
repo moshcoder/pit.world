@@ -16,7 +16,8 @@
  * follow cli-tools' `websearch`.
  */
 
-export type Hit = { url: string; title: string; description: string; host: string; sources?: Provider[] }
+/** `featured`: from a W3BS network site (w3bs-network.ts), badged and led with. */
+export type Hit = { url: string; title: string; description: string; host: string; sources?: Provider[]; featured?: boolean }
 
 export type Provider = 'serper' | 'bing' | 'brave' | 'tavily' | 'ceramic' | 'exa' | 'linkup' | 'searxng' | 'pit' | 'perplexity'
 

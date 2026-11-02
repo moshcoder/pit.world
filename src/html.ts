@@ -353,9 +353,9 @@ ${tabs(query, vertical)}
 const AD_AFTER = 3
 
 function hitItem(h: SearchResult['hits'][number]): string {
-  return `<li>
+  return `<li${h.featured ? ' class="featured-hit"' : ''}>
       <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
-      <div class="url">${esc(h.host)}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
+      <div class="url">${esc(h.host)}${h.featured ? '<span class="src featured" title="A W3BS network site, featured on pit.world. Not an ad.">Featured</span>' : ''}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
       ${h.description ? `<p>${esc(h.description)}</p>` : ''}
     </li>`
 }
@@ -407,7 +407,7 @@ export function privacyPage(): string {
 <li><b>Your searches, to anyone else.</b> Search results pages load nothing from a third party.</li>
 </ul>
 <h2 id="analytics">Analytics and ads, outside search</h2>
-<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); it never runs on search results, so it never sees a query. Search results show crawlproof ads from our own ad network: a few sponsored listings at the top, marked Sponsored, and one line after the third result. Each is its own sandboxed frame and is told only that it is on pit.world, never what you searched for. Boxes marked "Featured on pit.world" are our own sites, not ads, and nobody pays for them. Fonts and every other script still come from pit.world.</p>
+<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); it never runs on search results, so it never sees a query. Search results show crawlproof ads from our own ad network: a few sponsored listings at the top, marked Sponsored, and one line after the third result. Each is its own sandboxed frame and is told only that it is on pit.world, never what you searched for. Boxes marked "Featured on pit.world", and results with a Featured badge (sites on the W3BS network, listed at w3bs.org/net), are our own network, not ads, and nobody pays for them. Fonts and every other script still come from pit.world.</p>
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>

@@ -4,6 +4,7 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
+import { featureNetwork, W3bsNetwork } from './w3bs-network.js'
 import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
@@ -53,6 +54,8 @@ export type Deps = {
   newsletter?: Newsletter
   /** Bearer token for /api/admin/*; unset means the admin API is off. */
   adminToken?: string
+  /** The W3BS network's sites, featured in results; defaults to the live list from w3bs.org. */
+  network?: Pick<W3bsNetwork, 'has'>
   /** pitbot's status for /status; defaults to the crawler's loopback /stats (CRAWLER_STATUS_URL). */
   crawlStatus?: () => Promise<CrawlStatus>
   /** PairUX + nixamp listings for the Videos, Music and Live tabs. */
@@ -96,6 +99,7 @@ export function createApp(deps: Deps) {
   const cache = deps.cache ?? new Cache()
   const limiter = deps.limiter ?? new RateLimiter()
   const promoted = deps.promoted ?? new Promoted(deps.fetch)
+  const network = deps.network ?? new W3bsNetwork(deps.fetch).start()
   const crawlStatus = deps.crawlStatus ?? createCrawlStatus(process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807')
   const app = new Hono<Env>()
 
@@ -132,7 +136,7 @@ export function createApp(deps: Deps) {
     try {
       const result = await search(query, deps.keys, { cache, limit, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
       logFailures(result.failures)
-      return { result, error: null }
+      return { result: featureNetwork(result, network), error: null }
     } catch (error) {
       // No query in the message or the log.
       if (error instanceof SearchUnavailable) console.warn(`search: ${error.message}`)
