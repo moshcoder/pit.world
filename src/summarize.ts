@@ -326,9 +326,11 @@ export async function readPageChecked(url: string, options: { relayUrl?: string;
   const text = direct.text.length > viaRelay.text.length ? direct.text : viaRelay.text
   if (enough(text)) return { text, state: 'ok' }
   if (viaRelay.state === 'private' || direct.state === 'private') return { text, state: 'private' }
+  // A refusal or bot wall on the direct fetch is the site's own answer, whatever the relay did:
+  // imdb.com answers pit.world with a 403 while the relay is unreachable, and that is still imdb.com.
+  if (direct.state === 'blocked') return { text, state: 'blocked' }
   if (viaRelay.state === 'blocked' && direct.state !== 'ok') return { text, state: 'blocked' }
-  // With the relay switched off on purpose, the direct fetch alone decides.
-  if (relayOff && direct.state === 'blocked') return { text, state: 'blocked' }
+  // Our relay failing and the direct fetch failing on the network say nothing about the site.
   return { text, state: 'down' }
 }
 
