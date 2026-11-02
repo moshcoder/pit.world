@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { main } from '../src/cli.ts'
 import { PitClient } from '../src/client.ts'
 import { cleanLinks, isPublicAddress, Listings, normalizeDomain, readMeta, type Verifier } from '../src/listings.ts'
@@ -335,5 +338,20 @@ describe('listings: OpenProfile', () => {
     const page = await h.request('/b/acme-bakery.com')
     expect(page.headers.get('link')).toBeNull()
     expect(await page.text()).not.toContain('rel="openprofile"')
+  })
+})
+
+describe('listings database', () => {
+  it('opens an existing database again (a restart) without re-adding generated columns', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'pit-listings-'))
+    try {
+      const path = join(dir, 'listings.db')
+      new Listings(path).db.close()
+      const again = new Listings(path)
+      expect((again.db.query('PRAGMA table_xinfo(listings)').all() as Array<{ name: string }>).some((c) => c.name === 'quality')).toBe(true)
+      again.db.close()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
   })
 })
