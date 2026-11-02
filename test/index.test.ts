@@ -108,3 +108,27 @@ describe('footer', () => {
     expect(sitemap).toContain('https://pit.world/bot')
   })
 })
+
+describe('sponsored listings', () => {
+  const search = async () => {
+    const app = createApp({
+      keys: { serper: 'k' },
+      fetch: (async () => Response.json({ organic: [1, 2, 3, 4, 5].map((i) => ({ link: `https://r${i}.example/`, title: `R${i}`, snippet: 's' })) })) as unknown as typeof fetch,
+    })
+    return (await app.request('/search?q=pizza')).text()
+  }
+  it('sit above the organic results, three frames, never told the query', async () => {
+    const page = await search()
+    const top = page.indexOf('class="sponsored-top"')
+    expect(top).toBeGreaterThan(-1)
+    expect(top).toBeLessThan(page.indexOf('<ol class="hits"'))
+    expect(page.match(/format=text_link&amp;pos=\d/g)).toHaveLength(3)
+    const frames = page.match(/crawlproof\.com\/api\/ads\/frame[^"]*/g) ?? []
+    expect(frames.length).toBe(4)
+    for (const f of frames) expect(f).not.toContain('pizza')
+  })
+  it('never on the home page', async () => {
+    const app = createApp({ keys: {} })
+    expect(await (await app.request('/')).text()).not.toContain('sponsored-top')
+  })
+})

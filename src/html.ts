@@ -64,6 +64,20 @@ const fmt = (n: number) => n.toLocaleString('en-US')
  */
 const TRACKER_SITE = '81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05'
 export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '782907b4-bf27-44bf-b202-df196c4b207e'
+/**
+ * Sponsored listings at the top of results (Anthony 2026-11-02: "we need more sponsored
+ * listings (ie: our ads network) at top of page"): CRAWLPROOF_TOP_ADS text_link units,
+ * default 3, 0 for none. Each is its own sandboxed frame, so each is its own auction (on
+ * 2026-11-02 thirty fills of this slot came from 29 campaigns, so three rarely repeat),
+ * and like the line below, none of them is told the query. Never on the home page.
+ */
+export const TOP_ADS = Math.max(0, Math.min(6, Number(process.env.CRAWLPROOF_TOP_ADS ?? 3) || 0))
+const adFrame = (pos: number) =>
+  `<iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link&amp;pos=${pos}" title="Sponsored listing ${pos}" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe>`
+export const sponsoredTop = () =>
+  AD_SLOT === 'off' || TOP_ADS === 0
+    ? ''
+    : `<section class="sponsored-top" aria-label="Sponsored"><p class="sponsored-label">Sponsored</p>${Array.from({ length: TOP_ADS }, (_, i) => adFrame(i + 1)).join('')}</section>`
 /** One low-profile text_link line; never on the home page, never against the footer. */
 export const adUnit = () =>
   AD_SLOT === 'off' ? '' : `<div class="ad-unit"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
@@ -325,6 +339,7 @@ ${tabs(query, vertical)}
   ${featuredBox(options.featured)}
   ${promoStrip(promos, vertical)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
+  ${hits.length ? sponsoredTop() : ''}
   ${hits.length ? mediaList(vertical, hits) : ''}
   ${hits.length ? adUnit() : ''}
   ${featuredBox(options.backfill ? [options.backfill] : undefined)}
@@ -360,6 +375,7 @@ ${tabs(query, 'web')}
   ${options.card ?? ''}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a>${options.card ? '' : ` · <a href="/b/${encodeURIComponent(domain)}">business listing</a>`}</p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
+  ${hits.length ? sponsoredTop() : ''}
   <ol class="hits">
     ${hits.slice(0, AD_AFTER).map(hitItem).join('')}
   </ol>
@@ -391,7 +407,7 @@ export function privacyPage(): string {
 <li><b>Your searches, to anyone else.</b> Search results pages load nothing from a third party.</li>
 </ul>
 <h2 id="analytics">Analytics and ads, outside search</h2>
-<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); it never runs on search results, so it never sees a query. Search results show one crawlproof ad line, marked Sponsored, in the same sandboxed frame: the frame is told only that it is on pit.world, never what you searched for. Boxes marked "Featured on pit.world" are our own sites, not ads, and nobody pays for them. Fonts and every other script still come from pit.world.</p>
+<p>pit.world's other pages (this one, the home page, the docs) load <a href="https://crawlproof.com">crawlproof</a>'s page-view counter and show a crawlproof ad in a sandboxed frame. The counter reports the page address and keeps a random visitor id in your browser's local storage (not a cookie); it never runs on search results, so it never sees a query. Search results show crawlproof ads from our own ad network: a few sponsored listings at the top, marked Sponsored, and one line after the third result. Each is its own sandboxed frame and is told only that it is on pit.world, never what you searched for. Boxes marked "Featured on pit.world" are our own sites, not ads, and nobody pays for them. Fonts and every other script still come from pit.world.</p>
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>

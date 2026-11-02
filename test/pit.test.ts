@@ -204,16 +204,19 @@ describe('crawlproof analytics and ads', () => {
     expect(csp).toContain("img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com;")
   })
 
-  it('runs no analytics on search results, and the one ad never sees the query', async () => {
+  it('runs no analytics on search results, and no ad ever sees the query', async () => {
     const { request } = app()
     const html = await (await request('/search?q=moshpit+network')).text()
     expect(html).not.toContain('crawlproof.com/stats.js')
     const frames = html.match(/<iframe [^>]*>/g) ?? []
-    expect(frames).toHaveLength(1)
-    expect(frames[0]).toContain('https://crawlproof.com/api/ads/frame?slot=')
-    expect(frames[0]).toContain('format=text_link')
-    expect(frames[0]).toContain('sandbox=')
-    expect(frames[0]).not.toMatch(/moshpit|network/i)
+    // Three sponsored listings at the top, one line after the third result.
+    expect(frames).toHaveLength(4)
+    for (const frame of frames) {
+      expect(frame).toContain('https://crawlproof.com/api/ads/frame?slot=')
+      expect(frame).toContain('format=text_link')
+      expect(frame).toContain('sandbox=')
+      expect(frame).not.toMatch(/moshpit|network/i)
+    }
   })
 
   it('backfills a search that matches none of our sites with one Featured site, never an ad', async () => {
