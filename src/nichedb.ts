@@ -79,8 +79,9 @@ export async function enrichNicheDb(
           url.searchParams.set('q', key)
           url.searchParams.set('collection', 'directory')
           url.searchParams.set('limit', '10')
+          // A cold NicheDB search over the directory takes ~10 s; 12 s timed out a few listings every run.
           // threatcrush-disable-next-line js-ssrf-outbound-request  fixed NicheDB host; q is a validated directory hostname
-          const response = await fetchImpl(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } })
+          const response = await fetchImpl(url, { signal: AbortSignal.timeout(30_000), headers: { accept: 'application/json' } })
           if (!response.ok) throw new Error(`NicheDB returned ${response.status}`)
           record = exactCompany(await response.json(), key)
           if (record) break
