@@ -8,12 +8,20 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # The crawler's frontier and queues are tested against a real Redis.
+    services:
+      redis:
+        image: redis:8-alpine
+        ports: ['6379:6379']
+    env:
+      CRAWL_TEST_REDIS: redis://127.0.0.1:6379/15
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
       - run: bun install --frozen-lockfile
       - run: bun test
       - run: bunx tsc --noEmit
+      - run: bunx tsc --noEmit -p services/crawler
 
   # A private search engine is held to the strictest gate: nothing at medium or
   # above, dependencies included.

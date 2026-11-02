@@ -1,0 +1,20 @@
+{
+  "name": "@pitworld/crawler",
+  "version": "0.1.0",
+  "private": true,
+  "description": "pit.world's own index: a BullMQ spider that reads up to 1,000 pages per site (JavaScript pages through Obscura), enriches them and publishes OpenSite records to nichedb.dev/c/sites.",
+  "type": "module",
+  "bin": {
+    "pit-crawler": "src/cli.ts"
+  },
+  "scripts": {
+    "start": "bun src/cli.ts worker",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "bullmq": "5.81.5",
+    "ioredis": "^5.8.2",
+    "node-html-parser": "^9.0.6"
+  }
+}

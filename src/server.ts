@@ -7,7 +7,7 @@
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { aboutPage, botPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
@@ -219,6 +219,7 @@ export function createApp(deps: Deps) {
   })
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
+  app.get('/bot', (c) => c.html(botPage()))
   app.get('/connect', (c) => c.html(connectPage()))
   // The house form guard on the invoice form: a signed token minted with the page (a bot that POSTs
   // without rendering /build has none), a fill-time floor and the honeypot. Rate limiting stays ours.
@@ -489,6 +490,8 @@ export function keysFromEnv(env: Record<string, string | undefined> = process.en
     exa: env.EXA_API_KEY,
     // Not a key: the base URL of a SearXNG instance on loopback, e.g. http://127.0.0.1:8888.
     searxng: env.SEARXNG_URL,
+    // Not a key either: our own index on nichedb, "<base URL>[ <api key>]". PIT_INDEX_URL=off turns it off.
+    pit: env.PIT_INDEX_URL === 'off' ? undefined : `${env.PIT_INDEX_URL ?? 'https://nichedb.dev'}${env.PIT_INDEX_KEY ? ` ${env.PIT_INDEX_KEY}` : ''}`,
     perplexity: env.PERPLEXITY_API_KEY,
   }
 }

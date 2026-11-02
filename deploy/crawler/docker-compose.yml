@@ -1,0 +1,56 @@
+# pitbot on one box: the crawler, pit.world's own Redis (never a shared one),
+# and Obscura browser servers for JavaScript pages. Nothing listens beyond
+# loopback; the crawler cannot reach the host's own services (bridge network,
+# and every address is checked against private ranges before a request).
+#
+#   cd ~/www/pit-crawler && docker compose -f app/deploy/crawler/docker-compose.yml --env-file crawler.env -p pit-crawler up -d --build
+#
+# Health: curl 127.0.0.1:8807/healthz on the host.
+# Scale: `--scale crawler=N` on this box, or the same image on another box with
+# CRAWL_REDIS_URL pointed here. More JavaScript rendering: add obscura-N and
+# list it in OBSCURA_MCP_URLS.
+name: pit-crawler
+
+services:
+  redis:
+    image: redis:8-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '1gb', '--maxmemory-policy', 'noeviction']
+    volumes: ['redis:/data']
+    ports: ['127.0.0.1:6396:6379']
+    mem_limit: 1536m
+    restart: unless-stopped
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 15s
+
+  obscura-1: &obscura
+    image: h4ckf0r0day/obscura
+    command: ['mcp', '--http', '--host', '0.0.0.0', '--port', '3000', '--user-agent', 'Mozilla/5.0 (compatible; pitbot/0.1; +https://pit.world/bot)']
+    environment:
+      OBSCURA_MCP_TOKEN: ${OBSCURA_MCP_TOKEN:?set OBSCURA_MCP_TOKEN in crawler.env}
+    mem_limit: 1g
+    restart: unless-stopped
+
+  obscura-2: *obscura
+
+  crawler:
+    build:
+      context: ../..
+      dockerfile: services/crawler/Dockerfile
+    image: pit-crawler:latest
+    env_file: ${CRAWLER_ENV:-../../../crawler.env}
+    environment:
+      CRAWL_REDIS_URL: redis://redis:6379
+      CRAWL_HEALTH_HOST: 0.0.0.0
+      OBSCURA_MCP_URLS: http://obscura-1:3000/mcp,http://obscura-2:3000/mcp
+    depends_on:
+      redis: { condition: service_healthy }
+      obscura-1: { condition: service_started }
+      obscura-2: { condition: service_started }
+    ports: ['127.0.0.1:8807:8797']
+    mem_limit: 1536m
+    restart: unless-stopped
+    stop_grace_period: 30s
+
+volumes:
+  redis:

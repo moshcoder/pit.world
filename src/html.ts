@@ -392,7 +392,7 @@ export function privacyPage(): string {
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
-<li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, and our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
+<li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo, and <a href="/bot">our own index</a>, kept at nichedb.dev), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 </ol>
@@ -409,6 +409,34 @@ export function privacyPage(): string {
 <p>One pit.world account signs you in on every <code>social.&lt;name&gt;.pit.world</code> feed and <code>bbs.&lt;name&gt;.pit.world</code> board, so you never make an account per site. You sign in with CoinPay (OAuth 2.1). We keep your CoinPay id, the name and email CoinPay gives us, a session cookie for <code>pit.world</code> only, and the list of pit.world sites you signed in to, which you can see and clear on <a href="/account">your account page</a>. A site gets your CoinPay id and name, nothing else. Search never reads the cookie. Delete the account from the same page and it is gone; what you posted on a board or feed stays there until you delete it on that site.</p>
 <h2>Source</h2>
 <p>The code that does all of this is public: <a href="https://github.com/moshcoder/pit.world">github.com/moshcoder/pit.world</a>.</p>
+</main>`,
+  })
+}
+
+/** pitbot: who reads your site for pit.world's own index, and how to say no. */
+export function botPage(): string {
+  return layout({
+    title: 'pitbot: the pit.world crawler',
+    description: 'pitbot reads up to a thousand pages per site for pit.world\'s own search index. It obeys robots.txt, noindex and nofollow, and waits between requests.',
+    path: '/bot',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<h1>pitbot, the pit.world crawler</h1>
+<p>pitbot reads pages for pit.world's own search index. What it reads is published as open <a href="https://logicsrc.com/opensite">OpenSite</a> records at <a href="https://nichedb.dev/c/sites">nichedb.dev/c/sites</a>, one per page, and pit.world searches them alongside the other indexes it asks.</p>
+<h2>How it behaves</h2>
+<ul>
+<li>It identifies itself: <code>Mozilla/5.0 (compatible; pitbot/0.1; +https://pit.world/bot)</code>.</li>
+<li>It obeys <code>robots.txt</code>: a group for <code>pitbot</code> if you write one, else <code>*</code>, and <code>Crawl-delay</code> up to 30 seconds.</li>
+<li>It obeys <code>&lt;meta name="robots" content="noindex"&gt;</code> and <code>nofollow</code>, and does not follow <code>rel="nofollow"</code>, <code>sponsored</code> or <code>ugc</code> links.</li>
+<li>It sends one request at a time to a site, with a pause between them, and reads at most a thousand pages per site per month.</li>
+<li>Pages that are an empty shell until JavaScript runs are read once more in a headless browser, so the index sees what a visitor sees.</li>
+<li>It reads only public pages: no forms, no logins, no carts.</li>
+</ul>
+<h2>Keep it out</h2>
+<pre><code>User-agent: pitbot
+Disallow: /</code></pre>
+<p>A page already in the index is dropped on its next read. To ask for anything else, write to <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a>.</p>
 </main>`,
   })
 }
