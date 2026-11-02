@@ -83,7 +83,8 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     log,
     enqueue: {
       async sites(jobs: SiteJob[]) {
-        await addInChunks(jobs, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data }))))
+        // LIFO puts a `first` site at the head of the waiting list, ahead of a big seed.
+        await addInChunks(jobs, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data, ...(data.first ? { opts: { lifo: true } } : {}) }))))
       },
       async pages(jobs: PageJob[]) {
         await addInChunks(jobs, (chunk) =>

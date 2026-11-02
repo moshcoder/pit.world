@@ -226,3 +226,18 @@ test('page reads wait while the outbox is over its high-water mark', async () =>
   await frontier.take(3)
   expect((await crawler.crawlPage({ url: 'https://shop.example/', site: 'shop.example', depth: 0 })).outcome).toBe('indexed')
 })
+
+describe('seed --first', () => {
+  test('re-schedules a waiting site ahead of the queue; whichever copy comes up second skips', async () => {
+    const { crawler, queued } = setup()
+    expect(await crawler.scheduleSites(['shop.example'], 'opml')).toEqual({ queued: 1, refused: 0 })
+    expect(await crawler.scheduleSites(['shop.example'], 'w3bs')).toEqual({ queued: 0, refused: 1 })
+    expect(await crawler.scheduleSites(['shop.example'], 'w3bs', { first: true })).toEqual({ queued: 1, refused: 0 })
+    expect(queued.sites).toEqual([
+      { site: 'shop.example', source: 'opml' },
+      { site: 'shop.example', source: 'w3bs', first: true },
+    ])
+    expect((await crawler.crawlSite(queued.sites[1]!)).outcome).toBe('started')
+    expect((await crawler.crawlSite(queued.sites[0]!)).outcome).toBe('already started this cycle')
+  })
+})

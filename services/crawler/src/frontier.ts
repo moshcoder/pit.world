@@ -59,6 +59,8 @@ export interface Frontier {
    */
   noteSite(site: string, maxSites: number, cycleMs: number): Promise<boolean>
   sitesDue(olderThanMs: number, limit: number): Promise<string[]>
+  /** The first start of a site in a cycle claims it; every later one is told no. */
+  claimStart(site: string, cycleMs: number): Promise<boolean>
   push(entries: unknown[], max: number): Promise<void>
   /** Records waiting to be published. */
   outboxLength(): Promise<number>
@@ -92,6 +94,7 @@ const K = {
   done: (s: string) => `pitcrawl:done:${s}`,
   robots: (s: string) => `pitcrawl:robots:${s}`,
   lease: (s: string) => `pitcrawl:lease:${s}`,
+  started: (s: string) => `pitcrawl:started:${s}`,
   sites: 'pitcrawl:sites',
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
@@ -166,6 +169,12 @@ export class RedisFrontier implements Frontier {
     }
     // Two workers discovering one new site at once: only the write that lands first schedules it.
     return Number(await this.redis.zadd(K.sites, 'NX', Date.now(), site)) === 1
+  }
+
+  async claimStart(site: string, cycleMs: number) {
+    // A little under the cycle, so the recrawl that comes due at the cycle's end can claim it.
+    const ttl = Math.max(60_000, cycleMs - 3_600_000)
+    return (await this.redis.set(K.started(site), String(Date.now()), 'PX', ttl, 'NX')) === 'OK'
   }
 
   async sitesDue(olderThanMs: number, limit: number) {
@@ -292,6 +301,12 @@ export class MemoryFrontier implements Frontier {
     if (known !== undefined && Date.now() - known < cycleMs) return false
     if (known === undefined && this.sites.size >= maxSites) return false
     this.sites.set(site, Date.now())
+    return true
+  }
+  started = new Set<string>()
+  async claimStart(site: string) {
+    if (this.started.has(site)) return false
+    this.started.add(site)
     return true
   }
   async sitesDue(olderThanMs: number, limit: number) {
