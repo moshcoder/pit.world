@@ -52,6 +52,23 @@ export function createMcpServer(client = new PitClient()): McpServer {
   )
 
   server.tool(
+    'corpus',
+    "Full page text from pit.world's own crawl index, for training models, paged by cursor. Pages whose publishers opted out of AI training (noai, TDMRep, robots.txt AI-crawler rules) are never included. query: words that must all appear; commas separate alternatives (saas,business,crypto). Free: 20 pages a day with text cut to 500 characters; set PIT_CORPUS_KEY (a credit key or pit login token) for full text at $1 per 1,000 pages.",
+    {
+      query: z.string().max(512).optional(),
+      limit: z.number().int().min(1).max(100).optional(),
+      cursor: z.string().max(20).optional(),
+      site: z.string().max(253).optional(),
+      lang: z.string().max(20).optional(),
+      since: z.string().max(40).optional(),
+    },
+    async ({ query, ...options }: { query?: string; limit?: number; cursor?: string; site?: string; lang?: string; since?: string }) => {
+      const page = await client.corpus(query ?? '', options)
+      return { content: [{ type: 'text', text: JSON.stringify(page) }] }
+    },
+  )
+
+  server.tool(
     'moshpit_resolve',
     'Look up a Moshpit network name (for example chovy.hacker) in the Moshpit registry: whether it is registered and where it points.',
     { name: z.string().min(3).max(253) },

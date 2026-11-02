@@ -17,6 +17,16 @@ export type ApiSearch = {
   moshpit: Resolution | null
 }
 
+export type CorpusItem = { url: string; title: string; site: string; kind: string; language: string | null; fetched_at: string; text: string }
+export type CorpusPage = {
+  total_estimate: number | null
+  next_cursor: string | null
+  resume_cursor?: string
+  items: CorpusItem[]
+  access?: Record<string, unknown>
+}
+export type CorpusOptions = { site?: string; kind?: string; lang?: string; since?: string; limit?: number; cursor?: string; key?: string }
+
 export type VoteTally = { item: string; kind?: string; up: number; down: number; score: number }
 
 export class PitClient {
@@ -41,6 +51,31 @@ export class PitClient {
 
   resolve(name: string): Promise<Resolution> {
     return this.get(`/api/resolve?name=${encodeURIComponent(name)}`)
+  }
+
+  /**
+   * A page of the training corpus (pit.world's own crawl index as full text). Free: 20 short
+   * pages a day; with `key` (a corpus credit key, a pit login token, or the internal key) full text.
+   * A 402 throws with the price and how to pay.
+   */
+  async corpus(query: string, options: CorpusOptions = {}): Promise<CorpusPage> {
+    const params = new URLSearchParams()
+    if (query) params.set('q', query)
+    for (const k of ['site', 'kind', 'lang', 'since', 'cursor'] as const) if (options[k]) params.set(k, String(options[k]))
+    params.set('limit', String(options.limit ?? 20))
+    const key = options.key ?? process.env.PIT_CORPUS_KEY
+    const response = await this.fetchImpl(`${this.base}/api/corpus?${params}`, {
+      headers: { accept: 'application/json', ...(key ? { authorization: `Bearer ${key}` } : {}) },
+      signal: AbortSignal.timeout(30_000),
+    })
+    const body = (await response.json().catch(() => ({}))) as any
+    if (response.status === 402) throw new Error(`${body?.error ?? 'Payment required.'} ${body?.price?.this_request ? `This request: ${body.price.this_request}.` : ''} See ${body?.docs ?? `${this.base}/api#corpus`}`.trim())
+    if (!response.ok) throw new Error(body?.error ?? `HTTP ${response.status}`)
+    return body as CorpusPage
+  }
+
+  corpusStats(): Promise<Record<string, unknown>> {
+    return this.get('/api/corpus/stats')
   }
 
   network(): Promise<NetworkStats> {

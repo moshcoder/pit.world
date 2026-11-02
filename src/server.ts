@@ -54,6 +54,8 @@ import { readableText, Speech, SpeechClient } from './speech.js'
 import { summaryKey } from './summarize.js'
 import { Summarizer, SummaryStore } from './summarize.js'
 import { createThrottle } from '@profullstack/throttle'
+import { CorpusBilling, pricingFromEnv } from './corpus.js'
+import { corpusSection, mountCorpus } from './corpus-routes.js'
 import { Database } from 'bun:sqlite'
 import { randomBytes } from 'node:crypto'
 import { clientSource, CLIENT_HEADERS } from '@profullstack/browser-fingerprint/source'
@@ -115,6 +117,8 @@ export type Deps = {
   speech?: Speech
   /** Free read-alouds and transcript previews a visitor may start per hour. */
   speechLimits?: { listenAnon: number; listenSignedIn: number; transcriptAnon: number; transcriptSignedIn: number; anonTotal: number }
+  /** The training corpus's billing (src/corpus.ts); defaults to an in-memory one with the default price and no payments. */
+  corpus?: CorpusBilling
   /** DNS for /audio's public-address check; injectable for tests. */
   resolve?: (host: string) => Promise<string[]>
 }
@@ -415,11 +419,28 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,
       { 'content-type': 'application/xml; charset=utf-8' },
+    ),
+  )
+  app.get('/llms.txt', (c) =>
+    c.body(
+      `# pit.world
+
+> Private web search, the Moshpit network's front door, and an open training corpus of pit.world's own crawl index.
+
+- [API docs](https://pit.world/api): JSON, CORS open, no key for search.
+- [Search API](https://pit.world/api#search): GET /api/search?q=
+- [Training corpus](https://pit.world/api#corpus): GET /api/corpus?q=saas,business,crypto&limit=100&cursor= (full page text, keyset paging; commas = any of the terms). Free preview 20 pages a day, then $1 per 1,000 pages by x402 (per request or credit pack) or CoinPay invoice. GET /api/corpus/stats is free.
+- [Training opt-outs](https://pit.world/api#corpus-policy): pages with noai (X-Robots-Tag or meta robots), TDMRep reservations, or robots.txt rules against AI-training crawlers are never in the corpus.
+- [pitbot](https://pit.world/bot): the crawler, and how to keep it out.
+- MCP: \`claude mcp add pit -- pit mcp\` (tools: search, corpus, summarize, submit_urls, moshpit_resolve, ...)
+`,
+      200,
+      { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' },
     ),
   )
   app.get('/opensearch.xml', (c) => c.body(openSearchXml(), 200, { 'content-type': 'application/opensearchdescription+xml; charset=utf-8' }))
@@ -534,7 +555,8 @@ export function createApp(deps: Deps) {
   app.use('/api/*', async (c, next) => {
     await next()
     c.header('access-control-allow-origin', '*')
-    c.header('cache-control', 'no-store')
+    // The corpus sets its own (stats are cacheable, paid pages are private).
+    if (!c.req.path.startsWith('/api/corpus') || !c.res.headers.has('cache-control')) c.header('cache-control', 'no-store')
   })
 
   app.get('/api/search', async (c) => {
@@ -573,6 +595,16 @@ export function createApp(deps: Deps) {
   })
 
   app.get('/api/bangs', (c) => c.json(BANGS.map((b) => ({ name: b.name, bangs: b.aliases, url: b.url }))))
+
+  // --- the training corpus: pitbot's index as full text, opt-outs excluded (src/corpus-routes.ts) ---
+  const corpusBilling = deps.corpus ?? new CorpusBilling(new Database(':memory:'), { usdPer1000: 1 })
+  mountCorpus(app, {
+    billing: corpusBilling,
+    crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807',
+    accounts: deps.accounts?.accounts ?? null,
+    site: deps.accounts?.site ?? process.env.PIT_SITE ?? 'https://pit.world',
+    ...(deps.fetch ? { fetch: deps.fetch } : {}),
+  })
 
   // --- summaries (src/summarize.ts) ------------------------------------------------
   // POST starts one (throttled; a cached summary is free and instant), GET polls it. Never blocks a search.
@@ -938,7 +970,7 @@ export function createApp(deps: Deps) {
     const rewards = deps.rewards
     const passes = deps.summaryPasses
     // /account shows the rewards section, then the summary pass.
-    const sections = [rewards ? rewardsSections(rewards) : null, passes ? passSection(passes) : null].filter((s) => s !== null)
+    const sections = [rewards ? rewardsSections(rewards) : null, passes ? passSection(passes) : null, deps.corpus ? corpusSection(deps.corpus) : null].filter((s) => s !== null)
     const accountSections = deps.accounts.accountSections ?? (sections.length ? async (me: Account) => (await Promise.all(sections.map((s) => s(me)))).join('\n') : undefined)
     mountAccounts(app, {
       ...deps.accounts,
@@ -1066,6 +1098,17 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     setTimeout(tick, 7_000).unref()
     setInterval(tick, 60_000).unref()
   }
+  // The training corpus: $1 per 1,000 pages (PIT_CORPUS_USD_PER_1000), free and unmetered with PIT_CORPUS_INTERNAL_KEY.
+  const corpus = new CorpusBilling(accounts.accounts.db, pricingFromEnv(env), {
+    internalKey: env.PIT_CORPUS_INTERNAL_KEY ?? null,
+    invoicing: buildInvoicing ?? null,
+    x402: env.COINPAY_X402_KEY && env.CRAWL_PAY_TO ? { apiKey: env.COINPAY_X402_KEY, payTo: env.CRAWL_PAY_TO, site: env.PIT_SITE || 'https://pit.world' } : null,
+  })
+  if (buildInvoicing) {
+    const tick = () => void corpus.tick().catch(() => console.error('Corpus credits billing sync failed'))
+    setTimeout(tick, 9_000).unref()
+    setInterval(tick, 60_000).unref()
+  }
   const rewards = new Rewards(accounts.accounts.db, { mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com', promoterCode: (code) => Boolean(promoters.byCode(code)) })
   // c0mpute only (AGENTS.md): no key, no summaries; never a paid provider.
   const summarizer = new Summarizer({
@@ -1083,7 +1126,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, speech, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

@@ -729,6 +729,14 @@ export function botPage(): string {
 <pre><code>User-agent: pitbot
 Disallow: /</code></pre>
 <p>A page already in the index is dropped on its next read. To ask for anything else, write to <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a>.</p>
+<h2 id="training">Search yes, AI training no</h2>
+<p>pit.world also offers its index as a <a href="/api#corpus">training corpus</a>. Reading a page for search is not permission to train on it, so a page is left out of the corpus (and stays in search) when you say so in any of the usual ways:</p>
+<ul>
+<li><code>X-Robots-Tag: noai</code> or <code>&lt;meta name="robots" content="noai"&gt;</code>;</li>
+<li>TDMRep: <code>tdm-reservation: 1</code> as a header or meta tag, or in <code>/.well-known/tdmrep.json</code>;</li>
+<li>robots.txt rules for AI-training crawlers (GPTBot, Google-Extended, CCBot, ClaudeBot and others) on that path.</li>
+</ul>
+<p>The full rules: <a href="/api#corpus-policy">training opt-outs</a>.</p>
 </main>`,
   })
 }
@@ -791,7 +799,7 @@ pit                          # the TUI
 
 # MCP, for Claude Code and other agents
 claude mcp add pit -- pit mcp</code></pre>
-<p>The API is rate limited per visitor, like the page. It answers <code>429</code> with <code>Retry-After</code> when you go over.</p>
+<p>The API is rate limited per visitor, like the page. It answers <code>429</code> with <code>Retry-After</code> when you go over. Every endpoint, and the <a href="/api#corpus">training corpus</a> of pit.world's own index: <a href="/api">API docs</a>.</p>
 </main>`,
   })
 }
