@@ -39,9 +39,11 @@ describe('readPageChecked: only the site refusing counts as blocked', () => {
   test('relay walled but the direct fetch reads it: ok', async () => {
     expect((await read('wall', 200)).state).toBe('ok')
   })
-  test('relay down: never blocked, even if the direct fetch is refused', async () => {
-    expect((await read('down', 403)).state).toBe('down')
+  test('relay down: the site refusing the direct fetch still counts (imdb.com: 403), a network error does not', async () => {
+    expect((await read('down', 403)).state).toBe('blocked')
+    expect((await read('down', 'wall')).state).toBe('blocked')
     expect((await read('down', 'throw')).state).toBe('down')
+    expect((await read('down', 500)).state).toBe('down')
   })
   test('a private address is private, not blocked', async () => {
     const r = await readPageChecked('http://intranet.example/', { relayUrl: RELAY, fetch: world('wall', 403), resolve: async () => ['10.0.0.5'] })
