@@ -703,6 +703,67 @@ export class Promotion {
     return this.report(placementId, { state: 'ready' }, actor)
   }
 
+  /**
+   * Move every not-yet-posted placement from one account to another (an account was banned or locked).
+   * Moves draft, ready, scheduled, failed and stale publishing placements; never published, verified or
+   * removed ones, never uncertain ones (myna may have posted them: reconcile first) and never one a worker
+   * holds mid-post. Each keeps its id (so its ?via= tracking link), its planned time and its businesses;
+   * its text is rewritten for the new network, and it goes back to ready so the worker hands it to myna on
+   * the new account at that account's pace. `queueId` in the answer is the old myna queue item, which the
+   * caller (where myna runs) cancels. `skip` names placements the caller knows went out (myna history).
+   * The old account also leaves the campaign's spotlight and announce accounts.
+   */
+  reassign(campaignId: string, input: { from: string; to: string; reason?: string; dryRun?: boolean; skip?: string[] }, actor = 'operator') {
+    const c = this.campaign(campaignId)
+    const from = String(input.from ?? '').trim()
+    const to = String(input.to ?? '').trim()
+    const reason = String(input.reason ?? '').trim().slice(0, 300) || 'account reassigned'
+    if (!/^[a-z0-9-]+:.+/.test(from) || !/^[a-z0-9-]+:.+/.test(to)) throw new PromoError(400, 'bad_account', 'from and to are myna account ids (network:handle)')
+    if (from === to) throw new PromoError(400, 'same_account', 'from and to are the same account')
+    if (AD_NETWORKS.has(to.split(':')[0]!)) throw new PromoError(422, 'ad_network', `${to}: posts there buy a CrawlProof ad; organic spotlights cannot use it`)
+    const now = this.now()
+    const skip = new Set(input.skip ?? [])
+    const rows = this.db.query('SELECT * FROM promo_placements WHERE campaign_id = ? AND account = ? ORDER BY planned_at, id').all(c.id, from) as any[]
+    const moved: Array<{ id: string; kind: string; previousState: string; queueId: string; plannedAt: number; businesses: string[] }> = []
+    const skipped: Array<{ id: string; kind: string; state: string; reason: string }> = []
+    for (const r of rows) {
+      const why =
+        ['published', 'verified'].includes(r.state) ? 'already posted'
+        : r.state === 'removed' ? 'removed'
+        : r.state === 'uncertain' ? 'uncertain: myna may have posted it; let the worker reconcile it first'
+        : r.state === 'publishing' && r.lease_until && r.lease_until > now ? 'a worker is posting it right now'
+        : skip.has(r.id) ? 'myna history shows it posted on the old account'
+        : ''
+      if (why) skipped.push({ id: r.id, kind: r.kind, state: r.state, reason: why })
+      else moved.push({ id: r.id, kind: r.kind, previousState: r.state, queueId: r.queue_id, plannedAt: r.planned_at, businesses: this.placementOut(r).businesses })
+    }
+    const drop = (list: string[]) => list.filter((a) => a !== from)
+    const spotlightAccounts = drop(c.config.spotlightAccounts)
+    if (c.config.spotlightAccounts.includes(from) && !spotlightAccounts.includes(to)) spotlightAccounts.push(to)
+    const config = { spotlightAccounts, announceAccounts: drop(c.config.announceAccounts) }
+    const byState: Record<string, number> = {}
+    for (const m of moved) byState[m.previousState] = (byState[m.previousState] ?? 0) + 1
+    if (!input.dryRun) {
+      this.db.transaction(() => {
+        for (const m of moved) {
+          const r = rows.find((x) => x.id === m.id)
+          this.db.run(
+            `UPDATE promo_placements SET account = ?, state = CASE WHEN state = 'draft' THEN 'draft' ELSE 'ready' END, queue_id = '', error = '', attempts = 0,
+               lease_owner = NULL, lease_until = NULL, updated_at = ? WHERE id = ? AND account = ? AND state = ?`,
+            [to, now, m.id, from, m.previousState],
+          )
+          this.setPlacementContent(m.id)
+          this.audit(actor, 'placement.reassign', c.id, m.id, { note: `reassigned from ${from}: ${reason}`, from, to, reason, previousState: m.previousState, previousQueueId: m.queueId, previousError: r.error, previousAttempts: r.attempts })
+        }
+        if (config.spotlightAccounts.join('\n') !== c.config.spotlightAccounts.join('\n') || config.announceAccounts.length !== c.config.announceAccounts.length) {
+          this.db.run('UPDATE promo_campaigns SET config = ?, updated_at = ? WHERE id = ?', [JSON.stringify({ ...c.config, ...config }), now, c.id])
+        }
+        this.audit(actor, 'campaign.reassign', c.id, from, { from, to, reason, moved: moved.length, byState, skipped: skipped.length, config })
+      })()
+    }
+    return { campaignId: c.id, from, to, reason, dryRun: Boolean(input.dryRun), moved, skipped, byState, config }
+  }
+
   private firstVerifiedPlacement(campaignId: string, domain: string): number | null {
     const r = this.db
       .query("SELECT MIN(p.verified_at) AS at FROM promo_placements p JOIN promo_placement_members pm ON pm.placement_id = p.id WHERE p.campaign_id = ? AND pm.domain = ? AND p.state = 'verified'")

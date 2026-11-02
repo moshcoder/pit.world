@@ -4,7 +4,7 @@
  */
 import { readFileSync } from 'node:fs'
 import type { PitClient } from './client.js'
-import { localMyna, workOnce } from './promotion-worker.js'
+import { localMyna, workOnce, type Myna } from './promotion-worker.js'
 
 export const PROMO_HELP = `pit promo: promotion campaigns (operators; needs PIT_ADMIN_TOKEN)
 
@@ -28,6 +28,10 @@ export const PROMO_HELP = `pit promo: promotion campaigns (operators; needs PIT_
   pit promo pause|resume|stop ID
   pit promo placements ID [--state S] [--domain D]
   pit promo retry PLACEMENT_ID
+  pit promo reassign ID --from ACCOUNT --to ACCOUNT [--reason TEXT] [--dry-run]
+                                            move every unposted placement (ready, scheduled,
+                                            failed) to another account, e.g. off a banned one;
+                                            cancels the old myna queue items (run where myna is)
   pit promo test-tracking ID [DOMAIN ...]   marked test view + click per business, then check
   pit promo worker ID [--once] [--every 10m]
                                             post due spotlights with myna and verify them
@@ -63,7 +67,8 @@ function flags(args: string[]): { f: Record<string, string>; rest: string[] } {
 const e = encodeURIComponent
 const day = (ms: number | null) => (ms ? new Date(ms).toISOString().replace('T', ' ').slice(0, 16) : '-')
 
-export async function promoMain(args: string[], out: Out, client: PitClient, json: boolean): Promise<number> {
+export async function promoMain(args: string[], out: Out, client: PitClient, json: boolean, deps: { myna?: () => Myna } = {}): Promise<number> {
+  const mynaOf = deps.myna ?? (() => localMyna())
   const [command, ...more] = args
   const { f, rest } = flags(more)
   const id = rest[0] ?? ''
@@ -171,6 +176,44 @@ export async function promoMain(args: string[], out: Out, client: PitClient, jso
     case 'retry':
       need(id, 'retry PLACEMENT_ID')
       return show(await client.promo('POST', `/placements/${e(id)}/retry`, {}))
+    case 'reassign': {
+      need(id && f.from && f.to, 'reassign ID --from ACCOUNT --to ACCOUNT [--reason TEXT] [--dry-run]')
+      const input = { from: f.from!, to: f.to!, reason: f.reason ?? `${f.from} is unusable (banned or locked)` }
+      const myna = mynaOf()
+      // Never move a post myna already published on the old account (the worker may not have reconciled it yet).
+      const plan = await client.promo('POST', `/campaigns/${e(id)}/reassign`, { ...input, dryRun: true })
+      const history = myna.history()
+      const skip = plan.moved.filter((p: any) => history.some((h) => h.ok && h.accountId === input.from && h.text?.includes(`via=${p.id}`))).map((p: any) => p.id as string)
+      const r = await client.promo('POST', `/campaigns/${e(id)}/reassign`, { ...input, skip, dryRun: true })
+      const cancels: Array<{ placement: string; queueId: string; result: string }> = []
+      let final = r
+      if (!f['dry-run']) {
+        final = await client.promo('POST', `/campaigns/${e(id)}/reassign`, { ...input, skip })
+        // The old queue items would still post on the old account: cancel them where myna runs.
+        const pending = new Set(myna.queue().filter((q) => q.status === 'pending').map((q) => q.id))
+        for (const m of final.moved as Array<{ id: string; queueId: string }>) {
+          if (!m.queueId) continue
+          if (!pending.has(m.queueId)) {
+            cancels.push({ placement: m.id, queueId: m.queueId, result: 'already gone' })
+            continue
+          }
+          const c = await myna.cancel(m.queueId)
+          cancels.push({ placement: m.id, queueId: m.queueId, result: c.code === 0 ? 'cancelled' : `failed: ${c.output.trim().slice(-200)}` })
+        }
+      }
+      const failed = cancels.filter((c) => c.result.startsWith('failed')).length
+      show({ ...final, cancels }, () => {
+        const states = Object.entries(final.byState).map(([s, n]) => `${s} ${n}`).join(', ') || 'none'
+        out.log(`${f['dry-run'] ? 'dry run: would move' : 'moved'} ${final.moved.length} placements ${final.from} -> ${final.to} (${states}); skipped ${final.skipped.length}`)
+        for (const m of final.moved) out.log(`  ${m.id}  ${day(m.plannedAt)}  ${m.previousState.padEnd(9)} ${m.kind.padEnd(12)} ${m.businesses.join(' ')}${m.queueId ? `  myna ${m.queueId}` : ''}`)
+        for (const x of final.skipped) out.log(`  skip ${x.id}  ${x.state}: ${x.reason}`)
+        out.log(`  config: spotlightAccounts ${final.config.spotlightAccounts.join(', ')}; announceAccounts ${final.config.announceAccounts.join(', ')}`)
+        if (cancels.length) out.log(`  myna: ${cancels.filter((c) => c.result === 'cancelled').length} cancelled, ${cancels.filter((c) => c.result === 'already gone').length} already gone, ${failed} failed`)
+        for (const c of cancels.filter((x) => x.result.startsWith('failed'))) out.log(`    ${c.queueId} (${c.placement}) ${c.result}`)
+        if (!f['dry-run']) out.log('  the worker hands them to myna on the new account on its next pass')
+      })
+      return failed ? 1 : 0
+    }
     case 'test-tracking': {
       need(id, 'test-tracking ID [DOMAIN ...]')
       let domains = rest.slice(1)
@@ -188,7 +231,7 @@ export async function promoMain(args: string[], out: Out, client: PitClient, jso
     }
     case 'worker': {
       need(id, 'worker ID [--once] [--every 10m]')
-      const myna = localMyna()
+      const myna = mynaOf()
       const every = Math.max(60, Number(/^(\d+)m$/.exec(f.every ?? '10m')?.[1] ?? 10) * 60) * 1000
       for (;;) {
         const results = await workOnce(client, id, myna)
