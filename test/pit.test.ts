@@ -255,6 +255,18 @@ describe('bangs and names', () => {
 })
 
 describe('why pit.world exists', () => {
+  it('says it is a search engine in three steps, right under the search box', async () => {
+    const { request } = app()
+    const home = await (await request('/')).text()
+    const box = home.indexOf('<form class="search"')
+    const steps = home.indexOf('<ol class="howto"')
+    expect(box).toBeGreaterThan(-1)
+    expect(steps).toBeGreaterThan(box)
+    expect(steps).toBeLessThan(home.indexOf('<ul class="promises">'))
+    expect(home).toContain('<b>Search the web</b>')
+    expect(home).toContain('<a href="/search?q=deadman.switch">deadman.switch</a>')
+  })
+
   it('links the home page ICANN line to the official explanation, and serves it', async () => {
     const { request } = app()
     const home = await (await request('/')).text()
