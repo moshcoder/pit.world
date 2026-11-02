@@ -119,6 +119,7 @@ Both sign people in with their **pit.world account**: sign in once at [pit.world
 - nginx writes **no access log** for the site (`ACCESS_LOG=off` in `bin/install.conf`), and the app logs nothing per request.
 - **No cookies to search.** The server strips `Set-Cookie` from every response except the sign-in and account routes, which set one only after you press Sign in.
 - Rate limiting keys on an **HMAC of the IP under a secret regenerated every hour**, in memory only.
+- **Anonymous votes and form limits use a salted, hashed device fingerprint** ([@profullstack/browser-fingerprint](https://github.com/profullstack/browser-fingerprint)), used only to stop one device voting many times or flooding a form. The fingerprint itself is never stored, only `HMAC(secret, stable components)`. A result vote keeps a keyed hash of its search, never the words. See [Votes](#votes).
 - Identical searches are cached **in memory for ten minutes** to avoid paying twice; the cache holds words and results, nothing about who asked, and never touches disk.
 - Strict CSP (`default-src 'none'`, same-origin scripts and styles only), `Referrer-Policy: no-referrer`, results link straight to the site.
 
@@ -140,8 +141,24 @@ The page says the same in plain words: [pit.world/privacy](https://pit.world/pri
 | `GET /api/pros/categories` | categories (with counts) and price bands |
 | `GET /b/<domain>/openprofile.md` | a directory listing as an OpenProfile.md (Kind organization) |
 | `GET /api/ring` | the web ring, in order |
+| `GET /api/votes?kind=result&target=URL&q=…` or `?item=listing:acme.com&item=…` | ▲ ▼ tallies `{ up, down, score }` (read-only) |
+| `GET /api/votes/top?kind=listing&order=best\|worst&n=20` | best- or worst-voted items of a kind |
+| `GET /api/fp/challenge` · `POST /api/vote` | the browser's vote path: a challenge token, then `{ kind, target, value: 1\|-1\|0, toggle?, q?, fp }`. Needs the page's fingerprint, so it is not an API for scripts |
 
 No key. Rate limited per visitor (`429` with `Retry-After`).
+
+## Votes
+
+Every listing has a ▲ and a ▼: web results and every tab's results, the featured box, the sponsored slots (voted from pit.world's side of the sandboxed ad frame), PairUX/nixamp promos, RSS Amplifier blogs, the listing card, `/b/<domain>`, `/pros` and the home page's businesses. No account.
+
+- **One vote per device and item** (per search, for results): `(visitorKey, item, qkey)` is the key. Voting the other way replaces it; the same arrow again (`toggle`) takes it back.
+- **Who** is `visitorKey` from [@profullstack/browser-fingerprint](https://github.com/profullstack/browser-fingerprint): `/fp.js` (served by pit.world, `script-src 'self'`) collects canvas, WebGL, audio, fonts, screen, timezone, languages and client hints; the server checks a 10-minute challenge token bound to the visitor's /24 or /64, refuses bot-scored clients (`navigator.webdriver`, headless UA, software GL plus other tells), and keeps only `HMAC(secret, stable components)`. The secret is `PIT_FP_SECRET`, or one generated once into `$PIT_DATA_DIR/fingerprint.secret` (0600).
+- **Throttled hard**: 12 votes a minute, 60 an hour, 200 a day per device, and per network (/24 or /64) 40 a minute, 300 an hour, 1,500 a day. Counters are in memory.
+- **Without JavaScript** the ▲ ▼ is a plain form to `POST /vote`, which explains that voting needs the fingerprint and links back.
+- **Ranking** (`src/votes.ts`): `score = (up + 5) / (up + down + 10) − 0.5`; a result moves `6 × score(this search) + 2 × score(its site, one vote per device per site)` places, capped at 3, then results are re-ordered by `position − moved`. The featured network site leading a search keeps its place. `/pros` listings move by `6 × score`, capped at 3, only among unpaid, non-campaign listings. Sponsored and featured slots are never re-ordered: their votes are a quality signal.
+- **Storage**: table `votes` in the listings SQLite database, created additively at startup. Back up the live database with SQLite's backup API before rollout.
+
+Other anonymous writes (`/subscribe`, `/api/subscribe`, `/b/<domain>/claim`, `/api/listing/claim`, `/b/<domain>/quote`, `/api/listing/quote`, `/submit`, `/api/submit`, `/build/invoice`, and the anonymous allowance of `POST /api/summarize`) carry the same fingerprint when JavaScript is on (`app.js` adds an `fp` field; APIs may send `x-fingerprint`) and are limited per device with a looser per-network ceiling (`src/visitor.ts`). Without one they fall back to the old per-address limit.
 
 ## Surfaces
 
@@ -150,9 +167,9 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 | | |
 | --- | --- |
 | Web + API | `bun src/server.ts` (`PORT`, `HOST`; `RESEND_API_KEY` for the newsletter and quote requests; `RSSAMPLIFIER_API_KEY` (+ optional `RSSAMPLIFIER_URL`, `RSSAMPLIFIER_RING`) for the ring mirror; provider keys `SERPER_API_KEY`, `DATAFORSEO_LOGIN` + `DATAFORSEO_PASSWORD` (Bing), `LINKUP_API_KEY`, `EXA_API_KEY`, `PERPLEXITY_API_KEY`) |
-| CLI | `pit search`, `pit resolve`, `pit network`, `pit open`, `pit listing`, `pit claim`, `pit verify`, `pit edit DOMAIN --key … --operator … --category …`, `pit pros [WORDS] --category … --near …`, `pit categories`, `pit quote DOMAIN --name … --email … --message …`, `pit ring` |
+| CLI | `pit search`, `pit resolve`, `pit network`, `pit open`, `pit listing`, `pit claim`, `pit verify`, `pit edit DOMAIN --key … --operator … --category …`, `pit pros [WORDS] --category … --near …`, `pit categories`, `pit quote DOMAIN --name … --email … --message …`, `pit votes KIND TARGET [--q WORDS]`, `pit votes top KIND`, `pit ring` |
 | TUI | `pit` |
-| MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`, `listing`, `pros`, `ring`, `edit_listing`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
+| MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`, `listing`, `pros`, `ring`, `edit_listing`, `vote_tallies`, `vote_top`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
 | PWA | installable from any browser (`/manifest.webmanifest`, share target into `/search`); the worker in `public/sw.js` caches the static shell and an offline page, never a search |
 
 ### Newsletter (one list for every Profullstack property)

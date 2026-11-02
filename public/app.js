@@ -51,7 +51,13 @@
       show(box, 'Summarizing on c0mpute… this can take a minute.', 'wait')
       const started = Date.now()
       try {
-        let res = await fetch('/api/summarize', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }) })
+        // The device fingerprint, so the free allowance is per device rather than per address (privacy#votes).
+        const headers = { 'content-type': 'application/json' }
+        try {
+          const m = await fp()
+          headers['x-fingerprint'] = m.encodePayload(await m.getFingerprint())
+        } catch {}
+        let res = await fetch('/api/summarize', { method: 'POST', headers, body: JSON.stringify({ url }) })
         let body = await res.json().catch(() => ({}))
         while (res.ok && body.status === 'pending' && Date.now() - started < 150_000) {
           await new Promise((r) => setTimeout(r, 3000))
@@ -79,6 +85,90 @@
       button.textContent = 'Try again'
     })
   }
+  // ▲ ▼ votes. The device fingerprint (/fp.js, @profullstack/browser-fingerprint, served by pit.world) is read
+  // only when you press one, and only a salted hash of it is kept (pit.world/privacy#votes). Your own votes are
+  // remembered on this device only, to show which arrow you pressed.
+  let fpModule = null
+  const fp = () => (fpModule ??= import('/fp.js'))
+  const MINE = 'pit-votes'
+  const mine = () => {
+    try {
+      return JSON.parse(localStorage.getItem(MINE) || '{}')
+    } catch {
+      return {}
+    }
+  }
+  const remember = (key, value) => {
+    try {
+      const all = mine()
+      if (value) all[key] = value
+      else delete all[key]
+      const keys = Object.keys(all)
+      for (const k of keys.slice(0, Math.max(0, keys.length - 2000))) delete all[k]
+      localStorage.setItem(MINE, JSON.stringify(all))
+    } catch {}
+  }
+  const query = () => document.querySelector('main[data-q]')?.getAttribute('data-q') || ''
+  const keyOf = (form) => `${form.dataset.item}|${form.dataset.item.startsWith('result:') ? query() : ''}`
+  const paint = (form, value, tally) => {
+    form.querySelector('.up')?.setAttribute('aria-pressed', String(value === 1))
+    form.querySelector('.down')?.setAttribute('aria-pressed', String(value === -1))
+    const out = form.querySelector('.n')
+    if (out && tally) {
+      out.textContent = tally.up || tally.down ? String(tally.up - tally.down) : ''
+      out.title = `${tally.up} up, ${tally.down} down`
+    }
+  }
+  const stored = mine()
+  for (const form of document.querySelectorAll('form.vote')) if (stored[keyOf(form)]) paint(form, stored[keyOf(form)])
+  const say = (form, text) => {
+    let note = form.querySelector('.vote-note')
+    if (!note) {
+      note = document.createElement('span')
+      note.className = 'vote-note'
+      note.setAttribute('role', 'status')
+      form.appendChild(note)
+    }
+    note.textContent = text
+    setTimeout(() => note.remove(), 4000)
+  }
+  document.addEventListener('submit', async (event) => {
+    const form = event.target
+    if (!(form instanceof HTMLFormElement) || !form.classList.contains('vote')) return
+    event.preventDefault()
+    if (form.dataset.busy) return
+    const value = Number(event.submitter?.value || 0)
+    form.dataset.busy = '1'
+    try {
+      const { getFingerprint } = await fp()
+      const send = async (fresh) =>
+        fetch('/api/vote', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ kind: form.elements.kind.value, target: form.elements.target.value, value, toggle: true, q: query(), fp: await getFingerprint({ fresh }) }),
+        })
+      let res = await send(false)
+      let body = await res.json().catch(() => ({}))
+      if (res.status === 400 && body.error === 'stale') {
+        res = await send(true)
+        body = await res.json().catch(() => ({}))
+      }
+      if (res.ok && body.ok) {
+        paint(form, body.value, body)
+        remember(keyOf(form), body.value)
+      } else
+        say(form, body.error === 'limited' ? 'Too many votes; wait a bit.' : body.error === 'bot' ? 'Not counted: looked automated.' : 'Not counted; reload and try again.')
+    } catch {
+      say(form, 'Vote failed; try again.')
+    } finally {
+      delete form.dataset.busy
+    }
+  })
+  // Anonymous forms (newsletter, claims, quote requests, submissions, build orders) carry the same fingerprint, so
+  // they are limited per device instead of per address. Without JavaScript they still work, limited by address.
+  const ANON = 'form[action="/subscribe"], form[action$="//pit.world/subscribe"], form[action="/build/invoice"], form[action$="/claim"], form[action$="/quote"], form[action="/submit"]'
+  if (document.querySelector(ANON)) fp().then((m) => m.attachToForms({ selector: ANON })).catch(() => {})
+
   // Installable app + offline page. The worker caches the static shell only, never a search.
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
 })()

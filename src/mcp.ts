@@ -80,6 +80,23 @@ export function createMcpServer(client = new PitClient()): McpServer {
     },
   )
 
+  server.tool(
+    'vote_tallies',
+    'Read anonymous ▲ ▼ vote tallies on pit.world (read-only; votes are cast in a browser, one per device fingerprint). kind: result (a URL), listing (a domain), featured (a ring site host), promo or blog (a URL), ad (a sponsored slot like web:top-1). query scopes result votes to one search. score is a Bayesian average centred on 0 (prior 5 up, 5 down); a result moves at most 3 places on votes.',
+    {
+      items: z.array(z.object({ kind: z.enum(['result', 'listing', 'featured', 'promo', 'blog', 'ad']), target: z.string().min(3).max(2048) })).min(1).max(50),
+      query: z.string().max(512).optional(),
+    },
+    async ({ items, query }: { items: Array<{ kind: string; target: string }>; query?: string }) => ({ content: [{ type: 'text', text: JSON.stringify(await client.votes(items, query), null, 2) }] }),
+  )
+
+  server.tool(
+    'vote_top',
+    'The best- (or worst-) voted pit.world items of one kind (result, listing, featured, promo, blog, ad), with up/down counts and score. Never says who voted.',
+    { kind: z.enum(['result', 'listing', 'featured', 'promo', 'blog', 'ad']), order: z.enum(['best', 'worst']).optional(), limit: z.number().int().min(1).max(100).optional() },
+    async ({ kind, order, limit }: { kind: string; order?: 'best' | 'worst'; limit?: number }) => ({ content: [{ type: 'text', text: JSON.stringify(await client.topVotes(kind, { ...(order ? { order } : {}), ...(limit ? { n: limit } : {}) }), null, 2) }] }),
+  )
+
   server.tool('ring', 'The pit.world web ring: every site in it (claimed pit.world listings plus the Moshpit network sites), in ring order, with direct and pit.world proxy URLs and feeds.', {}, async () => ({
     content: [{ type: 'text', text: JSON.stringify(await client.ring(), null, 2) }],
   }))

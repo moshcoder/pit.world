@@ -46,6 +46,13 @@ import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type Searc
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 import { Summarizer, SummaryStore } from './summarize.js'
 import { createThrottle } from '@profullstack/throttle'
+import { Database } from 'bun:sqlite'
+import { randomBytes } from 'node:crypto'
+import { clientSource, CLIENT_HEADERS } from '@profullstack/browser-fingerprint/source'
+import { itemFor, KINDS, Votes, type VoteKind } from './votes.js'
+import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
+import { itemsOf, type VoteView } from './vote-html.js'
+import { AD_SLOT, featuredTarget, TOP_ADS, votePage } from './html.js'
 
 export type Deps = {
   keys: Keys
@@ -88,6 +95,10 @@ export type Deps = {
   summarizer?: Summarizer
   /** Summaries a visitor may start per hour: anonymous per address, signed in per account, and all anonymous visitors together. */
   summaryLimits?: { anon: number; signedIn: number; anonTotal: number }
+  /** Keys every visitor hash and search hash (src/visitor.ts); a random one per process when unset (tests). */
+  fingerprintSecret?: string
+  /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
+  votes?: Votes
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -132,6 +143,25 @@ export function createApp(deps: Deps) {
 
   const limited = (c: Context<Env>) => !limiter.take(c.env?.ip || 'unknown')
 
+  // --- who is writing: browser fingerprints, not addresses (src/visitor.ts) --------
+  const fpSecret = deps.fingerprintSecret ?? randomBytes(32).toString('base64url')
+  const visitors = new VisitorGate(fpSecret, (ip) => limiter.take(ip || 'unknown'))
+  const votes = deps.votes ?? new Votes(deps.listings?.db ?? new Database(':memory:'), fpSecret)
+  deps.listings?.setVoteMoves((domains) => votes.listingMoves(domains))
+  const fpOf = (c: Context<Env>, body?: Record<string, unknown> | null): unknown => c.req.header('x-fingerprint') || body?.fp || null
+  /** True when an anonymous write is over its limit (or comes from a bot-scored browser). */
+  const writeLimited = async (c: Context<Env>, action: WriteAction, body?: Record<string, unknown> | null, fallback?: (ip: string) => boolean) => {
+    const gate = fallback ? new VisitorGate(fpSecret, fallback, visitors.guard) : visitors
+    const verdict = await gate.write(action, fpOf(c, body), c.env?.ip || '', c.req.header('user-agent') ?? '')
+    if (!verdict.ok && verdict.retryAfterMs) c.header('retry-after', String(Math.max(1, Math.ceil(verdict.retryAfterMs / 1000))))
+    return !verdict.ok
+  }
+  /** Tallies for the items a page shows, and where the no-JavaScript vote page links back to. */
+  const voteView = (pairs: Array<[VoteKind, string | undefined | null]>, back: string, query?: string): VoteView => ({
+    counts: votes.tallies(itemsOf(pairs), { query: query ?? null }),
+    back,
+  })
+
   // An affiliate link (/?ref=CODE, no query) lands on /join, a promoter's on /promote. No cookie either way.
   if (deps.rewards && deps.accounts) {
     app.use('/', async (c, next) => {
@@ -172,7 +202,10 @@ export function createApp(deps: Deps) {
 
 
   const newsletter = deps.newsletter
-  app.get('/', async (c) => c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false, businesses: deps.listings?.directory({ limit: 6 }).listings ?? [] })))
+  app.get('/', async (c) => {
+    const businesses = deps.listings?.directory({ limit: 6 }).listings ?? []
+    return c.html(homePage(await registry.stats(), { newsletter: newsletter?.enabled ?? false, businesses, votes: voteView(businesses.map((l) => ['listing', l.domain]), '/') }))
+  })
 
   // --- newsletter (double opt-in) ------------------------------------------------
   // The one signup endpoint for every Profullstack property: the @profullstack/footer form posts here with a
@@ -190,7 +223,7 @@ export function createApp(deps: Deps) {
     if (!newsletter?.enabled) return c.notFound()
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
     const from = origin(form.site ?? c.req.query('site'))
-    if (limited(c)) return c.html(newsletterPage('limited', from), 429, { 'retry-after': '30' })
+    if (await writeLimited(c, 'subscribe', form)) return c.html(newsletterPage('limited', from), 429, { 'retry-after': '30' })
     // The honeypot: a field people never see. A bot that fills it gets the normal answer and nothing else.
     if (typeof form.website === 'string' && form.website !== '') return c.html(newsletterPage('check', from))
     const result = await newsletter.signup(form.email, from.source)
@@ -199,15 +232,15 @@ export function createApp(deps: Deps) {
   })
   // JSON for scripts and other sites' pages (CORS: any origin may post an address; nothing is read back).
   const cors = { 'access-control-allow-origin': '*', 'access-control-allow-methods': 'POST, OPTIONS', 'access-control-allow-headers': 'content-type', 'access-control-max-age': '86400' }
-  app.options('/api/subscribe', (c) => c.body(null, 204, cors))
+  app.options('/api/subscribe', (c) => c.body(null, 204, { ...cors, 'access-control-allow-headers': 'content-type, x-fingerprint' }))
   app.post('/api/subscribe', async (c) => {
     for (const [k, v] of Object.entries(cors)) c.header(k, v)
     if (!newsletter?.enabled) return c.json({ error: 'The newsletter is not open on this instance.' }, 404)
-    if (limited(c)) {
+    const body = (await c.req.json().catch(() => ({}))) as { email?: unknown; site?: unknown; fp?: unknown }
+    if (await writeLimited(c, 'subscribe', body)) {
       c.header('retry-after', '30')
       return c.json({ error: 'Too many requests. Try again shortly.' }, 429)
     }
-    const body = (await c.req.json().catch(() => ({}))) as { email?: unknown; site?: unknown }
     const result = await newsletter.signup(body.email, body.site)
     if (result === 'sent' || result === 'already') return c.json({ ok: true, status: 'check-inbox' })
     const status = { invalid: 400, undeliverable: 400, failed: 503 }[result]
@@ -246,7 +279,7 @@ export function createApp(deps: Deps) {
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/bot', (c) => c.html(botPage()))
   // Sites, pages, feeds, sitemaps and OPML into our own index (src/submit-routes.ts).
-  mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', limited, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+  mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', limited, writeLimited: (c, body) => writeLimited(c, 'submit', body), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
   // pitbot's live status: the crawler is its own service, read over loopback.
   app.get('/status', async (c) => {
     c.header('cache-control', 'no-store')
@@ -281,7 +314,7 @@ export function createApp(deps: Deps) {
     if (!cfg || !orderGuard) return c.redirect('/build')
     const form = (await c.req.parseBody()) as Record<string, string>
     const again = async (error: string, status: 400 | 429 | 502) => c.html(buildPage({ invoicing: true, error, values: form, guard: await guardHtml() }), status)
-    if (!orderLimit.take(c.env?.ip || 'unknown')) return again('Too many orders from you just now. Try again in a few minutes.', 429)
+    if (await writeLimited(c, 'order', form, (ip) => orderLimit.take(ip || 'unknown'))) return again('Too many orders from you just now. Try again in a few minutes.', 429)
     // No token, a forged one or a filled honeypot: told it worked (back to /build), no invoice, no email.
     // A stale page or a too-fast submit is a person often enough to get the form back instead.
     const verdict = await orderGuard.check({ fields: form, ip: c.env?.ip || null })
@@ -371,19 +404,86 @@ export function createApp(deps: Deps) {
     }
     const vertical = parseVertical(c.req.query('t'))
     c.header('cache-control', 'no-store')
+    const back = `/search?q=${encodeURIComponent(query)}${vertical === 'web' ? '' : `&t=${vertical}`}`
     if (vertical !== 'web') {
       const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query), promoted.for(query, vertical)])
+      if (result) result.hits = votes.rerank(result.hits, query)
       const mediaFeatured = featuredFor(query)
       const mediaBackfill = mediaFeatured.length ? undefined : backfillFor(query)
-      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
+      const view = voteView(
+        [
+          ...(result?.hits ?? []).map((m): [VoteKind, string] => ['result', m.url]),
+          ...promos.map((p): [VoteKind, string] => ['promo', p.url]),
+          ...(result?.sites ?? []).map((s): [VoteKind, string] => ['blog', s.url]),
+          ...[...mediaFeatured, ...(mediaBackfill ? [mediaBackfill] : [])].map((s): [VoteKind, string] => ['featured', featuredTarget(s)]),
+          ...adPairs(vertical),
+        ],
+        back,
+        query,
+      )
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    // Votes nudge the order a bounded number of places; the featured network site leading the results keeps its place.
+    if (result) result.hits = votes.rerank(result.hits, query, (h) => Boolean(h.featured))
     const claimed = deps.listings?.claimedOnly(query)
     // The site leading the results already says "Featured": the box above them does not repeat it.
     const leadHost = result?.hits[0]?.featured ? result.hits[0].host : null
     const featured = featuredFor(query).filter((s) => !leadHost || new URL(siteHref(s, false)).hostname !== leadHost)
     const backfill = featured.length || leadHost ? undefined : backfillFor(query)
-    return c.html(resultsPage({ query, result, resolution, error, featured, summaries: !!deps.summarizer?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+    const view = voteView(
+      [
+        ...(result?.hits ?? []).map((h): [VoteKind, string] => ['result', h.url]),
+        ...[...featured, ...(backfill ? [backfill] : [])].map((s): [VoteKind, string] => ['featured', featuredTarget(s)]),
+        ...(claimed ? [['listing', claimed.domain] as [VoteKind, string]] : []),
+        ...adPairs('web'),
+      ],
+      back,
+      query,
+    )
+    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, summaries: !!deps.summarizer?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed, view) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+  })
+
+  // --- votes -------------------------------------------------------------------
+  // The fingerprint script, from our own origin (script-src 'self'): @profullstack/browser-fingerprint's client.
+  app.get('/fp.js', (c) => c.body(clientSource(), 200, CLIENT_HEADERS))
+  // A short-lived token the browser must hold before a vote counts; bound to the visitor's network.
+  const challengeLimit = new RateLimiter(60, 30)
+  app.get('/api/fp/challenge', async (c) => {
+    c.header('cache-control', 'no-store')
+    if (!challengeLimit.take(c.env?.ip || 'unknown')) return c.json({ error: 'rate limited' }, 429, { 'retry-after': '30' })
+    return c.json({ token: await visitors.challenge(c.env?.ip || '') })
+  })
+  type VoteBody = { kind?: unknown; target?: unknown; value?: unknown; v?: unknown; q?: unknown; toggle?: unknown; fp?: unknown; back?: unknown }
+  async function castVote(c: Context<Env>, body: VoteBody) {
+    const target = itemFor(body.kind, body.target)
+    const value = Math.trunc(Number(body.value ?? body.v ?? NaN))
+    if (!target || ![-1, 0, 1].includes(value)) return { status: 400 as const, json: { ok: false, error: 'bad-vote', message: 'kind must be one of ' + KINDS.join(', ') + '; value 1, -1 or 0.' } }
+    const gate = await visitors.vote(fpOf(c, body as Record<string, unknown>), c.env?.ip || '', c.req.header('user-agent') ?? '')
+    if (!gate.ok) {
+      if (gate.retryAfterMs) c.header('retry-after', String(Math.max(1, Math.ceil(gate.retryAfterMs / 1000))))
+      const status = gate.reason === 'limited' ? 429 : gate.reason === 'bot' ? 403 : 400
+      return { status: status as 400 | 403 | 429, json: { ok: false, error: gate.reason } }
+    }
+    const query = typeof body.q === 'string' ? normalizeQuery(body.q) : ''
+    const result = votes.cast({ visitor: gate.visitor, ...target, value, query, toggle: body.toggle === true || body.toggle === '1' })
+    return { status: 200 as const, json: { ok: true, item: target.item, ...result } }
+  }
+  app.post('/api/vote', async (c) => {
+    c.header('cache-control', 'no-store')
+    const body = (await c.req.json().catch(() => ({}))) as VoteBody
+    const { status, json } = await castVote(c, body)
+    return c.json(json, status)
+  })
+  // The form behind every ▲ ▼: without JavaScript there is no fingerprint, so the vote is refused politely.
+  app.post('/vote', async (c) => {
+    const form = (await c.req.parseBody().catch(() => ({}))) as Record<string, string>
+    const back = typeof form.back === 'string' && /^\/(?!\/)[^\s]{0,600}$/.test(form.back) ? form.back : '/'
+    if (!fpOf(c, form)) return c.html(votePage('needs-js', back), 400)
+    const q = back.startsWith('/search?') ? new URLSearchParams(back.slice(8)).get('q') ?? '' : ''
+    const { status, json } = await castVote(c, { ...form, q })
+    if (status === 200) return c.redirect(back, 303)
+    return c.html(votePage((json as { error: string }).error as 'needs-js' | 'stale' | 'bot' | 'limited' | 'bad-vote', back), status)
   })
 
   // --- JSON API ---------------------------------------------------------------
@@ -407,10 +507,12 @@ export function createApp(deps: Deps) {
     if (vertical !== 'web') {
       const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, n), promoted.for(query, vertical)])
       if (!result) return c.json({ query, type: vertical, error, featured, promoted: promos }, 503)
+      result.hits = votes.rerank(result.hits, query)
       return c.json({ query, type: vertical, provider: result.provider, featured, results: result.hits, promoted: promos })
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     if (!result) return c.json({ query, error, featured, moshpit: resolution }, 503)
+    result.hits = votes.rerank(result.hits, query, (h) => Boolean(h.featured))
     return c.json({ query, provider: result.provider, featured, results: result.hits, moshpit: resolution })
   })
 
@@ -436,6 +538,7 @@ export function createApp(deps: Deps) {
   const hourly = (limit: number) =>
     createThrottle({ limit, windowSeconds: 3600, headroom: 1, credential: false, subresources: false, identify: (r) => r.headers.get('x-pit-who') })
   const anonPerIp = hourly(summaryLimits.anon)
+  const anonIpCeiling = hourly(summaryLimits.anon * 3)
   const anonTotal = hourly(summaryLimits.anonTotal)
   const perAccount = hourly(summaryLimits.signedIn)
   const over = async (throttle: ReturnType<typeof hourly>, who: string) =>
@@ -482,12 +585,52 @@ export function createApp(deps: Deps) {
       }
     } else {
       const ip = c.env?.ip || 'unknown'
-      if ((await over(anonPerIp, `ip:${ip}`)) || (await over(anonTotal, 'anon'))) {
+      // Per device when the browser sent its fingerprint (src/visitor.ts), with the address as a looser
+      // ceiling; per address otherwise, as before. A bot-scored browser gets nothing.
+      const v = await visitors.guard.verify({ payload: fpOf(c, body), ip, userAgent: c.req.header('user-agent') ?? '' })
+      if (v.reason === 'bot') return c.json({ status: 'refused', url, error: 'That looked automated.' }, 403)
+      const who = v.ok ? `fp:${v.visitorKey}` : `ip:${ip}`
+      if ((await over(anonPerIp, who)) || (v.ok && (await over(anonIpCeiling, `ip:${ip}`))) || (await over(anonTotal, 'anon'))) {
         c.header('retry-after', '3600')
         return c.json({ status: 'limited', url, signIn: '/signin', error: `Free summaries are ${summaryLimits.anon} an hour without an account. Sign in for ${summaryLimits.signedIn} an hour.` }, 429)
       }
     }
     return c.json(summarizer.start(url), 202)
+  })
+
+  // Vote tallies: read-only, no fingerprint needed. ?kind=&target= (one), or ?item=kind:target repeated; ?q= for results on one search.
+  app.get('/api/votes', (c) => {
+    const q = normalizeQuery(c.req.query('q') ?? '')
+    const items = [...(c.req.queries('item') ?? [])]
+    const one = itemFor(c.req.query('kind'), c.req.query('target'))
+    if (one) items.unshift(one.item)
+    const parsed = items.map((i) => {
+      const at = i.indexOf(':')
+      if (at <= 0) return null
+      const kind = i.slice(0, at)
+      const target = i.slice(at + 1)
+      // Stored result items have no scheme (result:example.com/page); accept them either way.
+      return itemFor(kind, ['result', 'promo', 'blog'].includes(kind) && !/^https?:\/\//i.test(target) ? `https://${target}` : target)
+    })
+    const valid = parsed.filter((x): x is NonNullable<typeof x> => Boolean(x)).slice(0, 100)
+    if (!valid.length) return c.json({ error: 'give kind and target, or item=<kind>:<target> (kinds: ' + KINDS.join(', ') + ')' }, 400)
+    const counts = votes.tallies(valid.map((v) => v.item), { query: q || null })
+    return c.json({
+      query: q || null,
+      prior: { up: 5, down: 5 },
+      items: valid.map((v) => {
+        const t = counts.get(v.item)!
+        return { item: v.item, kind: v.kind, up: t.up, down: t.down, score: Number(t.score.toFixed(4)) }
+      }),
+    })
+  })
+  app.get('/api/votes/top', (c) => {
+    const kind = c.req.query('kind') ?? 'result'
+    if (!(KINDS as readonly string[]).includes(kind)) return c.json({ error: 'kind must be one of ' + KINDS.join(', ') }, 400)
+    const order = c.req.query('order') === 'worst' ? 'worst' : 'best'
+    const limit = Number(c.req.query('n') ?? c.req.query('limit') ?? 20)
+    const min = Number(c.req.query('min') ?? 1)
+    return c.json({ kind, order, items: votes.top(kind as VoteKind, { limit, order, min }).map((t) => ({ ...t, score: Number(t.score.toFixed(4)) })), totals: votes.totals() })
   })
 
   // Thumbnails for the Images/Videos/Live/Shopping/News tabs and Open Library's book covers, fetched by us so
@@ -567,7 +710,13 @@ export function createApp(deps: Deps) {
         })
       : null
   if (deps.listings) mountBusinessFeatured(app, deps.listings, deps.featuredBusinesses, limited, deps.accounts?.site ?? 'https://pit.world')
-  if (deps.listings) mountListings(app, deps.listings, limited, looksLikeName, { ringChanged: () => deps.ringSync?.soon(ringSites), ...(promoHooks ?? {}) })
+  if (deps.listings)
+    mountListings(app, deps.listings, limited, looksLikeName, {
+      ringChanged: () => deps.ringSync?.soon(ringSites),
+      writeLimited: (c, action, body, fallback) => writeLimited(c, action, body, fallback),
+      voteView: (domains, back) => voteView(domains.map((d) => ['listing', d]), back),
+      ...(promoHooks ?? {}),
+    })
 
   app.notFound((c) =>
     c.req.path.startsWith('/api/')
@@ -579,6 +728,12 @@ export function createApp(deps: Deps) {
     c.req.path.startsWith('/api/') ? c.json({ error: 'Something went wrong.' }, 500) : c.html(errorPage(), 500),
   )
   return app
+}
+
+/** The sponsored slots a results page renders (html.ts sponsoredTop/adUnit), as vote targets. */
+function adPairs(page: string): Array<[VoteKind, string]> {
+  if (AD_SLOT === 'off') return []
+  return [...Array.from({ length: TOP_ADS }, (_, i): [VoteKind, string] => ['ad', `${page}:top-${i + 1}`]), ['ad', `${page}:inline`]]
 }
 
 const logged = new Map<string, number>()
@@ -658,7 +813,8 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.C0MPUTE_URL ? { baseUrl: env.C0MPUTE_URL } : {}),
     store: new SummaryStore(env.PIT_SUMMARIES_DB ?? `${dataDir}/summaries.db`),
   })
-  const app = createApp({ keys: keysFromEnv(), summarizer, crawlGate: createCrawlGate(), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const fpSecret = fingerprintSecret(dataDir)
+  const app = createApp({ keys: keysFromEnv(), summarizer, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

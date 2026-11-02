@@ -21,6 +21,8 @@ export type SubmitDeps = {
   crawlerUrl: string
   /** True when the caller is over the rate limit. */
   limited: (c: Context<any>) => boolean
+  /** Per-browser limit when the request carries a fingerprint (src/visitor.ts); `limited` otherwise. */
+  writeLimited?: (c: Context<any>, body: Record<string, unknown> | null) => Promise<boolean>
   fetch?: Fetch
 }
 
@@ -57,6 +59,8 @@ export async function handleSubmission(body: unknown, deps: Pick<SubmitDeps, 'cr
 async function formBody(c: Context<any>): Promise<Record<string, string>> {
   const form = await c.req.parseBody()
   const out: Record<string, string> = { input: String(form.input ?? form.urls ?? form.url ?? '') }
+  // The browser fingerprint app.js adds, for the per-browser limit; never stored.
+  if (typeof form.fp === 'string') out.fp = form.fp
   const file = form.file
   if (file instanceof File && file.size > 0) {
     if (file.size > 5 * 1024 * 1024) throw new RangeError('too-large')
@@ -75,28 +79,30 @@ async function formBody(c: Context<any>): Promise<Record<string, string>> {
 export function mountSubmit(app: Hono<any>, deps: SubmitDeps): void {
   app.get('/submit', (c) => c.html(submitPage()))
 
+  const over = (c: Context<any>, body: Record<string, unknown> | null) => (deps.writeLimited ? deps.writeLimited(c, body) : Promise.resolve(deps.limited(c)))
   app.post('/submit', async (c) => {
-    if (deps.limited(c)) return c.html(submitPage({ error: 'Too many submissions from here in a short time. Wait a minute and try again.' }), 429)
     let body: Record<string, string>
     try {
       body = await formBody(c)
     } catch {
       return c.html(submitPage({ error: 'That file is too large: up to 5 MB, a thousand addresses.' }), 413)
     }
+    if (await over(c, body)) return c.html(submitPage({ error: 'Too many submissions from here in a short time. Wait a minute and try again.' }), 429)
     const outcome = await handleSubmission(body, deps)
     if (!outcome.accepted.length && !outcome.rejected.length) return c.html(submitPage({ error: 'Paste at least one address, or choose a file.' }), 400)
     return c.html(submitResultPage(outcome), outcome.error ? 503 : 200)
   })
 
   app.post('/api/submit', async (c) => {
-    if (deps.limited(c)) return c.json({ ok: false, error: 'rate-limited', retryAfterSeconds: 60 }, 429)
     const type = c.req.header('content-type') ?? ''
     let body: unknown
     try {
       body = /json/i.test(type) ? await c.req.json() : await formBody(c)
     } catch (error) {
+      if (deps.limited(c)) return c.json({ ok: false, error: 'rate-limited', retryAfterSeconds: 60 }, 429)
       return c.json({ ok: false, error: error instanceof RangeError ? 'too-large' : 'invalid-body' }, error instanceof RangeError ? 413 : 400)
     }
+    if (await over(c, body && typeof body === 'object' ? (body as Record<string, unknown>) : null)) return c.json({ ok: false, error: 'rate-limited', retryAfterSeconds: 60 }, 429)
     const outcome = await handleSubmission(body, deps)
     if (wantsHtml(c.req.header('accept') ?? '')) return c.redirect('/status', 303)
     // The contract's accepted entry is a feed directory's (slug, page, existing); ours adds what it looks like.

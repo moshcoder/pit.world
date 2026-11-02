@@ -7,6 +7,7 @@ import { EDIT_FIELDS, normalizeDomain, type ClaimStart, type ContactResult, type
 import { CATEGORIES, categoryOf, PRICES } from './pros.js'
 import { listingOpenProfile, openProfilePath, openProfileUrl } from './listing-openprofile.js'
 import { RateLimiter } from './ratelimit.js'
+import type { VoteView } from './vote-html.js'
 
 type Env = { Bindings: { ip?: string } }
 
@@ -19,6 +20,13 @@ export type ListingHooks = {
   quoted?: (c: Context<Env>, domain: string) => void
   /** Someone followed a listing's website link. */
   clicked?: (c: Context<Env>, domain: string) => void
+  /**
+   * Anonymous writes (claims, quote requests): true when this browser (by its fingerprint, src/visitor.ts)
+   * or, without one, this address is over its limit. `fallback` is the address-only limit for no fingerprint.
+   */
+  writeLimited?: (c: Context<Env>, action: 'claim' | 'quote', body: Record<string, unknown> | null, fallback?: (ip: string) => boolean) => Promise<boolean>
+  /** Vote tallies for listing items shown on a page (src/votes.ts). */
+  voteView?: (domains: string[], back: string) => VoteView
 }
 
 /** A campaign's tracking id (?via=plc_...) carried from the page to its website link and phone beacon. */
@@ -75,6 +83,13 @@ export function mountListings(
   // Quote requests: three an hour from one visitor, whatever listings they are for.
   const quoteLimiter = new RateLimiter(3, 3 / 60)
   const quoteLimited = (c: Context<Env>) => limited(c) || !quoteLimiter.take(c.env?.ip || 'unknown')
+  // With a browser fingerprint, claims and quotes are limited per browser (plus a looser per-network ceiling);
+  // without one, by address exactly as before.
+  const writeLimited = (c: Context<Env>, action: 'claim' | 'quote', body: Record<string, unknown> | null) =>
+    hooks.writeLimited
+      ? hooks.writeLimited(c, action, body, action === 'quote' ? () => !quoteLimited(c) : () => !limited(c))
+      : Promise.resolve(action === 'quote' ? quoteLimited(c) : limited(c))
+  const views = (domains: string[], back: string) => hooks.voteView?.(domains, back)
   const ringChanged = () => hooks.ringChanged?.()
 
   /** Save an edit, and the private contact address when one was sent. */
@@ -108,7 +123,8 @@ export function mountListings(
     if (c.req.method === 'GET' && isPerson(c.req.header('user-agent'))) listings.view(listing.domain)
     if (c.req.method === 'GET') hooks.viewed?.(c, listing.domain)
     if (hasOpenProfile(listing)) c.header('link', `<${openProfilePath(listing.domain)}>; rel="openprofile"; type="text/markdown"`)
-    return c.html(listingPage(listing, { via: viaOf(c) }))
+    const votes = views([listing.domain], `/b/${encodeURIComponent(listing.domain)}`)
+    return c.html(listingPage(listing, { via: viaOf(c), ...(votes ? { votes } : {}) }))
   })
 
   // The listing as an OpenProfile.md (Kind organization), for directory listings only: a bare unclaimed
@@ -131,9 +147,9 @@ export function mountListings(
   })
 
   app.post('/b/:domain/claim', async (c) => {
-    if (limited(c)) return c.text('Too many requests. Try again shortly.', 429, { 'retry-after': '30' })
-    // Honeypot: a filled hidden website field is a bot. Back to the listing, no claim started.
     const form = await c.req.parseBody().catch(() => ({}) as Record<string, unknown>)
+    if (await writeLimited(c, 'claim', form)) return c.text('Too many requests. Try again shortly.', 429, { 'retry-after': '30' })
+    // Honeypot: a filled hidden website field is a bot. Back to the listing, no claim started.
     if (typeof form.website === 'string' && form.website !== '') return c.redirect(`/b/${encodeURIComponent(c.req.param('domain'))}`, 303)
     const start = listings.startClaim(c.req.param('domain'))
     return start ? c.redirect(`/b/${encodeURIComponent(normalizeDomain(c.req.param('domain'))!)}/claim/${start.claimId}`, 303) : c.notFound()
@@ -188,8 +204,8 @@ export function mountListings(
     const listing = await listings.get(c.req.param('domain'), { fetchMeta: false })
     if (!listing?.claimed) return c.notFound()
     const show = (state: QuoteState, status: 200 | 400 | 429 | 503 = 200) => c.html(listingPage(listing, { quote: state }), status, { 'cache-control': 'no-store' })
-    if (quoteLimited(c)) return show('limited', 429)
     const form = (await c.req.parseBody().catch(() => ({}))) as Record<string, unknown>
+    if (await writeLimited(c, 'quote', form)) return show('limited', 429)
     // The honeypot: a field people never see. A bot that fills it is told it worked, and nothing is sent.
     if (typeof form.website === 'string' && form.website !== '') return show('sent')
     const result = await listings.requestQuote(listing.domain, form)
@@ -203,7 +219,8 @@ export function mountListings(
     const q = (c.req.query('q') ?? '').trim().slice(0, 120)
     const near = (c.req.query('near') ?? '').trim().slice(0, 120)
     const { total, listings: found } = listings.directory({ category, q, near, limit: perPage, offset: (page - 1) * perPage })
-    return c.html(prosPage({ listings: found, total, category: category ?? '', q, near, page, perPage, counts: listings.categoryCounts() }))
+    const votes = views(found.map((l) => l.domain), c.req.path)
+    return c.html(prosPage({ listings: found, total, category: category ?? '', q, near, page, perPage, counts: listings.categoryCounts(), ...(votes ? { votes } : {}) }))
   }
   app.get('/pros', (c) => {
     const cat = categoryOf(c.req.query('c') ?? c.req.query('category'))
@@ -225,8 +242,8 @@ export function mountListings(
   })
 
   app.post('/api/listing/claim', async (c) => {
-    if (limited(c)) return tooMany(c)
     const body = (await c.req.json().catch(() => ({}))) as { domain?: unknown }
+    if (await writeLimited(c, 'claim', body)) return tooMany(c)
     const start = listings.startClaim(body.domain)
     if (!start) return c.json({ error: 'domain must be a hostname like example.com' }, 400)
     const domain = normalizeDomain(body.domain)!
@@ -252,8 +269,8 @@ export function mountListings(
   })
 
   app.post('/api/listing/quote', async (c) => {
-    if (quoteLimited(c)) return tooMany(c)
     const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    if (await writeLimited(c, 'quote', body)) return tooMany(c)
     if (typeof body.website === 'string' && body.website !== '') return c.json({ ok: true, status: 'sent' })
     const result = await listings.requestQuote(body.domain, body)
     if (result === 'sent' && typeof body.domain === 'string') hooks.quoted?.(c, normalizeDomain(body.domain) ?? body.domain)

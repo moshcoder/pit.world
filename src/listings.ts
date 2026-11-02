@@ -6,6 +6,7 @@
  * of the domain, with a DNS TXT record or a meta tag on the homepage, and gets an edit key
  * that is shown once and stored only as a hash. There are no accounts and no cookies.
  */
+import { applyMoves } from './votes.js'
 import { Database } from 'bun:sqlite'
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
 import { lookup, resolveTxt } from 'node:dns/promises'
@@ -368,6 +369,12 @@ export class Listings {
     ensurePromotionSchema(this.db)
   }
 
+  /** Bounded places each listing moves on its anonymous votes (src/votes.ts); unset means editorial order only. */
+  private voteMoves: ((domains: string[]) => Map<string, number>) | null = null
+  setVoteMoves(fn: ((domains: string[]) => Map<string, number>) | null): void {
+    this.voteMoves = fn
+  }
+
   /** Quote requests need somewhere to send from. */
   get mailEnabled(): boolean {
     return this.mailer !== null
@@ -659,6 +666,16 @@ export class Listings {
              ORDER BY CASE WHEN featured_paid_until > ? THEN 0 ELSE 1 END, promo_rank IS NULL, promo_rank, featured DESC, CASE WHEN promo_rank IS NULL THEN '' ELSE lower(name) END, claimed_at IS NULL, updated_at DESC, domain`,
       )
       .all(...(query.claimedOnly ? [] : [this.now()])) as any[]
+    // Votes nudge only the editorial tail: paid placements and campaign members keep their places.
+    if (!query.claimedOnly && this.voteMoves) {
+      const now = this.now()
+      const firstFree = rows.findIndex((r) => !(Number(r.featured_paid_until ?? 0) > now) && r.promo_rank == null)
+      if (firstFree >= 0) {
+        const tail = rows.slice(firstFree)
+        const moves = this.voteMoves(tail.map((r) => r.domain))
+        if (moves.size) rows.splice(firstFree, tail.length, ...applyMoves(tail, (r) => moves.get(r.domain) ?? 0))
+      }
+    }
     const matched = rows
       .map((row) => this.toListing(row, row.domain))
       .filter((l) => !category || l.category === category)

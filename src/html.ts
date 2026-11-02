@@ -14,6 +14,7 @@ import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions }
 import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { MEDIA_SOURCES, thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
+import { voteBox, type VoteView } from './vote-html.js'
 
 export const SITE = 'https://pit.world'
 
@@ -76,13 +77,18 @@ export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '782907b4-bf27-44bf-b20
 export const TOP_ADS = Math.max(0, Math.min(6, Number(process.env.CRAWLPROOF_TOP_ADS ?? 3) || 0))
 const adFrame = (pos: number) =>
   `<iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link&amp;pos=${pos}" title="Sponsored listing ${pos}" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe>`
-export const sponsoredTop = () =>
+// Votes on a sponsored slot are cast from pit.world's side of the frame (the ad itself is
+// cross-origin and sandboxed): they record how useful that slot's ads are on that page type,
+// a quality signal kept for later. Paid slots are never reordered by votes.
+const slotVote = (page: string | undefined, slot: string, view: VoteView | undefined) =>
+  page ? voteBox('ad', `${page}:${slot}`, view, 'this sponsored listing') : ''
+export const sponsoredTop = (page?: string, view?: VoteView) =>
   AD_SLOT === 'off' || TOP_ADS === 0
     ? ''
-    : `<section class="sponsored-top" aria-label="Sponsored"><p class="sponsored-label">Sponsored</p>${Array.from({ length: TOP_ADS }, (_, i) => adFrame(i + 1)).join('')}</section>`
+    : `<section class="sponsored-top" aria-label="Sponsored"><p class="sponsored-label">Sponsored</p>${Array.from({ length: TOP_ADS }, (_, i) => (page ? `<div class="ad-slot">${adFrame(i + 1)}${slotVote(page, `top-${i + 1}`, view)}</div>` : adFrame(i + 1))).join('')}</section>`
 /** One low-profile text_link line; never on the home page, never against the footer. */
-export const adUnit = () =>
-  AD_SLOT === 'off' ? '' : `<div class="ad-unit"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe></div>`
+export const adUnit = (page?: string, view?: VoteView) =>
+  AD_SLOT === 'off' ? '' : `<div class="ad-unit${page ? ' ad-slot' : ''}"><iframe src="https://crawlproof.com/api/ads/frame?slot=${encodeURIComponent(AD_SLOT)}&amp;format=text_link" title="Advertisement" loading="lazy" referrerpolicy="strict-origin-when-cross-origin" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation" scrolling="no"></iframe>${slotVote(page, 'inline', view)}</div>`
 
 function ago(ms: number): string {
   const s = Math.max(0, (Date.now() - ms) / 1000)
@@ -200,20 +206,20 @@ export function newsletterForm(origin: NewsletterOrigin = {}): string {
 </section>`
 }
 
-function businessDirectoryHome(businesses: Listing[]): string {
+function businessDirectoryHome(businesses: Listing[], view?: VoteView): string {
   const cards = businesses.map(l => `<article class="business-preview${l.sponsoredUntil ? ' sponsored' : ''}">
     <p class="small">${l.sponsoredUntil ? 'Featured · Paid placement' : l.claimed ? 'Verified owner' : 'Listed by pit.world · Unclaimed'}</p>
     <h3><a href="/b/${encodeURIComponent(l.domain)}">${esc(l.name || l.domain)}</a></h3>
     <p class="small">${esc([l.category.replaceAll('-',' '),l.city,l.region].filter(Boolean).join(' · '))}</p>
     <p>${esc(l.description.slice(0,160))}${l.description.length > 160 ? '…' : ''}</p>
-    <a href="/b/${encodeURIComponent(l.domain)}">View business →</a></article>`).join('')
+    <a href="/b/${encodeURIComponent(l.domain)}">View business →</a>${voteBox('listing', l.domain, view, l.name || l.domain)}</article>`).join('')
   return `<section class="home-businesses" aria-labelledby="businesses-title"><p class="kicker">The local business directory</p><div class="business-heading"><div><h2 id="businesses-title">Good businesses. Easy to find.</h2><p>Find builders, shops and independent pros by service and location.</p></div><a href="/pros">Browse all businesses →</a></div>
   <form class="business-search" action="/pros" method="get"><label>What do you need?<input name="q" maxlength="120" placeholder="Contractor, coffee, accountant…"></label><label>Where?<input name="near" maxlength="120" placeholder="City or region"></label><button class="btn">Find businesses</button></form>
   <div class="business-previews">${cards || '<p>Own a business? <a href="/b">Claim your free listing</a> and help people find you.</p>'}</div>
   <p class="business-offer"><span>Your searchable listing is free.</span> <a href="/featured">Get featured · $19/month through CoinPay →</a></p></section>`
 }
 
-export function homePage(stats: NetworkStats | null, options: { newsletter?: boolean; businesses?: Listing[] } = {}): string {
+export function homePage(stats: NetworkStats | null, options: { newsletter?: boolean; businesses?: Listing[]; votes?: VoteView } = {}): string {
   return layout({
     title: 'pit.world: private search, and the doorway to the Moshpit network',
     description: 'ICANN doesn\'t scale for the agentic web. Meet pit.world: search the web without being the product. No logs, no cookies, no profile, no JavaScript required. And search the Moshpit network, the namespace ICANN didn\'t sell you.',
@@ -235,7 +241,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     <p class="default"><a href="/connect">Connect to the Moshpit network →</a></p>
     <p class="default"><a href="/build">Build an app: $49, then $2 a month →</a></p>
   </header>
-  ${businessDirectoryHome(options.businesses ?? [])}
+  ${businessDirectoryHome(options.businesses ?? [], options.votes)}
   ${networkPanel(stats)}
   ${options.newsletter ? newsletterForm() : ''}
 </main>`,
@@ -267,7 +273,7 @@ function tabs(query: string, active: Vertical): string {
 }
 
 /** Our own ring sites a search is about, above every outside result (featured.ts). */
-function featuredBox(sites: RingSite[] | undefined): string {
+function featuredBox(sites: RingSite[] | undefined, view?: VoteView): string {
   if (!sites?.length) return ''
   return `<section class="promo featured" aria-label="Featured on pit.world">
   <p class="kicker">Featured on pit.world</p>
@@ -275,14 +281,18 @@ function featuredBox(sites: RingSite[] | undefined): string {
     .map(
       (s) => `<li>
     <a href="${esc(siteHref(s, false))}"><span class="from">${esc(s.name.replace(/\.pit\.world$/, ''))}</span><b>${esc(s.about.split(/(?<=[.:!?])\s/)[0]!.replace(/[.:]$/, ''))}</b><small>${esc(s.about)}</small></a>
+    ${voteBox('featured', featuredTarget(s), view, s.name)}
   </li>`,
     )
     .join('')}</ul>
 </section>`
 }
 
+/** The host a featured ring site is voted under. */
+export const featuredTarget = (s: RingSite) => new URL(siteHref(s, false)).hostname
+
 /** PairUX channels and nixamp streams, ours, ahead of everything else. */
-function promoStrip(promos: Promo[], vertical: Vertical): string {
+function promoStrip(promos: Promo[], vertical: Vertical, view?: VoteView): string {
   if (!promos.length) return ''
   const label = vertical === 'live' ? 'Live on PairUX and nixamp' : vertical === 'music' ? 'Listen on nixamp' : 'Watch on PairUX and nixamp'
   return `<section class="promo" aria-label="${label}">
@@ -291,6 +301,7 @@ function promoStrip(promos: Promo[], vertical: Vertical): string {
     .map(
       (p) => `<li${p.live ? ' class="live"' : ''}>
     <a href="${esc(p.url)}" rel="noreferrer noopener"><span class="from">${p.source === 'pairux' ? 'PairUX' : 'nixamp'}</span>${p.live ? '<span class="dot">LIVE</span>' : ''}<b>${esc(p.title)}</b>${p.line ? `<small>${esc(p.line)}</small>` : ''}</a>
+    ${voteBox('promo', p.url, view, p.title)}
   </li>`,
     )
     .join('')}</ul>
@@ -313,16 +324,17 @@ function metaLine(m: Media): string {
   return esc([m.host, m.channel, m.author, m.address, m.date, m.extra, stars(m)].filter(Boolean).join(' · '))
 }
 
-function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
+function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: VoteView): string {
+  const vote = (m: Media) => voteBox('result', m.url, view, m.title)
   if (vertical === 'images') {
     return `<ul class="images">${hits
-      .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a></li>`)
+      .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a>${vote(m)}</li>`)
       .join('')}</ul>`
   }
   if (vertical === 'shopping') {
     return `<ul class="shop">${hits
       .map(
-        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}<b>${esc(m.title)}</b>${m.price ? `<span class="price">${esc(m.price)}</span>` : ''}<small>${esc([m.host, stars(m)].filter(Boolean).join(' · '))}</small></a></li>`,
+        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}<b>${esc(m.title)}</b>${m.price ? `<span class="price">${esc(m.price)}</span>` : ''}<small>${esc([m.host, stars(m)].filter(Boolean).join(' · '))}</small></a>${vote(m)}</li>`,
       )
       .join('')}</ul>`
   }
@@ -331,7 +343,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
       .map(
         (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}</a>
     <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
-    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div></div></li>`,
+    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div>${vote(m)}</div></li>`,
       )
       .join('')}</ol>`
   }
@@ -343,6 +355,7 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
       <a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
       <div class="url">${metaLine(m)}</div>
       ${m.description ? `<p>${esc(m.description)}</p>` : ''}
+      ${vote(m)}
     </li>`,
       )
       .join('')}</ol>`
@@ -352,13 +365,13 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
       (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}${m.duration ? `<span class="dur">${esc(m.duration)}</span>` : ''}</a>
     <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
     <div class="url">${esc([m.host, m.channel, m.date].filter(Boolean).join(' · '))}</div>
-    ${m.description ? `<p>${esc(m.description)}</p>` : ''}</div></li>`,
+    ${m.description ? `<p>${esc(m.description)}</p>` : ''}${vote(m)}</div></li>`,
     )
     .join('')}</ol>`
 }
 
 /** Blogs: the blogs that write about the search, on rssamplifier.com, above their posts. */
-function blogSites(sites: Media[] | undefined): string {
+function blogSites(sites: Media[] | undefined, view?: VoteView): string {
   if (!sites?.length) return ''
   return `<section class="promo" aria-label="Blogs on RSS Amplifier">
   <p class="kicker">Blogs on RSS Amplifier</p>
@@ -366,6 +379,7 @@ function blogSites(sites: Media[] | undefined): string {
     .map(
       (s) => `<li>
     <a href="${esc(s.url)}" rel="noreferrer noopener"><span class="from">rssamplifier</span><b>${esc(s.title)}</b>${s.description ? `<small class="clamp">${esc(s.description)}</small>` : ''}</a>
+    ${voteBox('blog', s.url, view, s.title)}
   </li>`,
     )
     .join('')}</ul>
@@ -385,8 +399,8 @@ function viaLine(label: string, result: MediaResult): string {
   }
 }
 
-export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite }): string {
-  const { query, vertical, result, promos, error } = options
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView }): string {
+  const { query, vertical, result, promos, error, votes: view } = options
   const hits = result?.hits ?? []
   const label = VERTICALS.find((v) => v.id === vertical)!.label
   const body = `<header class="bar">
@@ -394,15 +408,15 @@ export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 
   ${searchForm(query, false, vertical)}
 </header>
 ${tabs(query, vertical)}
-<main class="results ${vertical}">
-  ${featuredBox(options.featured)}
-  ${promoStrip(promos, vertical)}
+<main class="results ${vertical}" data-q="${esc(query)}">
+  ${featuredBox(options.featured, view)}
+  ${promoStrip(promos, vertical, view)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
-  ${blogSites(result?.sites)}
-  ${hits.length ? sponsoredTop() : ''}
-  ${hits.length ? mediaList(vertical, hits) : ''}
-  ${hits.length ? adUnit() : ''}
-  ${featuredBox(options.backfill ? [options.backfill] : undefined)}
+  ${blogSites(result?.sites, view)}
+  ${hits.length ? sponsoredTop(vertical, view) : ''}
+  ${hits.length ? mediaList(vertical, hits, view) : ''}
+  ${hits.length ? adUnit(vertical, view) : ''}
+  ${featuredBox(options.backfill ? [options.backfill] : undefined, view)}
   ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
   ${result ? `<p class="via">${viaLine(label, result)}</p>` : ''}
 </main>`
@@ -412,7 +426,7 @@ ${tabs(query, vertical)}
 /** Web results before the one ad line: in the content, never at the top, never by the footer. */
 const AD_AFTER = 3
 
-function hitItem(h: SearchResult['hits'][number], summaries = false): string {
+function hitItem(h: SearchResult['hits'][number], summaries = false, view?: VoteView): string {
   // Summarize: hidden until app.js shows it (it needs script), and only when the server has c0mpute.
   const summarize = summaries
     ? `<div class="summary-row"><button type="button" class="summarize" data-url="${esc(h.url)}" hidden>Summarize</button><p class="summary" hidden aria-live="polite"></p></div>`
@@ -422,12 +436,13 @@ function hitItem(h: SearchResult['hits'][number], summaries = false): string {
       <div class="url">${esc(h.host)}${h.featured ? '<span class="src featured" title="A W3BS network site, featured on pit.world. Not an ad.">Featured</span>' : ''}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
       ${h.description ? `<p>${esc(h.description)}</p>` : ''}
       ${summarize}
+      ${voteBox('result', h.url, view, h.title)}
     </li>`
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean }): string {
-  const { query, result, resolution, error } = options
-  const item = (h: SearchResult['hits'][number]) => hitItem(h, options.summaries)
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; votes?: VoteView }): string {
+  const { query, result, resolution, error, votes: view } = options
+  const item = (h: SearchResult['hits'][number]) => hitItem(h, options.summaries, view)
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
   const body = `<header class="bar">
@@ -435,19 +450,19 @@ export function resultsPage(options: { query: string; result: SearchResult | nul
   ${searchForm(query)}
 </header>
 ${tabs(query, 'web')}
-<main class="results">
+<main class="results" data-q="${esc(query)}">
   ${resolution?.registered ? moshpitCard(resolution) : ''}
-  ${featuredBox(options.featured)}
+  ${featuredBox(options.featured, view)}
   ${options.card ?? ''}
   ${domain ? `<p class="go">Go straight to <a href="https://${esc(domain)}/" rel="noreferrer noopener">${esc(domain)}</a>${options.card ? '' : ` · <a href="/b/${encodeURIComponent(domain)}">business listing</a>`}</p>` : ''}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
-  ${hits.length ? sponsoredTop() : ''}
+  ${hits.length ? sponsoredTop('web', view) : ''}
   <ol class="hits">
     ${hits.slice(0, AD_AFTER).map(item).join('')}
   </ol>
-  ${hits.length ? adUnit() : ''}
+  ${hits.length ? adUnit('web', view) : ''}
   ${hits.length > AD_AFTER ? `<ol class="hits" start="${AD_AFTER + 1}">${hits.slice(AD_AFTER).map(item).join('')}</ol>` : ''}
-  ${featuredBox(options.backfill ? [options.backfill] : undefined)}
+  ${featuredBox(options.backfill ? [options.backfill] : undefined, view)}
   ${!error && hits.length === 0 ? '<p class="notice">Nothing found. Try other words, or a bang like <code>!ddg</code>.</p>' : ''}
   <p class="elsewhere">Try this search on <a href="/search?q=${encodeURIComponent(`${query} !ddg`)}">DuckDuckGo</a>, <a href="/search?q=${encodeURIComponent(`${query} !b`)}">Brave</a> or <a href="/search?q=${encodeURIComponent(`${query} !g`)}">Google</a>, without a referrer.</p>
   ${result?.provider ? `<p class="via">Results from the ${listFormat.format(result.provider.split('+').map((p) => LABELS[p as Provider] ?? p))} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
@@ -469,6 +484,7 @@ export function privacyPage(): string {
 <ul>
 <li><b>Your searches.</b> The web server does not write access logs for pit.world, and the application logs no queries.</li>
 <li><b>Your IP address.</b> It is not stored anywhere. Rate limiting uses a keyed hash of it, held in memory, under a random key that is thrown away every hour, so the counters cannot be turned back into addresses or linked across hours.</li>
+<li id="votes"><b>Votes, and forms you send.</b> Anonymous ▲ ▼ votes are tied to a salted, hashed fingerprint of your device (things like your screen size, graphics card, installed fonts, timezone and languages, hashed together with a secret key), used only to stop one device voting many times or flooding our forms. We never store the fingerprint itself, only that hash, and it is not linked to anything you search. A vote on a result also keeps a keyed hash of the search it was cast on, so the vote can nudge that search's order; the words themselves are not stored. Sign-ups, listing claims, quote requests, submissions and free result summaries sent with JavaScript on are limited by the same hash, held in memory and gone on restart; without JavaScript they are limited by address as above.</li>
 <li><b>Cookies, to search.</b> Searching sets none and reads none. The only cookie pit.world ever sets is the sign-in one, and only after you press Sign in (below).</li>
 <li><b>Your searches, to anyone else.</b> Search results pages load nothing from a third party.</li>
 </ul>
@@ -721,6 +737,21 @@ ${adUnit()}
 
 <h2 id="moshpit">Moshpit names</h2>
 <p>Search a name like <code>chovy.hacker</code> and pit.world asks the Moshpit registry about it. To open Moshpit names in your browser, get on the network: <code>${esc(LINKS.install)}</code> then <code>${esc(LINKS.enable)}</code>, or set your browser's secure DNS to <code>${esc(LINKS.doh)}</code>. Every method, step by step: <a href="/connect">Connect to Moshpit</a>.</p>
+
+<h2 id="votes">Votes: ▲ ▼ on every listing</h2>
+<p>Every result, on every tab, has a ▲ and a ▼, and so do the featured box, the sponsored slots, PairUX and nixamp picks, blogs and business listings. No account: one vote per device and listing (per search, for results). Voting again the other way changes it; pressing the same arrow again takes it back.</p>
+<p><b>How a vote moves a result.</b> Each result gets a score from its votes on <i>that search</i>, and another from votes on its site across all searches (counting each device once per site). A score is a Bayesian average that starts every item at five up and five down, so a handful of votes barely moves it:</p>
+<pre><code>score  = (up + 5) / (up + down + 10) − 0.5          between −0.5 and +0.5
+places = 6 × score(on this search) + 2 × score(its site)
+moved  = places, capped at 3 either way</code></pre>
+<p>Results are then re-ordered by <i>(position − places moved)</i>, ties kept in the engines' order. Ten up-votes and nothing else move a result about one and a half places; no amount of votes moves it more than three, so votes can neither bury a good page nor float a bad one to the top. The featured network site that leads some searches keeps its place. Business listings on <a href="/pros">/pros</a> move by the same rule, but only among unpaid listings: paid placements and campaign picks keep their slots.</p>
+<p><b>Sponsored and featured slots are never re-ordered by votes.</b> Their votes are recorded as a quality signal (how useful a slot's ads are on each page type), for deciding what to show later.</p>
+<p><b>One device, one vote.</b> Voting needs JavaScript: the page reads a fingerprint of your device (graphics card, screen, fonts, timezone, languages and similar) with <a href="https://github.com/profullstack/browser-fingerprint">@profullstack/browser-fingerprint</a>, from pit.world's own server. pit.world keeps only a salted hash of it and uses that only to stop one device voting many times; see <a href="/privacy#votes">privacy</a>. Votes are throttled hard (a dozen a minute per device, fewer per hour and day, and a ceiling per network), and browsers that look automated are refused.</p>
+<pre><code>curl 'https://pit.world/api/votes?kind=result&amp;target=https://developer.mozilla.org/en-US/docs/Web/JavaScript&amp;q=learn+javascript'
+curl 'https://pit.world/api/votes/top?kind=listing'
+pit votes result https://developer.mozilla.org/en-US/docs/Web/JavaScript --q "learn javascript"
+pit votes top listing</code></pre>
+<p>Reading tallies needs nothing. Casting a vote needs the browser's fingerprint token, so the API, CLI and MCP server read votes but do not cast them.</p>
 
 <h2 id="api">API, CLI, TUI and MCP</h2>
 <p>Everything the page does is an API, and the same API is a command, a terminal app and an MCP server for your agents.</p>
@@ -1075,6 +1106,27 @@ It uploads the folder and prints where it is live: <code>https://shop.yourname/<
 }
 
 /** A plain document page (header bar + prose column), for modules that render their own pages. */
+const VOTE_NOTES: Record<'needs-js' | 'stale' | 'bot' | 'limited' | 'bad-vote', string> = {
+  'needs-js': 'Voting needs JavaScript. pit.world counts one vote per device, and it tells devices apart by a salted, hashed fingerprint that a script reads; without it, a vote could be anyone, as many times as they like. Everything else on pit.world works without JavaScript.',
+  stale: 'That page was open a while. Reload it and vote again.',
+  bot: 'That vote looked automated, so it was not counted.',
+  limited: 'That is a lot of votes in a short time. Give it a few minutes.',
+  'bad-vote': 'That vote could not be read.',
+}
+
+/** The answer to a ▲ ▼ that could not be counted (the no-JavaScript fallback of every vote form). */
+export function votePage(reason: keyof typeof VOTE_NOTES, back: string): string {
+  return docPage({
+    title: 'Vote not counted · pit.world',
+    description: 'Why a vote was not counted.',
+    path: '/vote',
+    noindex: true,
+    body: `<h1>Vote not counted</h1>
+<p>${esc(VOTE_NOTES[reason] ?? VOTE_NOTES['bad-vote'])}</p>
+<p><a class="btn" href="${esc(back)}">Back</a> <a href="/about#votes">How votes work</a> · <a href="/privacy#votes">What a vote keeps</a></p>`,
+  })
+}
+
 export function docPage(options: { title: string; description: string; path: string; body: string; noindex?: boolean; query?: string; head?: string }): string {
   return layout({
     title: options.title,

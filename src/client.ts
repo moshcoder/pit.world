@@ -17,6 +17,8 @@ export type ApiSearch = {
   moshpit: Resolution | null
 }
 
+export type VoteTally = { item: string; kind?: string; up: number; down: number; score: number }
+
 export class PitClient {
   constructor(
     readonly base = (process.env.PIT_URL ?? 'https://pit.world').replace(/\/+$/, ''),
@@ -108,6 +110,23 @@ export class PitClient {
     if (options.n) params.set('n', String(options.n))
     if (options.page) params.set('page', String(options.page))
     return this.get(`/api/pros?${params}`)
+  }
+
+  /** Vote tallies (read-only): one item, or several `kind:target` items; `query` scopes result votes to one search. */
+  votes(items: Array<{ kind: string; target: string }>, query?: string): Promise<{ query: string | null; prior: { up: number; down: number }; items: VoteTally[] }> {
+    const params = new URLSearchParams()
+    for (const { kind, target } of items) params.append('item', `${kind}:${target}`)
+    if (query) params.set('q', query)
+    return this.get(`/api/votes?${params}`)
+  }
+
+  /** Best- or worst-voted items of a kind. */
+  topVotes(kind: string, options: { order?: 'best' | 'worst'; n?: number; min?: number } = {}): Promise<{ kind: string; order: string; items: Array<VoteTally & { target: string }>; totals: { votes: number; items: number; visitors: number } }> {
+    const params = new URLSearchParams({ kind })
+    if (options.order) params.set('order', options.order)
+    if (options.n) params.set('n', String(options.n))
+    if (options.min) params.set('min', String(options.min))
+    return this.get(`/api/votes/top?${params}`)
   }
 
   categories(): Promise<{ categories: Array<Category & { count: number }>; prices: Array<{ slug: string; label: string }> }> {

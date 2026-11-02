@@ -11,6 +11,7 @@
  *   pit edit DOMAIN --key K --field VALUE ...        edit your listing
  *   pit quote DOMAIN --name N --email E --message M  ask a listed pro for a quote
  *   pit login | whoami | logout your pit.world account (OAuth 2.1, PKCE, loopback)
+ *   pit votes KIND TARGET [--q WORDS] | pit votes top KIND   vote tallies (read-only)
  *   pit ring                    the pit.world web ring
  *   pit open WORDS              the results page in your browser
  *   pit mcp                     MCP server on stdio
@@ -40,6 +41,11 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit categories               the directory's categories
   pit quote DOMAIN --name N --email E --message M [--phone P]
                                ask one listed pro for a quote; they reply to your email
+  pit votes KIND TARGET [--q WORDS]
+                               ▲ ▼ tallies for a result (URL), listing (domain), featured, promo, blog or ad
+                               slot (web:top-1); --q scopes a result to one search. Read-only: votes are cast
+                               in the browser, one per device
+  pit votes top KIND [--worst] best- (or worst-) voted items of a kind
   pit ring                     the pit.world web ring
   pit login [--no-browser]     sign in to your pit.world account (CoinPay, OAuth 2.1):
                                one account for every social.<name> and bbs.<name>.pit.world
@@ -153,6 +159,27 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
             }[r.status] ?? r.status,
           )
         return r.ok ? 0 : 1
+      }
+      case 'votes': {
+        const qAt = words.indexOf('--q')
+        const q = qAt === -1 ? undefined : words[qAt + 1]
+        const w = qAt === -1 ? words : words.filter((_, i) => i !== qAt && i !== qAt + 1)
+        if (w[0] === 'top') {
+          const kind = w[1] ?? 'result'
+          const r = await client.topVotes(kind, { order: w.includes('--worst') ? 'worst' : 'best', n: nAt === -1 ? 20 : n })
+          if (json) out.log(JSON.stringify(r, null, 2))
+          else {
+            if (!r.items.length) out.log(`No ${kind} votes yet.`)
+            for (const t of r.items) out.log(`${(t.up - t.down >= 0 ? '+' : '') + (t.up - t.down)}\t▲${t.up} ▼${t.down}\tscore ${t.score.toFixed(3)}\t${t.target}`)
+          }
+          return 0
+        }
+        const [kind, target] = w
+        if (!kind || !target) return usage(out, 'pit votes KIND TARGET [--q WORDS]  (kinds: result, listing, featured, promo, blog, ad) | pit votes top KIND')
+        const r = await client.votes([{ kind, target }], q)
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else for (const t of r.items) out.log(`${t.item}\n▲ ${t.up}  ▼ ${t.down}  score ${t.score.toFixed(3)} (prior ${r.prior.up} up, ${r.prior.down} down)${r.query ? `  on "${r.query}"` : ''}`)
+        return 0
       }
       case 'listing': {
         const domain = words[0]

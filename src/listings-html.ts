@@ -4,6 +4,7 @@ import type { ClaimStart, ContactStatus, Listing } from './listings.js'
 import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel, ringEligible } from './pros.js'
 import { proxyUrl, ringSnippet, RSS_RING } from './ring.js'
 import { openProfilePath } from './listing-openprofile.js'
+import { voteBox, type VoteView } from './vote-html.js'
 
 const p = (s: string) => encodeURIComponent(s)
 const ext = (href: string, text: string) => `<a href="${esc(href)}" rel="noreferrer noopener">${esc(text)}</a>`
@@ -95,13 +96,13 @@ function services(l: Listing): string {
 }
 
 /** The card beside search results, for claimed listings only. */
-export function listingCard(l: Listing): string {
+export function listingCard(l: Listing, view?: VoteView): string {
   return `<aside class="card listing">
   <p class="kicker">Business listing · <span class="verified">✓ verified owner</span></p>
   <h2><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a></h2>
   ${l.description ? `<p>${esc(l.description)}</p>` : ''}
   ${details(l)}
-  <p class="row"><a class="btn" href="${esc(siteUrl(l))}" rel="noreferrer noopener">Visit ${esc(l.domain)}</a> <a href="/b/${p(l.domain)}">Full listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Get in touch</a>` : ''}</p>
+  <p class="row"><a class="btn" href="${esc(siteUrl(l))}" rel="noreferrer noopener">Visit ${esc(l.domain)}</a> <a href="/b/${p(l.domain)}">Full listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Get in touch</a>` : ''}${voteBox('listing', l.domain, view, l.name || l.domain)}</p>
 </aside>`
 }
 
@@ -145,7 +146,7 @@ function websiteHref(l: Listing, via: string): string {
 /** Directory listings (claimed or listed by pit.world, and not taken out) publish an OpenProfile. */
 export const hasOpenProfile = (l: Listing) => l.listed
 
-export function listingPage(l: Listing, options: { quote?: QuoteState; via?: string } = {}): string {
+export function listingPage(l: Listing, options: { quote?: QuoteState; via?: string; votes?: VoteView } = {}): string {
   const title = l.name || l.domain
   const via = options.via ?? ''
   const claim = l.claimed
@@ -171,7 +172,7 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
 <h1>${esc(title)}</h1>
 ${l.category ? `<p class="row"><a class="chip" href="/pros/${p(l.category)}">${esc(categoryOf(l.category)?.label ?? l.category)}</a></p>` : ''}
 <p class="small"><a href="/pros">Business directory</a> · <a href="/b/${p(l.domain)}/featured">Feature or manage this business · $19/month</a></p>
-<p><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a></p>
+<p class="row"><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a> ${voteBox('listing', l.domain, options.votes, title)}</p>
 ${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'}
 ${details(l, { domain: l.domain, via })}
 ${services(l)}
@@ -337,7 +338,7 @@ export function listingsIndexPage(): string {
   })
 }
 
-export function prosPage(options: { listings: Listing[]; total: number; category: string; near: string; q: string; page: number; perPage: number; counts: Record<string, number> }): string {
+export function prosPage(options: { listings: Listing[]; total: number; category: string; near: string; q: string; page: number; perPage: number; counts: Record<string, number>; votes?: VoteView }): string {
   const cat = categoryOf(options.category)
   const heading = cat ? cat.label : 'Find a pro'
   const qs = (page: number) => {
@@ -359,7 +360,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
   ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
   ${l.researchTopics.length ? `<p class="small">${esc(l.researchTopics.slice(0, 4).join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'Source')}` : ''}</p>` : ''}
-  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}</p>
+  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}${voteBox('listing', l.domain, options.votes, l.name || l.domain)}</p>
 </li>`
     })
     .join('')
@@ -373,7 +374,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
     noindex: Boolean(options.q || options.near || options.page > 1),
     body: `<p class="kicker">Pro directory</p>
 <h1>${esc(heading)}</h1>
-<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> listings were assembled by pit.world from public information, including licensing records where available, business websites and public company directories. Source links appear on each listing. Featured businesses pay $19/month and are labeled “Paid placement”. Other listings keep their editorial order. Payment does not buy a verified-owner badge, license verification or reviews. Get in touch with a person, not a lead broker.</p>
+<p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> listings were assembled by pit.world from public information, including licensing records where available, business websites and public company directories. Source links appear on each listing. Featured businesses pay $19/month and are labeled “Paid placement”. Other listings keep their editorial order, nudged at most three places by anonymous ▲ ▼ votes (<a href="/about#votes">how</a>). Payment does not buy a verified-owner badge, license verification or reviews. Get in touch with a person, not a lead broker.</p>
 <p><a class="btn" href="/featured">Feature your business · $19/month</a> <a href="/b">Claim a free listing</a></p>
 <form class="listing-lookup" action="${cat ? `/pros/${p(cat.slug)}` : '/pros'}" method="get">
   <input name="q" value="${esc(options.q)}" placeholder="What do you need? (plumber, tax prep, web app)" aria-label="What you need" maxlength="120">

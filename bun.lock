@@ -8,6 +8,7 @@
         "@modelcontextprotocol/sdk": "^1.32.2",
         "@profullstack/affiliates": "0.2.0",
         "@profullstack/bridges": "0.2.0",
+        "@profullstack/browser-fingerprint": "0.1.0",
         "@profullstack/footer": "0.6.16",
         "@profullstack/form-guard": "0.3.0",
         "@profullstack/hqtui": "^0.11.0",
@@ -64,6 +65,8 @@
     "@profullstack/affiliates": ["@profullstack/affiliates@0.2.0", "", { "dependencies": { "@profullstack/referrals": "^0.1.0" }, "bin": { "affiliates": "dist/cli.js" } }, "sha512-fbP5uiS8Pa5g8mk5WFD79U4Cj7BUPH6Qy0tQP7ZXE9gfxHOHirHASmZ/rAk8MqnmzGOZTuwq9WwOHbmoFV2TSA=="],
 
     "@profullstack/bridges": ["@profullstack/bridges@0.2.0", "", { "bin": { "bridges": "bin/bridges.js" } }, "sha512-ai74Zl1mQN2WZDVb93qiwfpqjCDCg/TZkxgFHFn4Rb/Cxdgg2kUst9ep0B609WoulnNjsXN3IU4IMhpzmypg7w=="],
+
+    "@profullstack/browser-fingerprint": ["@profullstack/browser-fingerprint@0.1.0", "", {}, "sha512-gTOPS+Gm9fJ99EvvppXq6hS3FU/N9V5lPC5z81z+8lhCDahfekKwd0OdRN4WU61FNjgQWPb4wdzrYSWp4jCsjQ=="],
 
     "@profullstack/footer": ["@profullstack/footer@0.6.16", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "profullstack-footer": "bin/profullstack-footer.js" } }, "sha512-uZZbU1cPdBn3/MOLqNGCrSbZmi2NsSfL5Im7Gcuys3pE+mPofj4V9sfLgLR8gBqqRc0zjsq3X1m2q6fBHoUY2w=="],
 
