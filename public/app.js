@@ -52,6 +52,7 @@
     const el = document.createElement('section')
     el.className = 'mini-player'
     el.setAttribute('aria-label', 'Player')
+    // threatcrush-disable-next-line js-unescaped-html-sink  a fixed literal with no interpolation; titles and transcript text are set with textContent
     el.innerHTML = `<div class="mp-panel" hidden><div class="mp-panel-head"><b>Transcript</b><span class="mp-panel-note"></span></div><ol class="mp-lines"></ol></div>
 <div class="mp-row"><button type="button" class="mp-toggle" aria-label="Pause">❚❚</button>
 <div class="mp-meta"><span class="mp-title"></span><span class="mp-sub"></span></div>
