@@ -45,6 +45,8 @@ export type Myna = {
   history(): MynaEntry[]
   queue(): MynaQueued[]
   post(account: string, text: string): Promise<{ code: number; output: string }>
+  /** Remove a pending queue item (`myna cancel <id>`). */
+  cancel(id: string): Promise<{ code: number; output: string }>
 }
 
 /** myna on this machine: its own files for reading, its CLI for posting. */
@@ -57,23 +59,25 @@ export function localMyna(dir = process.env.MYNA_CONFIG_DIR ?? `${homedir()}/.co
       return []
     }
   }
+  const run = (args: string[], stdin = ''): Promise<{ code: number; output: string }> =>
+    new Promise((resolve) => {
+      const child = spawn(bin, args, { stdio: ['pipe', 'pipe', 'pipe'] })
+      let output = ''
+      child.stdout.on('data', (d) => (output += d))
+      child.stderr.on('data', (d) => (output += d))
+      const timer = setTimeout(() => child.kill('SIGTERM'), 120_000)
+      child.on('close', (code) => {
+        clearTimeout(timer)
+        resolve({ code: code ?? 1, output: output.slice(-2000) })
+      })
+      child.on('error', (e) => resolve({ code: 127, output: String(e) }))
+      child.stdin.end(stdin)
+    })
   return {
     history: () => read<MynaEntry>('history.json', 'entries'),
     queue: () => read<MynaQueued>('queue.json', 'posts'),
-    post: (account, text) =>
-      new Promise((resolve) => {
-        const child = spawn(bin, ['post', account, '--front'], { stdio: ['pipe', 'pipe', 'pipe'] })
-        let output = ''
-        child.stdout.on('data', (d) => (output += d))
-        child.stderr.on('data', (d) => (output += d))
-        const timer = setTimeout(() => child.kill('SIGTERM'), 120_000)
-        child.on('close', (code) => {
-          clearTimeout(timer)
-          resolve({ code: code ?? 1, output: output.slice(-2000) })
-        })
-        child.on('error', (e) => resolve({ code: 127, output: String(e) }))
-        child.stdin.end(text)
-      }),
+    post: (account, text) => run(['post', account, '--front'], text),
+    cancel: (id) => run(['cancel', id]),
   }
 }
 

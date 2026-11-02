@@ -191,6 +191,12 @@ function registerPromoTools(server: any, client: PitClient): void {
     return promo('GET', `/campaigns/${e(campaign)}/placements?${q}`)
   })
   server.tool('promo_retry_placement', 'Put a failed placement back in line (at most three attempts).', { placement: z.string().min(6) }, ({ placement }: any) => promo('POST', `/placements/${e(placement)}/retry`, {}))
+  server.tool(
+    'promo_reassign',
+    'Move every not-yet-posted placement (draft, ready, scheduled, failed) of a campaign from one myna account to another, e.g. off a banned account. Keeps tracking ids and planned times; drops the old account from the campaign config. dryRun shows what would move. Old myna queue items (queueId in the answer) must be cancelled where myna runs: `pit promo reassign` does that.',
+    { ...cid, from: z.string().min(3), to: z.string().min(3), reason: z.string().max(300).optional(), dryRun: z.boolean().optional() },
+    ({ campaign, ...input }: any) => promo('POST', `/campaigns/${e(campaign)}/reassign`, input),
+  )
   server.tool('promo_results', 'One business: its measurement windows and the numbers so far (views, website clicks, phone taps, views from campaign links), with the latest report.', member, ({ campaign, domain }: any) => promo('GET', `/campaign-businesses/${e(`${campaign}:${domain}`)}/results`))
   server.tool('promo_reports', 'Reports of a campaign; generate=true first runs the hourly pass and writes reports for every window that has ended.', { ...cid, generate: z.boolean().optional() }, async ({ campaign, generate }: any) => {
     if (generate) await client.promo('POST', `/campaigns/${e(campaign)}/reports`, {})

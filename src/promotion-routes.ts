@@ -185,6 +185,10 @@ export function mountPromotion(app: Hono<Env>, d: PromotionDeps) {
   }))
   app.post(`${V}/placements/:id/report`, api(async (c) => promo.report(c.req.param('id')!, (await body(c)) as any, actor(c))))
   app.post(`${V}/placements/:id/retry`, api((c) => promo.retry(c.req.param('id')!, actor(c))))
+  app.post(`${V}/campaigns/:id/reassign`, api(async (c) => {
+    const b = await body(c)
+    return promo.reassign(c.req.param('id')!, { from: String(b.from ?? ''), to: String(b.to ?? ''), reason: String(b.reason ?? ''), dryRun: Boolean(b.dryRun), skip: Array.isArray(b.skip) ? b.skip.map(String) : [] }, actor(c))
+  }))
   app.post(`${V}/campaigns/:id/tracking-check`, api(async (c) => promo.checkTracking(c.req.param('id')!, (await body(c)).domains, actor(c))))
   app.post(`${V}/campaigns/:id/gaps`, api(async (c) => ({ id: promo.recordGap(c.req.param('id')!, (await body(c)) as any, actor(c)) })))
   app.get(`${V}/campaigns/:id/periods`, api((c) => ({ periods: promo.periods(c.req.param('id')!) })))

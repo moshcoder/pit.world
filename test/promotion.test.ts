@@ -481,6 +481,11 @@ describe('promotion: the myna worker', () => {
         else if (state.mode === 'now') state.history.push({ at: new Date().toISOString(), accountId: account, text, ok: true, postId: `at://did:plc:x/app.bsky.feed.post/${state.posts}`, url: `https://bsky.app/profile/a/post/${state.posts}` })
         return { code: state.mode === 'crash' ? 1 : 0, output: '' }
       },
+      cancel: async (id) => {
+        const q = state.queue.find((x) => x.id === id && x.status === 'pending')
+        if (q) q.status = 'cancelled'
+        return q ? { code: 0, output: '' } : { code: 1, output: `myna: No queued post "${id}"` }
+      },
     }
     return { state, myna }
   }
@@ -538,6 +543,124 @@ describe('promotion: the myna worker', () => {
     // Reconciled against history and queue: it never went, so it goes back in line rather than being re-sent blindly.
     await workOnce(client, h.campaign, myna)
     expect(h.promo.placement(spot.id).state).toBe('ready')
+  })
+})
+
+describe('promotion: reassigning an account', () => {
+  const FROM = 'mastodon:b@defcon.social'
+  const TO = 'bluesky:riotcoder.social.w3bs.org'
+
+  /** A launched campaign whose mastodon spotlights are in every state a placement can be in. */
+  async function mixed() {
+    const h = setup()
+    await launched(h)
+    h.promo.configure(h.campaign, { announceAccounts: ['bluesky:a.bsky.social', FROM] })
+    const spots = h.promo.placements(h.campaign).placements.filter((p) => p.kind === 'spotlight' && p.account === FROM)
+    expect(spots.length).toBe(1)
+    // More placements on the account, one per state (the fixture campaign only has two businesses).
+    const extra = (state: string, queueId = '') => {
+      const id = `plc_${state}x`
+      h.promo.db.run("INSERT INTO promo_placements (id, campaign_id, kind, channel, account, body, link, planned_at, state, queue_id, attempts, error, created_at, updated_at) VALUES (?, ?, 'spotlight', 'myna', ?, ?, '', ?, ?, ?, ?, ?, ?, ?)", [id, h.campaign, FROM, `x https://pit.world/b/bravo-homes.com?via=${id}`, h.clock.t + DAY, state, queueId, state === 'failed' ? 1 : 0, state === 'failed' ? 'myna: 403 Your login is currently disabled' : '', h.clock.t, h.clock.t])
+      h.promo.db.run('INSERT INTO promo_placement_members (placement_id, domain) VALUES (?, ?)', [id, 'bravo-homes.com'])
+      return id
+    }
+    const ids = { ready: spots[0]!.id, scheduled: extra('scheduled', 'qold1'), failed: extra('failed'), published: extra('published'), verified: extra('verified'), uncertain: extra('uncertain'), removed: extra('removed') }
+    return { h, ids }
+  }
+
+  it('moves only unposted placements, keeps their tracking ids and times, and rewrites the text for the new network', async () => {
+    const { h, ids } = await mixed()
+    const before = h.promo.placement(ids.ready)
+    const r = h.promo.reassign(h.campaign, { from: FROM, to: TO, reason: 'account banned' })
+    expect(r.moved.map((m) => m.id).sort()).toEqual([ids.ready, ids.scheduled, ids.failed].sort())
+    expect(r.byState).toEqual({ ready: 1, scheduled: 1, failed: 1 })
+    expect(r.skipped.map((x) => x.state).sort()).toEqual(['published', 'removed', 'uncertain', 'verified'])
+    expect(r.moved.find((m) => m.id === ids.scheduled)!.queueId).toBe('qold1')
+    for (const id of [ids.ready, ids.scheduled, ids.failed]) {
+      const p = h.promo.placement(id)
+      expect(p.account).toBe(TO)
+      expect(p.state).toBe('ready')
+      expect(p.queueId).toBe('')
+      expect(p.error).toBe('')
+      expect(p.attempts).toBe(0)
+      expect(p.body).toContain(`via=${id}`)
+      expect(p.body.length).toBeLessThanOrEqual(300)
+    }
+    expect(h.promo.placement(ids.ready).plannedAt).toBe(before.plannedAt)
+    for (const id of [ids.published, ids.verified, ids.uncertain, ids.removed]) expect(h.promo.placement(id).account).toBe(FROM)
+    // An audit note on each moved placement, and the old account leaves the campaign.
+    const notes = h.promo.auditLog(h.campaign).filter((a) => a.action === 'placement.reassign')
+    expect(notes.map((a) => a.subject).sort()).toEqual([ids.ready, ids.scheduled, ids.failed].sort())
+    expect((notes[0]!.detail as any).note).toBe(`reassigned from ${FROM}: account banned`)
+    const config = h.promo.campaign(h.campaign).config
+    expect(config.spotlightAccounts).toEqual(['bluesky:a.bsky.social', TO])
+    expect(config.announceAccounts).toEqual(['bluesky:a.bsky.social'])
+    // Running it again finds nothing left to move.
+    expect(h.promo.reassign(h.campaign, { from: FROM, to: TO }).moved).toEqual([])
+  })
+
+  it('dry run changes nothing; a placement mid-post, a skip, a bad target and an ad network are refused', async () => {
+    const { h, ids } = await mixed()
+    const dry = h.promo.reassign(h.campaign, { from: FROM, to: TO, dryRun: true })
+    expect(dry.moved).toHaveLength(3)
+    expect(h.promo.placement(ids.scheduled).account).toBe(FROM)
+    expect(h.promo.campaign(h.campaign).config.spotlightAccounts).toContain(FROM)
+    expect(h.promo.auditLog(h.campaign).some((a) => a.action.includes('reassign'))).toBe(false)
+    h.promo.db.run("UPDATE promo_placements SET state = 'publishing', lease_owner = 'w', lease_until = ? WHERE id = ?", [h.clock.t + 60_000, ids.ready])
+    const r = h.promo.reassign(h.campaign, { from: FROM, to: TO, skip: [ids.failed] })
+    expect(r.moved.map((m) => m.id)).toEqual([ids.scheduled])
+    expect(r.skipped.find((x) => x.id === ids.ready)!.reason).toContain('posting it right now')
+    expect(h.promo.placement(ids.failed).account).toBe(FROM)
+    expect(() => h.promo.reassign(h.campaign, { from: FROM, to: FROM })).toThrow('same account')
+    expect(() => h.promo.reassign(h.campaign, { from: FROM, to: 'htmlblog:x' })).toThrow('CrawlProof')
+    expect(() => h.promo.reassign(h.campaign, { from: FROM, to: 'nope' })).toThrow('account ids')
+  })
+
+  it('the CLI cancels the old myna queue items, skips what myna already posted, and the worker re-queues on the new account', async () => {
+    const { promoMain } = await import('../src/promotion-cli.ts')
+    const { h, ids } = await mixed()
+    process.env.PIT_ADMIN_TOKEN = 'admintoken'
+    const client = new PitClient('https://pit.world', (async (input: any, init: any) => h.app.request(String(input).replace('https://pit.world', ''), init, { ip: '127.0.0.1' })) as any)
+    const queue: MynaQueued[] = [{ id: 'qold1', targets: [FROM], text: `x via=${ids.scheduled}`, status: 'pending', scheduledFor: '2026-12-01T00:00:00Z' }]
+    // myna posted the failed one after all (the worker has not reconciled it yet): it must stay.
+    const history: MynaEntry[] = [{ at: new Date().toISOString(), accountId: FROM, text: `x via=${ids.failed}`, ok: true, postId: '9', url: 'https://defcon.social/@b/9' }]
+    const posted: string[] = []
+    const cancelled: string[] = []
+    const myna: Myna = {
+      history: () => history,
+      queue: () => queue,
+      post: async (account, text) => {
+        posted.push(account)
+        queue.push({ id: `qnew${posted.length}`, targets: [account], text, status: 'pending', scheduledFor: '2026-11-05T00:00:00Z' })
+        return { code: 0, output: '' }
+      },
+      cancel: async (id) => {
+        cancelled.push(id)
+        queue.find((q) => q.id === id)!.status = 'cancelled'
+        return { code: 0, output: '' }
+      },
+    }
+    const lines: string[] = []
+    const out = { log: (t: string) => lines.push(t), error: (t: string) => lines.push(`ERR ${t}`) }
+    expect(await promoMain(['reassign', h.campaign, '--from', FROM, '--to', TO, '--dry-run'], out, client, false, { myna: () => myna })).toBe(0)
+    expect(lines[0]).toContain('dry run: would move 2 placements')
+    expect(cancelled).toEqual([])
+    expect(h.promo.placement(ids.scheduled).account).toBe(FROM)
+    lines.length = 0
+    expect(await promoMain(['reassign', h.campaign, '--from', FROM, '--to', TO], out, client, false, { myna: () => myna })).toBe(0)
+    expect(lines[0]).toContain('moved 2 placements')
+    expect(lines.join('\n')).toContain('1 cancelled')
+    expect(cancelled).toEqual(['qold1'])
+    expect(h.promo.placement(ids.failed).account).toBe(FROM)
+    // Due: the worker posts both on the new account (myna paces them), never on the old one.
+    h.clock.t += 10 * DAY
+    await workOnce(client, h.campaign, myna)
+    expect(posted.filter((a) => a !== 'bluesky:a.bsky.social')).toEqual([TO, TO])
+    for (const id of [ids.ready, ids.scheduled]) {
+      const p = h.promo.placement(id)
+      expect(p.state).toBe('scheduled')
+      expect(p.queueId).toMatch(/^qnew/)
+    }
   })
 })
 
