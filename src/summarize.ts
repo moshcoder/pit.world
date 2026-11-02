@@ -49,7 +49,7 @@ export class C0mputeError extends Error {
   }
 }
 
-export type C0mputeOptions = { baseUrl?: string; apiKey?: string; model?: string; timeoutMs?: number; fetch?: Fetch }
+export type C0mputeOptions = { baseUrl?: string; apiKey?: string; model?: string; timeoutMs?: number; fetch?: Fetch; /** Share of timeoutMs the first node gets before one retry (default 0.55). */ firstTryShare?: number }
 
 /**
  * Infernet's chat API, the same way OutreachGraph calls it (packages/ai/src/c0mpute.ts):
@@ -63,7 +63,46 @@ export type C0mputeOptions = { baseUrl?: string; apiKey?: string; model?: string
 export async function c0mputeChat(system: string, user: string, options: C0mputeOptions = {}): Promise<{ text: string; model: string }> {
   const base = (options.baseUrl ?? DEFAULT_C0MPUTE_URL).replace(/\/+$/, '')
   const fetchImpl = options.fetch ?? fetch
-  const signal = AbortSignal.timeout(options.timeoutMs ?? SUMMARY_TIMEOUT_MS)
+  const total = options.timeoutMs ?? SUMMARY_TIMEOUT_MS
+  const overall = AbortSignal.timeout(total)
+  const started = Date.now()
+  // A node that takes the job and never answers must not eat the whole budget: the first try gets
+  // a bit over half of it, then one retry on whichever node takes it next gets the rest.
+  const firstTry = Math.round(total * (options.firstTryShare ?? 0.55))
+  let lastError: unknown
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const left = total - (Date.now() - started)
+    if (left < 5_000) break
+    const signal = AbortSignal.any([overall, AbortSignal.timeout(attempt === 0 ? Math.min(firstTry, left) : left)])
+    try {
+      return await c0mputeAttempt(base, fetchImpl, system, user, options, signal)
+    } catch (error) {
+      lastError = error
+      // Refused outright (bad key, bad request): another try gets the same answer.
+      if (error instanceof C0mputeError && error.status >= 400 && error.status < 500 && error.status !== 429) break
+    }
+  }
+  if (lastError instanceof C0mputeError) throw lastError
+  throw new C0mputeError(0, lastError instanceof Error ? lastError.message : String(lastError ?? 'no answer'))
+}
+
+/** General models to fall back to, best first, when a node for the preferred one is not live. Never a fine-tune or an "abliterated" model. */
+export const FALLBACK_MODELS = ['qwen2.5:7b', 'qwen3:4b', 'gemma3:4b', 'qwen2.5:3b', 'qwen2.5:1.5b']
+
+/** The best general model from Infernet's list of live ones, other than the one just refused. */
+export function pickModel(available: unknown, refused?: string): string | undefined {
+  if (!Array.isArray(available)) return undefined
+  return FALLBACK_MODELS.find((m) => m !== refused && available.includes(m))
+}
+
+async function c0mputeAttempt(
+  base: string,
+  fetchImpl: Fetch,
+  system: string,
+  user: string,
+  options: C0mputeOptions,
+  signal: AbortSignal,
+): Promise<{ text: string; model: string }> {
   const submit = (modelName: string | undefined) =>
     fetchImpl(`${base}/api/chat`, {
       method: 'POST',
@@ -82,8 +121,14 @@ export async function c0mputeChat(system: string, user: string, options: C0mpute
     })
   try {
     let submitted = await submit(options.model)
-    // No live node serves the preferred model right now: any free node will do.
-    if (submitted.status === 503 && options.model) submitted = await submit(undefined)
+    // No live node serves the preferred model right now: the best general model Infernet lists as
+    // live, then any free node.
+    if (submitted.status === 503 && options.model) {
+      const refusal = (await submitted.json().catch(() => ({}))) as { detail?: { availableModels?: unknown } }
+      const next = pickModel(refusal.detail?.availableModels, options.model)
+      submitted = await submit(next)
+      if (submitted.status === 503 && next) submitted = await submit(undefined)
+    }
     const job = (await submitted.json().catch(() => ({}))) as { jobId?: string; source?: string; model?: string | null; error?: string }
     if (!submitted.ok || !job.jobId) throw new C0mputeError(submitted.status, job.error ?? 'no job was created')
     if (job.source !== 'p2p') throw new C0mputeError(429, `no c0mpute node took the job (source ${job.source ?? 'unknown'})`)
@@ -294,6 +339,14 @@ export class SummaryStore {
     // written from the engines' snippet alone, so they are rewritten from the page on the next request.
     const columns = this.db.query('PRAGMA table_info(summaries)').all() as Array<{ name: string }>
     if (!columns.some((c) => c.name === 'source')) this.db.exec('ALTER TABLE summaries ADD COLUMN source TEXT')
+    // One-time: from 2026-11-02 11:00 UTC the TronBrowser relay could hand concurrent reads each other's
+    // page (fixed in tronbrowser.dev #176), so summaries written since may describe another result.
+    // They are dropped once and rewritten on the next request.
+    this.db.exec('CREATE TABLE IF NOT EXISTS store_migrations (name TEXT PRIMARY KEY, at INTEGER NOT NULL)')
+    if (!this.db.query("SELECT 1 FROM store_migrations WHERE name = 'relay-crosstalk-2026-11-02'").get()) {
+      this.db.query('DELETE FROM summaries WHERE created_at >= ?').run(Date.UTC(2026, 10, 2, 11, 0))
+      this.db.query("INSERT INTO store_migrations (name, at) VALUES ('relay-crosstalk-2026-11-02', ?)").run(Date.now())
+    }
   }
   get(url: string): { summary: string; model: string; createdAt: number; source: string | null } | null {
     const row = this.db.query('SELECT summary, model, created_at, source FROM summaries WHERE url = ?').get(url) as { summary: string; model: string; created_at: number; source: string | null } | null

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { tmpdir } from 'node:os'
-import { c0mputeChat, cleanSummary, fetchPageText, htmlText, readPage, readStream, relayPageText, Summarizer, SummaryStore, summaryKey } from '../src/summarize.ts'
+import { c0mputeChat, pickModel, cleanSummary, fetchPageText, htmlText, readPage, readStream, relayPageText, Summarizer, SummaryStore, summaryKey } from '../src/summarize.ts'
 import { createApp } from '../src/server.ts'
 import { Cache } from '../src/search.ts'
 
@@ -30,6 +30,73 @@ function infernet(sent: any[], options: { source?: string; noModel?: boolean; su
     return new Response('nope', { status: 404 })
   }) as typeof fetch
 }
+
+describe('c0mpute when nodes are missing or stuck', () => {
+  const done = () => sse([['meta', { model: 'qwen3:4b' }], ['done', { text: 'Fine.' }]])
+
+  it('picks the best general model Infernet lists as live, never a fine-tune', () => {
+    expect(pickModel(['hf.co/x/saas-agent', 'jaahas/qwen3.5-uncensored:2b', 'gemma3:4b', 'qwen3:4b'], 'qwen2.5:7b')).toBe('qwen3:4b')
+    expect(pickModel(['qwen2.5:7b'], 'qwen2.5:7b')).toBeUndefined()
+    expect(pickModel(undefined)).toBeUndefined()
+  })
+
+  it('on "no live node serves it" asks for a listed model, then any node', async () => {
+    const asked: Array<string | undefined> = []
+    const f = (async (input: any, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/chat')) {
+        const body = JSON.parse(String(init?.body))
+        asked.push(body.modelName)
+        if (body.modelName) return Response.json({ error: 'No live node serves it', detail: { availableModels: ['gemma3:4b', 'qwen3:4b'] } }, { status: 503 })
+        return Response.json({ jobId: 'job-1', source: 'p2p' })
+      }
+      return done()
+    }) as typeof fetch
+    const r = await c0mputeChat('s', 'u', { model: 'qwen2.5:7b', fetch: f })
+    expect(asked).toEqual(['qwen2.5:7b', 'qwen3:4b', undefined])
+    expect(r.text).toBe('Fine.')
+  })
+
+  it('a node that takes the job and never answers is retried once on another', async () => {
+    let jobs = 0
+    const f = (async (input: any, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/api/chat')) return Response.json({ jobId: `job-${++jobs}`, source: 'p2p' })
+      if (url.endsWith('/job-1')) {
+        // A stuck node: the stream stays open until the caller gives up.
+        return new Response(new ReadableStream({ start(c) { init?.signal?.addEventListener('abort', () => c.error(new Error('aborted'))) } }))
+      }
+      return done()
+    }) as typeof fetch
+    const t0 = Date.now()
+    const r = await c0mputeChat('s', 'u', { fetch: f, timeoutMs: 12_000, firstTryShare: 0.25 })
+    expect(r.text).toBe('Fine.')
+    expect(jobs).toBe(2)
+    expect(Date.now() - t0).toBeLessThan(6_000)
+  })
+
+  it('does not retry a refused key', async () => {
+    let calls = 0
+    const f = (async () => (calls++, Response.json({ error: 'bad key' }, { status: 401 }))) as unknown as typeof fetch
+    await expect(c0mputeChat('s', 'u', { fetch: f })).rejects.toThrow('401')
+    expect(calls).toBe(1)
+  })
+
+  it('drops summaries written while the page reader mixed up pages, once', () => {
+    const path = `${tmpdir()}/pit-crosstalk-${process.pid}-${Date.now()}.db`
+    const old = new Database(path)
+    old.exec('CREATE TABLE summaries (url TEXT PRIMARY KEY, summary TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL, source TEXT)')
+    old.query('INSERT INTO summaries VALUES (?, ?, ?, ?, ?)').run('before.example', 'ok', 'm', Date.UTC(2026, 10, 2, 10), 'page')
+    old.query('INSERT INTO summaries VALUES (?, ?, ?, ?, ?)').run('during.example', 'wrong page', 'm', Date.UTC(2026, 10, 2, 12), 'page')
+    old.close()
+    const store = new SummaryStore(path)
+    expect(store.get('before.example')?.summary).toBe('ok')
+    expect(store.get('during.example')).toBeNull()
+    // Later summaries survive a restart.
+    store.set('later.example', 'right page', 'm')
+    expect(new SummaryStore(path).get('later.example')?.summary).toBe('right page')
+  })
+})
 
 describe('c0mpute client', () => {
   it('sends p2p_only, the trusted key and the model, and reads the stream', async () => {
