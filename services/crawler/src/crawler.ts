@@ -12,7 +12,8 @@ import type { Rendered } from './obscura.ts'
 import { allows, EMPTY, parseRobots, pathOf, type Robots } from './robots.ts'
 import { crawlable, normalizeUrl, resolvesPublic, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
 
-export type SiteJob = { site: string; source: string }
+/** `first`: ahead of everything already waiting (seed --first). */
+export type SiteJob = { site: string; source: string; first?: boolean }
 export type PageJob = { url: string; site: string; depth: number; rendered?: boolean }
 
 export type Enqueue = {
@@ -64,16 +65,18 @@ export function createCrawler(deps: Deps) {
     politeGet(url, { userAgent: config.userAgent, resolver, site, ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(accept ? { accept } : {}) })
 
   /** Sites pasted, seeded or discovered: checked, counted, queued once per cycle. */
-  async function scheduleSites(inputs: string[], source: string): Promise<{ queued: number; refused: number }> {
+  async function scheduleSites(inputs: string[], source: string, options: { first?: boolean } = {}): Promise<{ queued: number; refused: number }> {
     const jobs: SiteJob[] = []
     let refused = 0
     for (const input of inputs) {
       const site = siteFromInput(input)
-      if (!site || !(await frontier.noteSite(site, config.maxSites, config.recrawlDays * 86_400_000))) {
+      // `first` re-schedules a site even if it is already waiting: it jumps the queue, and
+      // the copy still waiting skips when it comes up (claimStart).
+      if (!site || !(await frontier.noteSite(site, config.maxSites, options.first ? 0 : config.recrawlDays * 86_400_000))) {
         refused++
         continue
       }
-      jobs.push({ site, source })
+      jobs.push({ site, source, ...(options.first ? { first: true } : {}) })
     }
     if (jobs.length) await enqueue.sites(jobs)
     return { queued: jobs.length, refused }
@@ -116,6 +119,8 @@ export function createCrawler(deps: Deps) {
     if (deps.pageBacklog && (await deps.pageBacklog()) > config.maxPageBacklog) {
       return { admitted: 0, outcome: 'waiting for the page backlog', delayMs: 60_000 }
     }
+    // Once per cycle per site, however many jobs for it are queued.
+    if (!(await frontier.claimStart(site, config.recrawlDays * 86_400_000))) return { admitted: 0, outcome: 'already started this cycle' }
     if (!(await resolver(site))) {
       await frontier.bump('sites_refused')
       await frontier.log({ kind: 'skip', site, note: 'not on the public internet' })

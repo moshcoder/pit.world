@@ -7,6 +7,7 @@
  *   pit-crawler seed --from nichedb|ring     backfill: every site nichedb keeps, or the ring
  *   pit-crawler seed --from rssamplifier|p0dcasters   every site behind every feed in that directory's OPML
  *   pit-crawler seed --opml <url|path>       any OPML file
+ *   add --first to any seed to put those sites ahead of everything already waiting
  *   pit-crawler seed --file <path>           one site per line
  *   pit-crawler stats                        queue depths and counters, as JSON
  *   pit-crawler read <url> [--render]        read one page now and print its record (no Redis)
@@ -103,11 +104,12 @@ async function seed(args: string[]) {
   const opml = flag(args, '--opml')
   if (opml) sites.push(...sitesFromOpml(await opmlText(opml)))
   if (file) sites.push(...sitesFromText(readFileSync(file, 'utf8')))
-  sites.push(...sitesFromText(args.filter((a, i) => !a.startsWith('--') && !args[i - 1]?.startsWith('--')).join(' ')))
+  const valued = new Set(['--from', '--file', '--limit', '--opml'])
+  sites.push(...sitesFromText(args.filter((a, i) => !a.startsWith('--') && !valued.has(args[i - 1] ?? '')).join(' ')))
   if (limit) sites = sites.slice(0, limit)
   const runtime = createRuntime(config, log)
   try {
-    const out = await runtime.crawler.scheduleSites([...new Set(sites)], from ?? (file ? 'file' : 'cli'))
+    const out = await runtime.crawler.scheduleSites([...new Set(sites)], from ?? (file ? 'file' : 'cli'), { first: args.includes('--first') })
     console.log(JSON.stringify({ found: sites.length, ...out }))
   } finally {
     await runtime.close()
