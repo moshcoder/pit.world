@@ -54,6 +54,24 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
 
+  # Fetch-only workers: more of them read more pages at once (each still one request
+  # per site at a time). PIT_PAGE_WORKERS in crawler.env sets how many.
+  pages:
+    image: pit-crawler:latest
+    env_file: ${CRAWLER_ENV:-../../../crawler.env}
+    environment:
+      CRAWL_REDIS_URL: redis://redis:6379
+      CRAWL_ROLES: page
+      CRAWL_HEALTH_HOST: 0.0.0.0
+    depends_on:
+      redis: { condition: service_healthy }
+      crawler: { condition: service_started }
+    deploy:
+      replicas: ${PIT_PAGE_WORKERS:-2}
+    mem_limit: 768m
+    restart: unless-stopped
+    stop_grace_period: 30s
+
 volumes:
   redis:
   index:
