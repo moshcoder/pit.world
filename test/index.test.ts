@@ -146,14 +146,14 @@ describe('W3BS network sites are featured', () => {
     expect(hosts.has('github.com')).toBe(false)
   })
 
-  it('badges network hits and leads with up to three, in their own order; the cached result is untouched', () => {
+  it('badges network hits and leads with one; the rest keep their place, badged; the cached result is untouched', () => {
     const net = new W3bsNetwork(fetch, ['a.agent.pit.world', 'b.bbs.pit.world', 'c.x.pit.world', 'd.y.pit.world'])
     const hit = (host: string) => ({ url: `https://${host}/`, title: host, description: '', host })
     const result = { query: 'q', provider: 'serper', failures: [], cached: false, hits: ['nyt.com', 'a.agent.pit.world', 'cnn.com', 'b.bbs.pit.world', 'c.x.pit.world', 'd.y.pit.world'].map(hit) }
     const out = featureNetwork(result, net)
-    expect(out.hits.map((h) => h.host)).toEqual(['a.agent.pit.world', 'b.bbs.pit.world', 'c.x.pit.world', 'nyt.com', 'cnn.com', 'd.y.pit.world'])
+    expect(out.hits.map((h) => h.host)).toEqual(['a.agent.pit.world', 'nyt.com', 'cnn.com', 'b.bbs.pit.world', 'c.x.pit.world', 'd.y.pit.world'])
     expect(out.hits.filter((h) => h.featured)).toHaveLength(4)
-    expect(FEATURED_TOP).toBe(3)
+    expect(FEATURED_TOP).toBe(1)
     expect(result.hits[0]!.host).toBe('nyt.com')
     expect(result.hits.some((h) => 'featured' in h)).toBe(false)
   })
@@ -181,25 +181,17 @@ describe('featured slots filled from our own index', () => {
   const hit = (url: string) => ({ url, title: url, description: 'd', host: new URL(url).hostname })
   const base = { query: 'q', provider: 'serper', failures: [], cached: false }
 
-  it('fills the free slots, one page per site, never a page or site already shown, never off the network', () => {
-    const result = { ...base, hits: [hit('https://semrush.com/'), hit('https://seo.rank.pit.world/')] }
-    const fromIndex = [
-      hit('https://seo.rank.pit.world/'), // already on the page
-      hit('https://seo.rank.pit.world/docs'), // same site as a featured hit
-      hit('https://family.ancestry.pit.world/famous'),
-      hit('https://family.ancestry.pit.world/other'), // second page of a site
-      hit('https://outside.example/'), // not on the network
-      hit('https://alt.2600.pit.world/'),
-    ]
-    const out = featureNetwork(result, net, fromIndex)
-    expect(out.hits.map((h) => h.url)).toEqual([
-      'https://seo.rank.pit.world/',
-      'https://family.ancestry.pit.world/famous',
-      'https://alt.2600.pit.world/',
-      'https://semrush.com/',
-    ])
-    expect(out.hits.slice(0, 3).every((h) => h.featured)).toBe(true)
-    expect(out.hits[1]!.sources).toEqual(['pit'])
+  it('fills the slot from the index only when the engines brought no network site, never a page already shown, never off the network', () => {
+    const lead = featureNetwork({ ...base, hits: [hit('https://semrush.com/'), hit('https://seo.rank.pit.world/')] }, net, [hit('https://alt.2600.pit.world/')])
+    // The engines brought one: it leads, the index adds nothing.
+    expect(lead.hits.map((h) => h.url)).toEqual(['https://seo.rank.pit.world/', 'https://semrush.com/'])
+    const result = { ...base, hits: [hit('https://semrush.com/'), hit('https://seo.rank.pit.world/x')] }
+    const fromIndex = [hit('https://outside.example/'), hit('https://family.ancestry.pit.world/famous')]
+    const none = { ...base, hits: [hit('https://semrush.com/'), hit('https://nyt.com/')] }
+    const out = featureNetwork(none, net, [hit('https://semrush.com/'), ...fromIndex])
+    expect(out.hits.map((h) => h.url)).toEqual(['https://family.ancestry.pit.world/famous', 'https://semrush.com/', 'https://nyt.com/'])
+    expect(out.hits[0]).toMatchObject({ featured: true, sources: ['pit'] })
+    expect(featureNetwork(result, net, fromIndex).hits[0]!.url).toBe('https://seo.rank.pit.world/x')
   })
 
   it('asks the index for 50 and keeps only network pages; a failing index adds nothing', async () => {
