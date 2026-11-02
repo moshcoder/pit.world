@@ -14,7 +14,7 @@
 import { RING } from './ring.ts'
 import { callProvider, type Hit, type SearchResult, urlKey } from './search.ts'
 
-export const FEATURED_TOP = 3
+export const FEATURED_TOP = 1
 const REFRESH_MS = 60 * 60_000
 const REGISTRY = 'https://w3bs.org/api/net/v1/registry'
 const PAGE = 'https://w3bs.org/net'
