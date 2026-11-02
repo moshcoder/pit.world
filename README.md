@@ -233,6 +233,14 @@ Production runs on bare metal with `bin/install.sh` ([OpenInstall](https://logic
 
 Moshpit is a namespace beside ICANN's. Anyone can claim an ending (`.hacker`, `.eggs`, `.pit`), put names under it and point them anywhere; the registry is open and append-only, and it signs certificates, so the names are real HTTPS sites to anyone on the network. Get on it with [moshcode](https://moshcode.sh) (`curl -fsSL https://moshcoding.com/install.sh | sh`, then `moshcode dns enable`) or by setting your browser's secure DNS to `https://dns.moshcode.sh/dns-query`. Every method (moshcode, TronBrowser, browser DoH, an Apple profile, Windows, Android) and how to trust the Moshpit Root CA is at [pit.world/connect](https://pit.world/connect); pit.world serves the root at `/moshpit-root-ca.crt` and the Apple profile at `/moshpit.mobileconfig`. Claim an ending at [pit.moshcode.sh](https://pit.moshcode.sh).
 
+## Daily Stitcher
+
+`daily.stitcher.pit.world` is an exact pit.world host routed by the pit.world server. Its storefront uses the task-supplied quilt display photograph, cropped to remove the mail interface. The shop remains a coming-soon page until the owner supplies catalog and order details; no inventory, prices, checkout, contact information, or video channel are assumed.
+
+Owner publishing uses the existing CoinPay OAuth 2.1 identity through pit.world. `pit login` authenticates the CLI with PKCE. `bun bin/stitcher propose --title "…" --body "…"` creates a private journal proposal; only the configured `STITCHER_OWNER_SUB` can publish or reject it with `bun bin/stitcher approve <id>` / `bun bin/stitcher reject <id>`. The bridge and CLI identify a person by CoinPay DID, never email. Sign-in does not authorize a payment. No one can publish while `STITCHER_OWNER_SUB` is unset.
+
+The Moshpit registry name `daily.stitcher` is not registered. This exact web host can work because it is under pit.world's DNS, but claiming the separate `.stitcher` Moshpit ending is a paid action and is intentionally not part of deployment.
+
 ## License
 
 MIT
