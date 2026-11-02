@@ -254,6 +254,21 @@ describe('bangs and names', () => {
   })
 })
 
+describe('why pit.world exists', () => {
+  it('links the home page ICANN line to the official explanation, and serves it', async () => {
+    const { request } = app()
+    const home = await (await request('/')).text()
+    expect(home).toContain(`<a href="/why">ICANN doesn't scale for the agentic web.</a>`)
+    expect(home).toContain('href="/why">Why we built it')
+    const res = await request('/why')
+    expect(res.status).toBe(200)
+    const why = await res.text()
+    expect(why).toContain("<h1>ICANN doesn't scale for the agentic web.</h1>")
+    expect(why).toContain('href="/connect"')
+    expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/why')
+  })
+})
+
 describe('crawlproof analytics and ads', () => {
   it('tracks pit.world pages and shows ads, with the CSP to match', async () => {
     const { request } = app()

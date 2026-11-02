@@ -40,6 +40,7 @@ setRingFooterOptions(
     { label: 'Build an app', href: '/build' },
     { label: 'Promoter program', href: '/promote' },
     { label: 'Claim your listing', href: '/b' },
+    { label: 'Why pit.world', href: '/why' },
     { label: 'How it works', href: '/about' },
     { label: 'API · CLI · MCP', href: '/about#api' },
     { label: 'Web ring', href: '/ring' },
@@ -170,6 +171,7 @@ function networkPanel(stats: NetworkStats | null): string {
   return `<section id="moshpit" class="network">
   <p class="kicker">The Moshpit network</p>
   <h2>The internet ICANN didn't sell you.</h2>
+  <p class="why"><a href="/why">Why we built it: ICANN doesn't scale for the agentic web →</a></p>
   <p class="lede">Moshpit is a namespace that lives beside the old one. Anyone can claim an ending like <code>.hacker</code>, <code>.eggs</code> or <code>.pit</code>, put names under it, and point them anywhere. The registry is open and append-only, its log is public, and it signs real certificates, so <code>https://chovy.hacker</code> is a working site for everyone on the network. pit.world searches both worlds.</p>
   ${numbers}
   <div class="steps">
@@ -229,7 +231,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     body: `<main>
   <header class="hero">
     <a class="brand big" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
-    <p class="pitch">ICANN doesn't scale for the agentic web. <a href="#moshpit">Meet pit.world.</a></p>
+    <p class="pitch"><a href="/why">ICANN doesn't scale for the agentic web.</a> <a href="#moshpit">Meet pit.world.</a></p>
     <p class="tag">Search like nobody's watching. Because nobody is.</p>
     ${searchForm('', true)}
     <ul class="promises">
@@ -489,6 +491,59 @@ ${tabs(query, 'web')}
   ${result?.provider ? `<p class="via">Results from the ${listFormat.format(result.provider.split('+').map((p) => LABELS[p as Provider] ?? p))} ${result.provider.includes('+') ? 'indexes' : 'index'}, fetched by pit.world and merged. Your IP address, browser and cookies were not sent.</p>` : ''}
 </main>`
   return layout({ title: `${query} · pit.world`, description: `Private search results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
+}
+
+/** The official explanation behind the home page's "ICANN doesn't scale for the agentic web": why pit.world exists. */
+export function whyPage(): string {
+  return layout({
+    title: "Why we built pit.world: ICANN doesn't scale for the agentic web",
+    description: "The official explanation: why the ICANN namespace can't keep up with software that names things on its own, what the Moshpit network does instead, and why its front door is a search engine that doesn't watch you.",
+    path: '/why',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<p class="kicker">Why pit.world exists</p>
+<h1>ICANN doesn't scale for the agentic web.</h1>
+<p class="lede">The way the internet hands out names was built for people and companies buying a few domains each, by hand, renewed once a year. Software is starting to build, ship and run things on its own, and it needs names faster and cheaper than that system was ever meant to give out. So we built a namespace beside the old one, and a search engine that covers both. This page is the reasoning.</p>
+${adUnit()}
+
+<h2 id="permission">The old namespace is a permission slip</h2>
+<ul>
+<li><b>Endings are rationed.</b> A new top-level ending like <code>.shop</code> goes through an ICANN application round. The fee alone is six figures, rounds open about once a decade, and the answer takes years. Nobody gets <code>.hacker</code> because they want it.</li>
+<li><b>Names are rented, not owned.</b> Every name under those endings goes through a registrar, a yearly renewal and a card on file. Miss a renewal and your address belongs to whoever grabs it next.</li>
+<li><b>One list, one gatekeeper.</b> The root of the namespace changes on one organization's schedule. Everyone else waits.</li>
+</ul>
+<p>None of that is a flaw in DNS the protocol. DNS is fine; we use it. The problem is the permission model sitting on top of it.</p>
+
+<h2 id="agents">Agents need names on demand</h2>
+<p>An AI agent that spins up a service needs an address for it now: not after a checkout, a registrar account and a renewal reminder. Multiply that by every agent spinning up services every day, each one needing a stable name that other machines can find and trust, and a system where every name is a purchase a human approves stops working. That is what "doesn't scale" means here.</p>
+
+<h2 id="moshpit">What the Moshpit network does instead</h2>
+<ul>
+<li><b>Anyone can claim an ending.</b> <code>.hacker</code>, <code>.eggs</code>, <code>.pit</code>: pick one nobody has and it is yours, along with every name under it. The owner mints names instantly and points them anywhere.</li>
+<li><b>The registry is open and append-only.</b> Every ending claimed and every name minted goes into a log that is only ever added to, so anyone can audit who holds what.</li>
+<li><b>Real HTTPS.</b> The registry signs certificates, so <code>https://chovy.hacker</code> is a working site for everyone on the network.</li>
+<li><b>Plain DNS underneath.</b> Your device sends one suffix to the Moshpit resolver and keeps its own for everything else. Nothing exotic, nothing that takes over your network. <a href="/connect">Connect any device →</a></li>
+</ul>
+
+<h2 id="beside">Beside the old internet, not on top of it</h2>
+<p>Moshpit refuses to sell a real ICANN ending, so a Moshpit name never collides with one. And the old web wins by default: if a name already works on the regular internet, nothing on our side redirects it, because a resolver that quietly rerouted a working domain would be indistinguishable from a hijack. We launch new things on Moshpit and announce them on the old web. Both keep working.</p>
+
+<h2 id="search">Why the front door is a search engine</h2>
+<p>A new namespace is useless if nobody can find what is on it. pit.world searches both worlds from one box: the regular web, and Moshpit names resolved through the registry next to your results. You don't even need Moshpit DNS to visit: every live name also opens through our relay at <code>&lt;name&gt;.pit.world</code>.</p>
+
+<h2 id="private">Why it doesn't watch you</h2>
+<p>Same reason we built it at all. Search on the old web pays for itself by watching you. pit.world keeps <b>no logs</b> of what you search, sets <b>no cookies</b> to search, builds <b>no profile</b> to sell, and needs <b>no JavaScript</b>. We charge a cover at the door instead, a few dollars a month for businesses and builders who want in, so you are never the product. Charging money is the privacy feature. <a href="/privacy">What pit.world keeps, exactly →</a></p>
+
+<h2 id="next">Get in</h2>
+<ul>
+<li><a href="/">Search with pit.world</a>, and <a href="/about#default">make it your default</a>.</li>
+<li><a href="/connect">Connect to the Moshpit network</a>, on any device.</li>
+<li><a href="${LINKS.claim}">Claim an ending</a> on the registry.</li>
+<li><a href="${LINKS.source}">Read the source</a>. All of it is open.</li>
+</ul>
+</main>`,
+  })
 }
 
 export function privacyPage(): string {
