@@ -42,6 +42,8 @@ export type Config = {
   maxSites: number
   /** Records waiting for nichedb beyond this are dropped oldest first. */
   outboxMax: number
+  /** Page reads pause while more records than this wait to be published: crawl at the pace the index absorbs. */
+  outboxHigh: number
   roles: Role[]
   healthPort: number
   healthHost: string
@@ -80,6 +82,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     seenTtlMs: num(env.CRAWL_SEEN_TTL_HOURS, 72, 1) * 3_600_000,
     maxPageBacklog: num(env.CRAWL_MAX_PAGE_BACKLOG, 50_000, 1),
     outboxMax: num(env.CRAWL_OUTBOX_MAX, 200_000, 1),
+    outboxHigh: num(env.CRAWL_OUTBOX_HIGH, 20_000, 1),
     roles: roles.length ? roles : ['site', 'page', 'render', 'publish'],
     healthPort: num(env.CRAWL_HEALTH_PORT, 8797, 0),
     // Loopback on a host; 0.0.0.0 inside a container, whose port is published on the host's loopback.

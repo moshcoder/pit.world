@@ -187,6 +187,11 @@ export function createCrawler(deps: Deps) {
   }
 
   async function crawlPage(job: PageJob): Promise<PageOutcome> {
+    // Publishing is the slowest stage: reading faster than nichedb takes records only fills
+    // the outbox until it drops them. Wait (a jittered half minute) while it is too full.
+    if ((await frontier.outboxLength()) > config.outboxHigh) {
+      return { delayMs: 20_000 + Math.floor(Math.random() * 20_000), outcome: 'waiting for publishing to catch up' }
+    }
     const robots = await robotsFor(job.site)
     if (robots === 'unavailable') return { outcome: 'robots.txt unavailable' }
     const gap = gapFor(robots)
