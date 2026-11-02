@@ -1062,20 +1062,35 @@ ${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
 export function startPage(): string {
   const pay = `${LINKS.payAgent}?amount=5&amp;note=${encodeURIComponent('Moshpit server, 1 month')}`
   return layout({
-    title: 'Start building here: your sites on a Moshpit server, $5 a month · pit.world',
-    description: 'Claim a Moshpit name, build your site, and deploy it to a Moshpit server: $5 a month for unlimited sites, paid in crypto through pay.agent or CoinPay.',
+    title: 'Moshpit static site hosting on a shared server, $5 a month · pit.world',
+    description: 'Host static sites on a shared Moshpit Linux server for $5 a month. SSH access uses a separate account without root; see current host totals and limits.',
     path: '/start',
     bodyClass: 'doc',
     body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
 <main class="prose build">
 <p class="kicker">Start building here</p>
-<h1>Your name, your sites, one server. $5 a month.</h1>
-<p class="lede">A Moshpit server hosts as many sites as you put on it for $5 a month. Every one opens at its own Moshpit name, and at <code>name.pit.world</code> for everyone else, with nothing to install.</p>
+<h1>Static sites on a shared Moshpit server. $5 a month.</h1>
+<p class="lede">This is one hosting account on a shared, managed Linux server, not a dedicated VPS. Each Moshpit name points to your site files and opens at its own name, or at <code>name.pit.world</code> for everyone else.</p>
 
 <div class="prices">
-  <div><b>$5</b><span>a month, per server</span><p>Unlimited sites. Stop paying and the server is paused, not deleted.</p></div>
+  <div><b>$5</b><span>a month, per hosting account</span><p>Unlimited site names; disk, traffic and machine capacity are shared. Stop paying and the account is paused, not deleted.</p></div>
   <div><b>Crypto</b><span>no card</span><p>Pay through <a href="${LINKS.payAgent}">pay.agent</a> on Moshpit, or <a href="${LINKS.payClearnet}">CoinPay</a> on the clearnet.</p></div>
 </div>
+
+<h2>What the $5 plan includes</h2>
+<table class="methods"><tbody>
+<tr><th scope="row">Access</th><td>A separate Unix account with SSH public-key login. It has no root or sudo access and is not a virtual machine.</td></tr>
+<tr><th scope="row">Host totals</th><td>The current shared host has 6 vCPU, 19 GiB of RAM and a 193 GB system disk (checked 2026-11-02). Those are machine totals shared with the operating system and all accounts, not resources reserved for one customer; the host may change.</td></tr>
+<tr><th scope="row">Sites and resources</th><td>There is no site-count limit. No per-account CPU, memory, storage or bandwidth allowance is published. “Unlimited” means the number of site names, not unlimited disk or traffic.</td></tr>
+<tr><th scope="row">What runs</th><td>HTTPS serves static site files. A <code>deploy.sh</code> can generate those files during a deployment in the shared build queue. An always-on app process, database, mail server or system service is not included.</td></tr>
+</tbody></table>
+<p>This plan does not include a dedicated server, a VM, root access, guaranteed CPU or memory, or an uptime SLA. A root or dedicated-server plan is not currently offered here.</p>
+
+<h2>Usage and terms</h2>
+<p><a href="https://profullstack.com/terms">Profullstack's Terms of Service</a> are the general company terms. They do not yet describe Moshpit-specific prohibited uses, per-account quotas or an abuse-handling process. This page describes the technical service that is currently set up. If you need to run something beyond static sites, contact <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a> before ordering.</p>
+
+<h2>Who runs it?</h2>
+<p>Moshpit hosting is operated by Profullstack, Inc. See the <a href="https://profullstack.com/teams">named team</a>, <a href="https://profullstack.com/case-studies">case studies</a> and <a href="https://github.com/moshcoder/pit.world">pit.world source code</a>. The $5 price covers hosting; <a href="https://profullstack.com/pricing">engineering services</a> are separate.</p>
 
 <h2>1. Get on Moshpit</h2>
 <p>Install moshcode, the command line for the network:</p>
