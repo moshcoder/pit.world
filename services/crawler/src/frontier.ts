@@ -60,6 +60,8 @@ export interface Frontier {
   noteSite(site: string, maxSites: number, cycleMs: number): Promise<boolean>
   sitesDue(olderThanMs: number, limit: number): Promise<string[]>
   push(entries: unknown[], max: number): Promise<void>
+  /** Records waiting to be published. */
+  outboxLength(): Promise<number>
   take(count: number): Promise<string[]>
   giveBack(raw: string[]): Promise<void>
   /** A counter, kept as a total and in minute and hour buckets for rates. */
@@ -177,6 +179,10 @@ export class RedisFrontier implements Frontier {
       .rpush(K.outbox, ...entries.map((e) => JSON.stringify(e)))
       .ltrim(K.outbox, -max, -1)
       .exec()
+  }
+
+  async outboxLength() {
+    return this.redis.llen(K.outbox)
   }
 
   async take(count: number) {
@@ -297,6 +303,9 @@ export class MemoryFrontier implements Frontier {
   async push(entries: unknown[], max: number) {
     this.outbox.push(...entries.map((e) => JSON.stringify(e)))
     if (this.outbox.length > max) this.outbox.splice(0, this.outbox.length - max)
+  }
+  async outboxLength() {
+    return this.outbox.length
   }
   async take(count: number) {
     return this.outbox.splice(0, count)

@@ -210,3 +210,16 @@ describe('waiting for a busy site', () => {
     expect(Math.max(...wakes.values())).toBeLessThan(10)
   })
 })
+
+test('page reads wait while the outbox is over its high-water mark', async () => {
+  const config = configFromEnv({ CRAWL_HOST_DELAY_MS: '0', CRAWL_OUTBOX_HIGH: '2' })
+  const frontier = new MemoryFrontier(1000)
+  const noop = async () => {}
+  const crawler = createCrawler({ config, frontier, fetch: fakeFetch, resolver: async () => true, enqueue: { sites: noop, pages: noop, render: noop } })
+  await frontier.push([1, 2, 3], 100)
+  const out = await crawler.crawlPage({ url: 'https://shop.example/', site: 'shop.example', depth: 0 })
+  expect(out.outcome).toBe('waiting for publishing to catch up')
+  expect(out.delayMs).toBeGreaterThanOrEqual(20_000)
+  await frontier.take(3)
+  expect((await crawler.crawlPage({ url: 'https://shop.example/', site: 'shop.example', depth: 0 })).outcome).toBe('indexed')
+})
