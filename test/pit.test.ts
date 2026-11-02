@@ -832,6 +832,8 @@ describe('/build', () => {
     expect(html).toContain('5 GB of traffic a month')
     expect(html).toContain('16 vCPU, 31 GiB of RAM')
     expect(html).not.toContain('The code and the domain are yours')
+    expect(html).toContain('Your own Linux user on the shared Profullstack dev server')
+    expect(html).toContain('private VPS or a dedicated server with full root access')
   })
 
   it('bills by pay.agent invoice: $49 now, $2 monthly from day 31, the builder hears, the buyer lands on the invoice', async () => {

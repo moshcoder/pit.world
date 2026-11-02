@@ -1085,10 +1085,11 @@ ${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
 <tr><th scope="row">Version history</th><td>30 days.</td></tr>
 <tr><th scope="row">People</th><td>One account. No collaborators and no staging copy on this plan.</td></tr>
 <tr><th scope="row">Host totals</th><td>The current shared host has 16 vCPU, 31 GiB of RAM and a 314 GB system disk, in a data center in Vienna, Austria (checked 2026-11-02). Those are machine totals shared with every app on it, not resources reserved for you; the host may change.</td></tr>
-<tr><th scope="row">Access</th><td>You change the app through chovy.com. No root, sudo or server shell is included.</td></tr>
+<tr><th scope="row">Your account</th><td>Your own Linux user on the shared Profullstack dev server, where your app lives. Send us your SSH public key and you can log in to it. No root or sudo; you can also change the app through chovy.com.</td></tr>
+<tr><th scope="row">Upgrade</th><td>Need root? Move up to a private VPS or a dedicated server with full root access. Email <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a> for a quote.</td></tr>
 <tr><th scope="row">Late payment</th><td>The app stays up for 7 days after the date it is paid through. After that it is paused, never deleted.</td></tr>
 </tbody></table>
-<p>This plan does not include guaranteed CPU, backups, an uptime SLA or a custom domain. More apps, bandwidth, storage, your own domain, collaborators and staging come with the monthly plans on <a href="https://chovy.com">chovy.com</a>.</p>
+<p>This plan does not include root access, guaranteed CPU, backups, an uptime SLA or a custom domain. More apps, bandwidth, storage, your own domain, collaborators and staging come with the monthly plans on <a href="https://chovy.com">chovy.com</a>.</p>
 
 <h2>Questions</h2>
 <h3>Do I need to know how to code?</h3>
@@ -1131,7 +1132,7 @@ export function startPage(): string {
 <tr><th scope="row">Sites and resources</th><td>There is no site-count limit. No per-account CPU, memory, storage or bandwidth allowance is published. “Unlimited” means the number of site names, not unlimited disk or traffic.</td></tr>
 <tr><th scope="row">What runs</th><td>HTTPS serves static site files. A <code>deploy.sh</code> can generate those files during a deployment in the shared build queue. An always-on app process, database, mail server or system service is not included.</td></tr>
 </tbody></table>
-<p>This plan does not include a dedicated server, a VM, root access, guaranteed CPU or memory, or an uptime SLA. A root or dedicated-server plan is not currently offered here.</p>
+<p>This plan does not include a dedicated server, a VM, root access, guaranteed CPU or memory, or an uptime SLA. Need root? A private VPS or a dedicated server with full root access is available as an upgrade; email <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a> for a quote.</p>
 
 <h2>Usage and terms</h2>
 <p><a href="https://profullstack.com/terms">Profullstack's Terms of Service</a> are the general company terms. They do not yet describe Moshpit-specific prohibited uses, per-account quotas or an abuse-handling process. This page describes the technical service that is currently set up. If you need to run something beyond static sites, contact <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a> before ordering.</p>
