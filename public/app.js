@@ -36,8 +36,173 @@
   if (tabs && current && tabs.scrollWidth > tabs.clientWidth) {
     tabs.scrollLeft = Math.max(0, current.offsetLeft - tabs.offsetLeft - (tabs.clientWidth - current.offsetWidth) / 2)
   }
-  // Play / Listen / Read here (src/players.ts): nothing loads until the button is pressed, then the player
-  // opens under the result. Pressing again closes it, and opening one closes any other.
+  // The mini player: one slim bar at the bottom for everything that is only sound (song previews, podcast
+  // episodes, read-alouds), so it keeps playing while you scroll. Built on first use; nothing loads before.
+  const speechOn = document.querySelector('main[data-speech]') !== null
+  const clock = (s) => {
+    s = Math.max(0, Math.floor(s || 0))
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const r = String(s % 60).padStart(2, '0')
+    return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`
+  }
+  let bar = null
+  const mini = () => {
+    if (bar) return bar
+    const el = document.createElement('section')
+    el.className = 'mini-player'
+    el.setAttribute('aria-label', 'Player')
+    // threatcrush-disable-next-line js-unescaped-html-sink  a fixed literal with no interpolation; titles and transcript text are set with textContent
+    el.innerHTML = `<div class="mp-panel" hidden><div class="mp-panel-head"><b>Transcript</b><span class="mp-panel-note"></span></div><ol class="mp-lines"></ol></div>
+<div class="mp-row"><button type="button" class="mp-toggle" aria-label="Pause">❚❚</button>
+<div class="mp-meta"><span class="mp-title"></span><span class="mp-sub"></span></div>
+<input type="range" class="mp-seek" min="0" max="1000" value="0" step="1" aria-label="Seek">
+<span class="mp-time">0:00</span>
+<button type="button" class="mp-tx" hidden aria-expanded="false">Transcript</button>
+<button type="button" class="mp-close" aria-label="Close player">✕</button></div>`
+    const audio = document.createElement('audio')
+    audio.preload = 'none'
+    el.append(audio)
+    document.body.append(el)
+    document.body.classList.add('has-mini-player')
+    const $ = (sel) => el.querySelector(sel)
+    const toggle = $('.mp-toggle')
+    const seek = $('.mp-seek')
+    let seeking = false
+    toggle.addEventListener('click', () => (audio.paused ? audio.play().catch(() => {}) : audio.pause()))
+    audio.addEventListener('play', () => {
+      toggle.textContent = '❚❚'
+      toggle.setAttribute('aria-label', 'Pause')
+    })
+    audio.addEventListener('pause', () => {
+      toggle.textContent = '▶'
+      toggle.setAttribute('aria-label', 'Play')
+    })
+    audio.addEventListener('timeupdate', () => {
+      if (!seeking && audio.duration) seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000))
+      $('.mp-time').textContent = audio.duration && Number.isFinite(audio.duration) ? `${clock(audio.currentTime)} / ${clock(audio.duration)}` : clock(audio.currentTime)
+      // Follow along in the transcript.
+      const lines = $('.mp-lines')
+      if (!$('.mp-panel').hidden) {
+        let current = null
+        for (const li of lines.children) if (Number(li.dataset.start) <= audio.currentTime) current = li
+        for (const li of lines.querySelectorAll('[aria-current]')) if (li !== current) li.removeAttribute('aria-current')
+        if (current && !current.hasAttribute('aria-current')) {
+          current.setAttribute('aria-current', 'true')
+          current.scrollIntoView({ block: 'nearest' })
+        }
+      }
+    })
+    seek.addEventListener('input', () => (seeking = true))
+    seek.addEventListener('change', () => {
+      if (audio.duration) audio.currentTime = (Number(seek.value) / 1000) * audio.duration
+      seeking = false
+    })
+    $('.mp-close').addEventListener('click', () => {
+      audio.pause()
+      audio.removeAttribute('src')
+      audio.load()
+      el.remove()
+      document.body.classList.remove('has-mini-player')
+      bar = null
+    })
+    $('.mp-tx').addEventListener('click', () => transcript(bar))
+    bar = { el, audio, $, track: null, polling: null }
+    return bar
+  }
+  const playInBar = (track) => {
+    const b = mini()
+    clearTimeout(b.polling)
+    b.track = track
+    b.$('.mp-title').textContent = track.title
+    b.$('.mp-sub').textContent = track.sub || ''
+    b.$('.mp-panel').hidden = true
+    b.$('.mp-lines').textContent = ''
+    const tx = b.$('.mp-tx')
+    tx.hidden = !(speechOn && track.transcript)
+    tx.setAttribute('aria-expanded', 'false')
+    b.audio.src = track.src
+    b.audio.play().catch(() => {})
+  }
+  const deviceHeaders = async () => {
+    const headers = { 'content-type': 'application/json' }
+    try {
+      const m = await fp()
+      headers['x-fingerprint'] = m.encodePayload(await m.getFingerprint())
+    } catch {}
+    return headers
+  }
+  // Transcript (src/speech.ts): written by c0mpute ten minutes at a time; lines appear as they are written.
+  const transcript = async (b) => {
+    const panel = b.$('.mp-panel')
+    const tx = b.$('.mp-tx')
+    if (!panel.hidden) {
+      panel.hidden = true
+      tx.setAttribute('aria-expanded', 'false')
+      return
+    }
+    panel.hidden = false
+    tx.setAttribute('aria-expanded', 'true')
+    const track = b.track
+    const note = b.$('.mp-panel-note')
+    const lines = b.$('.mp-lines')
+    const render = (body) => {
+      if (b.track !== track) return
+      lines.textContent = ''
+      for (const seg of body.segments || []) {
+        const li = document.createElement('li')
+        li.dataset.start = String(seg.start)
+        const t = document.createElement('button')
+        t.type = 'button'
+        t.className = 'mp-at'
+        t.textContent = clock(seg.start)
+        t.addEventListener('click', () => {
+          b.audio.currentTime = seg.start
+          b.audio.play().catch(() => {})
+        })
+        li.append(t, document.createTextNode(` ${seg.text}`))
+        lines.append(li)
+      }
+      if (body.status === 'pending') note.textContent = body.segments?.length ? `Writing… ${clock(body.seconds)} so far` : 'Transcribing on c0mpute… the first lines take about a minute.'
+      else if (body.status === 'failed') note.textContent = body.error || 'Transcript unavailable. Try again.'
+      else if (body.preview && !body.complete) {
+        note.textContent = 'Preview: the first five minutes. '
+        const a = document.createElement('a')
+        a.href = '/pass'
+        a.textContent = 'The pass transcribes whole episodes'
+        note.append(a)
+      } else note.textContent = body.complete ? '' : `Up to ${clock(body.seconds)}`
+    }
+    note.textContent = 'Asking c0mpute…'
+    try {
+      let res = await fetch('/api/transcript', { method: 'POST', headers: await deviceHeaders(), body: JSON.stringify({ audio: track.transcript }) })
+      let body = await res.json().catch(() => ({}))
+      if (!res.ok && res.status !== 202) {
+        note.textContent = `${body.error || 'Transcript unavailable.'} `
+        if (body.pass) {
+          const a = document.createElement('a')
+          a.href = body.pass
+          a.textContent = 'Get the pass'
+          note.append(a)
+        }
+        return
+      }
+      render(body)
+      const poll = async () => {
+        if (b.track !== track || body.status !== 'pending') return
+        res = await fetch(`/api/transcript?audio=${encodeURIComponent(track.transcript)}`)
+        body = await res.json().catch(() => ({ status: 'failed' }))
+        render(body)
+        if (body.status === 'pending') b.polling = setTimeout(poll, 4000)
+      }
+      if (body.status === 'pending') b.polling = setTimeout(poll, 4000)
+    } catch {
+      note.textContent = 'Transcript unavailable. Try again.'
+    }
+  }
+
+  // Play / Listen / Read here (src/players.ts): nothing loads until the button is pressed. Videos and books open
+  // under the result; sound goes to the mini player. Pressing an open one again closes it.
   const closePlayers = (except) => {
     for (const box of document.querySelectorAll('.player')) {
       if (box === except) continue
@@ -49,20 +214,25 @@
       box.remove()
     }
   }
-  const audioEl = (src) => {
-    const a = document.createElement('audio')
-    a.controls = true
-    a.autoplay = true
-    a.preload = 'none'
-    a.src = src
-    return a
+  const resultTitle = (el) => el.closest('li')?.querySelector('.title')?.textContent?.trim() || 'Untitled'
+  const upstreamOf = (src) => {
+    try {
+      return new URL(src, location.href).searchParams.get('u')
+    } catch {
+      return null
+    }
   }
-  const clock = (s) => (s >= 3600 ? `${Math.floor(s / 3600)}:${String(Math.floor((s % 3600) / 60)).padStart(2, '0')}` : `${Math.floor(s / 60)}`) + `:${String(s % 60).padStart(2, '0')}`
   for (const row of document.querySelectorAll('.play-row')) {
     row.hidden = false
     const button = row.querySelector('.play')
     const label = button.textContent
     button.dataset.label = label
+    const kind = button.dataset.kind
+    if (kind === 'audio') {
+      // A song preview: straight to the mini player.
+      button.addEventListener('click', () => playInBar({ src: button.dataset.src, title: resultTitle(button), sub: '30-second preview' }))
+      continue
+    }
     button.setAttribute('aria-expanded', 'false')
     button.addEventListener('click', async () => {
       const open = row.nextElementSibling?.classList.contains('player') ? row.nextElementSibling : null
@@ -73,60 +243,93 @@
         return
       }
       const box = document.createElement('div')
-      box.className = `player ${button.dataset.kind === 'embed' ? `shape-${button.dataset.shape}` : 'shape-audio-file'}`
+      box.className = `player ${kind === 'embed' ? `shape-${button.dataset.shape}` : 'shape-episodes'}`
       closePlayers(box)
       row.after(box)
       button.setAttribute('aria-expanded', 'true')
       button.textContent = 'Close'
-      const kind = button.dataset.kind
       if (kind === 'embed') {
         const frame = document.createElement('iframe')
         frame.src = button.dataset.src
-        frame.title = `Player: ${row.closest('li')?.querySelector('.title')?.textContent ?? 'media'}`
+        frame.title = `Player: ${resultTitle(row)}`
         // The site's own player needs to know the page it is on (YouTube refuses without), never the search.
         frame.referrerPolicy = 'strict-origin'
         frame.allow = 'autoplay; encrypted-media; fullscreen; picture-in-picture'
         frame.allowFullscreen = true
         frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox')
         box.append(frame)
-      } else if (kind === 'audio') {
-        box.append(audioEl(button.dataset.src))
-      } else if (kind === 'episodes') {
-        box.textContent = 'Loading episodes…'
-        try {
-          const res = await fetch(`/api/episodes?show=${encodeURIComponent(button.dataset.show)}`)
-          const body = await res.json()
-          if (!res.ok || !body.episodes?.length) throw new Error(body.error || 'No episodes found.')
-          box.textContent = ''
-          const now = document.createElement('p')
-          now.className = 'now-playing'
-          const player = audioEl(body.episodes[0].src)
-          const list = document.createElement('ol')
-          list.className = 'episodes'
-          const pick = (i) => {
-            now.textContent = body.episodes[i].title
-            for (const [j, li] of [...list.children].entries()) li.firstChild.setAttribute('aria-current', String(i === j))
-          }
-          body.episodes.forEach((e, i) => {
-            const li = document.createElement('li')
-            const b = document.createElement('button')
-            b.type = 'button'
-            b.textContent = e.seconds ? `${e.title} (${clock(e.seconds)})` : e.title
-            b.addEventListener('click', () => {
-              player.src = e.src
-              player.play().catch(() => {})
-              pick(i)
-            })
-            li.append(b)
-            list.append(li)
-          })
-          box.append(now, player, list)
-          pick(0)
-        } catch (error) {
-          box.textContent = error.message || 'Episodes unavailable. Try again.'
-          box.classList.add('err')
-        }
+        return
       }
+      // A podcast: its newest episodes as a short list; the one you pick plays in the mini player.
+      const showName = resultTitle(row)
+      box.textContent = 'Loading episodes…'
+      try {
+        const res = await fetch(`/api/episodes?show=${encodeURIComponent(button.dataset.show)}`)
+        const body = await res.json()
+        if (!res.ok || !body.episodes?.length) throw new Error(body.error || 'No episodes found.')
+        box.textContent = ''
+        const list = document.createElement('ol')
+        list.className = 'episodes'
+        const pick = (i) => {
+          const e = body.episodes[i]
+          playInBar({ src: e.src, title: e.title, sub: showName, transcript: upstreamOf(e.src) })
+          for (const [j, li] of [...list.children].entries()) li.firstChild.setAttribute('aria-current', String(i === j))
+        }
+        body.episodes.forEach((e, i) => {
+          const li = document.createElement('li')
+          const b = document.createElement('button')
+          b.type = 'button'
+          b.textContent = e.seconds ? `${e.title} (${clock(e.seconds)})` : e.title
+          b.addEventListener('click', () => pick(i))
+          li.append(b)
+          list.append(li)
+        })
+        box.append(list)
+        pick(0)
+      } catch (error) {
+        box.textContent = error.message || 'Episodes unavailable. Try again.'
+        box.classList.add('err')
+      }
+    })
+  }
+
+  // Listen (src/speech.ts): c0mpute reads the result aloud (its summary, or the start of the page) into the mini player.
+  for (const button of document.querySelectorAll('.hits .listen')) {
+    button.hidden = false
+    button.addEventListener('click', async () => {
+      const url = button.dataset.url
+      const box = button.parentElement.querySelector('.summary')
+      const track = (src) => ({ src, title: button.dataset.title || url, sub: `Read aloud by c0mpute · ${button.dataset.host || ''}` })
+      button.disabled = true
+      show(box, 'Reading it aloud on c0mpute… about half a minute.', 'wait')
+      const started = Date.now()
+      try {
+        let res = await fetch('/api/listen', { method: 'POST', headers: await deviceHeaders(), body: JSON.stringify({ url }) })
+        let body = await res.json().catch(() => ({}))
+        while ((res.ok || res.status === 202) && body.status === 'pending' && Date.now() - started < 180_000) {
+          await new Promise((r) => setTimeout(r, 3000))
+          res = await fetch(`/api/listen?url=${encodeURIComponent(url)}`)
+          body = await res.json().catch(() => ({}))
+        }
+        if (body.status === 'done') {
+          box.hidden = true
+          button.disabled = false
+          button.textContent = 'Listen again'
+          playInBar(track(body.src))
+          return
+        }
+        show(box, `${body.error || 'Listen unavailable. Try again.'} `, 'err')
+        if (body.pass || body.signIn) {
+          const a = document.createElement('a')
+          a.href = body.signIn && !body.pass ? body.signIn : body.pass
+          a.textContent = body.pass ? 'Get the pass' : 'Sign in'
+          box.append(a)
+        }
+      } catch {
+        show(box, 'Listen unavailable. Try again.', 'err')
+      }
+      button.disabled = false
+      button.textContent = 'Try again'
     })
   }
   // Summarize: ask pit.world for a c0mpute summary of one result, then poll until a node has written it.

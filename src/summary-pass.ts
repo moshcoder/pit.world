@@ -27,6 +27,11 @@ export type X402Sale =
 export const PASS_USD = 1
 export const PASS_DAYS = 7
 export const PASS_SUMMARIES = 1000
+/** The same pass also covers read-aloud (Listen) and whole-episode transcripts, each counted on its own. */
+export const PASS_LISTENS = 300
+export const PASS_TRANSCRIPTS = 30
+export type PassKind = 'summary' | 'listen' | 'transcript'
+export const PASS_LIMITS: Record<PassKind, number> = { summary: PASS_SUMMARIES, listen: PASS_LISTENS, transcript: PASS_TRANSCRIPTS }
 const WEEK = PASS_DAYS * 86_400_000
 
 type Invoice = { id: string; account_id: string; provider_id: string | null; url: string | null; status: string; description: string; created_at: number }
@@ -39,6 +44,9 @@ export type PassState = {
   /** Summaries started in the last 7 days. */
   used: number
   limit: number
+  /** Read-alouds and whole transcripts in the last 7 days, against their own limits. */
+  listens: { used: number; limit: number }
+  transcripts: { used: number; limit: number }
   /** An unpaid invoice to send the buyer back to, if there is one. */
   openInvoice: string | null
 }
@@ -63,6 +71,9 @@ export class SummaryPasses {
     // Only counts: an account and a time, never the page or the search.
     db.run('CREATE TABLE IF NOT EXISTS summary_pass_usage (account_id TEXT NOT NULL, at INTEGER NOT NULL)')
     db.run('CREATE INDEX IF NOT EXISTS summary_pass_usage_account_at ON summary_pass_usage (account_id, at)')
+    // What each use was (summary, listen, transcript): rows from before this column were all summaries.
+    const columns = db.query<{ name: string }, []>('PRAGMA table_info(summary_pass_usage)').all()
+    if (!columns.some((c) => c.name === 'kind')) db.run("ALTER TABLE summary_pass_usage ADD COLUMN kind TEXT NOT NULL DEFAULT 'summary'")
   }
 
   /** Checkout needs pay.agent; without it the pass can be shown but not bought. */
@@ -75,8 +86,10 @@ export class SummaryPasses {
     return row && row.paid_until > this.now() ? row.paid_until : null
   }
 
-  private used(accountId: string): number {
-    return this.db.query<{ n: number }, [string, number]>('SELECT COUNT(*) AS n FROM summary_pass_usage WHERE account_id = ? AND at > ?').get(accountId, this.now() - WEEK)!.n
+  private used(accountId: string, kind: PassKind = 'summary'): number {
+    return this.db
+      .query<{ n: number }, [string, number, string]>('SELECT COUNT(*) AS n FROM summary_pass_usage WHERE account_id = ? AND at > ? AND kind = ?')
+      .get(accountId, this.now() - WEEK, kind)!.n
   }
 
   private open(accountId: string): Invoice | null {
@@ -86,22 +99,34 @@ export class SummaryPasses {
   }
 
   state(accountId: string): PassState {
-    return { activeUntil: this.activeUntil(accountId), used: this.used(accountId), limit: PASS_SUMMARIES, openInvoice: this.open(accountId)?.url ?? null }
+    return {
+      activeUntil: this.activeUntil(accountId),
+      used: this.used(accountId),
+      limit: PASS_SUMMARIES,
+      listens: { used: this.used(accountId, 'listen'), limit: PASS_LISTENS },
+      transcripts: { used: this.used(accountId, 'transcript'), limit: PASS_TRANSCRIPTS },
+      openInvoice: this.open(accountId)?.url ?? null,
+    }
   }
 
   /**
    * One summary for a pass holder. 'none' when the account has no paid time (the caller falls back
    * to the free hourly allowance), 'over' when it has used 1,000 in the last 7 days.
    */
-  use(accountId: string): 'ok' | 'over' | 'none' {
+  use(accountId: string, kind: PassKind = 'summary'): 'ok' | 'over' | 'none' {
     if (!this.activeUntil(accountId)) return 'none'
-    return this.count(accountId)
+    return this.count(accountId, kind)
   }
 
-  private count(holder: string): 'ok' | 'over' {
+  /** Whether the account has paid time now, without counting a use. */
+  holds(accountId: string): boolean {
+    return !!this.activeUntil(accountId)
+  }
+
+  private count(holder: string, kind: PassKind = 'summary'): 'ok' | 'over' {
     return this.db.transaction(() => {
-      if (this.used(holder) >= PASS_SUMMARIES) return 'over' as const
-      this.db.run('INSERT INTO summary_pass_usage (account_id, at) VALUES (?, ?)', [holder, this.now()])
+      if (this.used(holder, kind) >= PASS_LIMITS[kind]) return 'over' as const
+      this.db.run('INSERT INTO summary_pass_usage (account_id, at, kind) VALUES (?, ?, ?)', [holder, this.now(), kind])
       return 'ok' as const
     })()
   }
@@ -131,9 +156,9 @@ export class SummaryPasses {
   }
 
   /** One summary on a bought token: 'none' when the token is not a live pass. */
-  async useToken(token: string | null | undefined): Promise<'ok' | 'over' | 'none'> {
+  async useToken(token: string | null | undefined, kind: PassKind = 'summary'): Promise<'ok' | 'over' | 'none'> {
     const held = await this.tokenHolder(token)
-    return held ? this.count(held.holder) : 'none'
+    return held ? this.count(held.holder, kind) : 'none'
   }
 
   stateOfToken = async (token: string) => {

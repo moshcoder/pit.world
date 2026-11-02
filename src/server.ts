@@ -35,7 +35,7 @@ import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
 import { SESSION_COOKIE, type Account } from './accounts.js'
-import { PASS_DAYS, PASS_HEADER, PASS_RESOURCE_PATH, PASS_SUMMARIES, PASS_USD, SummaryPasses } from './summary-pass.js'
+import { PASS_DAYS, PASS_HEADER, PASS_LIMITS, PASS_RESOURCE_PATH, PASS_SUMMARIES, PASS_USD, SummaryPasses } from './summary-pass.js'
 import { paymentRequiredHeader } from '@profullstack/x402-gateway'
 import { dayRange, nightlyStats } from './admin-stats.js'
 import { mountSummaryPass, passSection } from './summary-pass-routes.js'
@@ -50,6 +50,8 @@ import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 import { AudioRegistry, embedHosts, FIXED_FRAME_HOSTS, proxyAudio, showEpisodes, showPage } from './players.js'
+import { readableText, Speech, SpeechClient } from './speech.js'
+import { summaryKey } from './summarize.js'
 import { Summarizer, SummaryStore } from './summarize.js'
 import { createThrottle } from '@profullstack/throttle'
 import { Database } from 'bun:sqlite'
@@ -109,6 +111,10 @@ export type Deps = {
   votes?: Votes
   /** Audio files /audio may stream (players.ts); a fresh in-memory registry by default. */
   audio?: AudioRegistry
+  /** Listen (read aloud) and Transcript through c0mpute's speech workers (src/speech.ts); off without a gateway. */
+  speech?: Speech
+  /** Free read-alouds and transcript previews a visitor may start per hour. */
+  speechLimits?: { listenAnon: number; listenSignedIn: number; transcriptAnon: number; transcriptSignedIn: number; anonTotal: number }
   /** DNS for /audio's public-address check; injectable for tests. */
   resolve?: (host: string) => Promise<string[]>
 }
@@ -459,7 +465,7 @@ export function createApp(deps: Deps) {
       )
       const frameHosts = embedHosts(result?.hits.map((h) => h.player) ?? [])
       if (frameHosts.length) c.header('x-frame-hosts', frameHosts.join(' '))
-      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     // Votes nudge the order a bounded number of places; the featured network site leading the results keeps its place.
@@ -479,7 +485,7 @@ export function createApp(deps: Deps) {
       back,
       query,
     )
-    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, summaries: !!deps.summarizer?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed, view) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed, view) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
   })
 
   // --- votes -------------------------------------------------------------------
@@ -761,6 +767,115 @@ export function createApp(deps: Deps) {
     }
   })
 
+  // --- Listen and Transcript (src/speech.ts) ------------------------------------------
+  // Free: a few an hour (transcripts as a five-minute preview). The $1/week pass lifts that to its own weekly
+  // counts (summary-pass.ts PASS_LIMITS). Anything already written is free and instant for everyone.
+  const speech = deps.speech
+  const speechLimits = deps.speechLimits ?? { listenAnon: 3, listenSignedIn: 10, transcriptAnon: 2, transcriptSignedIn: 6, anonTotal: 120 }
+  const listenAnon = hourly(speechLimits.listenAnon)
+  const listenAcct = hourly(speechLimits.listenSignedIn)
+  const transcriptAnon = hourly(speechLimits.transcriptAnon)
+  const transcriptAcct = hourly(speechLimits.transcriptSignedIn)
+  const speechAnonTotal = hourly(speechLimits.anonTotal)
+  /** Who is asking and what they hold: an x402 pass token, a signed-in account's pass, or nothing. */
+  const speechHolder = async (c: Context<Env>) => {
+    const passes = deps.summaryPasses
+    const token = c.req.header(PASS_HEADER) || null
+    if (token && passes?.x402Enabled && (await passes.tokenHolder(token))) return { kind: 'token' as const, token, me: null }
+    const me = summaryAccount(c)
+    if (me && passes?.holds(me.id)) return { kind: 'pass' as const, token: null, me }
+    return { kind: 'free' as const, token: null, me }
+  }
+  /** Counts one use against the pass, or the free hourly allowance. Returns a response when refused. */
+  const speechAllowance = async (c: Context<Env>, what: 'listen' | 'transcript', holder: Awaited<ReturnType<typeof speechHolder>>) => {
+    const passes = deps.summaryPasses
+    const noun = what === 'listen' ? 'read-alouds' : 'whole transcripts'
+    if (holder.kind !== 'free' && passes) {
+      const used = holder.kind === 'token' ? await passes.useToken(holder.token, what) : passes.use(holder.me!.id, what)
+      if (used === 'over') return c.json({ status: 'limited', error: `That is ${PASS_LIMITS[what]} ${noun} in ${PASS_DAYS} days, the pass's limit. Older ones free up as they pass 7 days.` }, 429)
+      return null
+    }
+    const offer = deps.summaryPasses ? `, or $${PASS_USD} a week for ${PASS_LIMITS[what]}` : ''
+    if (holder.me) {
+      if (await over(what === 'listen' ? listenAcct : transcriptAcct, `${what}:acct:${holder.me.id}`)) {
+        c.header('retry-after', '3600')
+        return c.json({ status: 'limited', pass: '/pass', error: `That is the free ${what === 'listen' ? 'read-alouds' : 'transcript previews'} for this hour. More in an hour${offer}.` }, 429)
+      }
+      return null
+    }
+    const ip = c.env?.ip || 'unknown'
+    if ((await over(what === 'listen' ? listenAnon : transcriptAnon, `${what}:ip:${ip}`)) || (await over(speechAnonTotal, 'speech:anon'))) {
+      c.header('retry-after', '3600')
+      return c.json({ status: 'limited', pass: '/pass', signIn: '/account', error: `That is the free ${what === 'listen' ? 'read-alouds' : 'transcript previews'} for this hour. Sign in for more${offer}.` }, 429)
+    }
+    return null
+  }
+
+  app.get('/api/listen', (c) => {
+    if (!speech?.enabled) return c.json({ error: 'Listen is off on this server.' }, 503)
+    const url = summaryUrl(c.req.query('url'))
+    if (!url) return c.json({ error: 'url must be an http(s) address' }, 400)
+    return c.json(speech.listenStatus(url, summaryKey(url)))
+  })
+  app.post('/api/listen', async (c) => {
+    if (!speech?.enabled) return c.json({ error: 'Listen is off on this server.' }, 503)
+    const body: any = (c.req.header('content-type') ?? '').includes('json') ? await c.req.json().catch(() => ({})) : await c.req.parseBody().catch(() => ({}))
+    const url = summaryUrl(body?.url ?? c.req.query('url'))
+    if (!url) return c.json({ error: 'url must be an http(s) address' }, 400)
+    const key = summaryKey(url)
+    const now = speech.listenStatus(url, key)
+    if (now.status === 'done') return c.json(now)
+    if (now.status === 'pending') return c.json(now, 202)
+    if (!summarizer?.known(url)) return c.json({ status: 'refused', url, error: 'Only a page from a recent pit.world result can be read aloud. Search for it first.' }, 404)
+    const refused = await speechAllowance(c, 'listen', await speechHolder(c))
+    if (refused) return refused
+    const title = summarizer.title(url) ?? ''
+    const state = speech.startListen(url, key, async () => {
+      // The summary when one is written; otherwise the start of the page itself.
+      const written = summarizer.status(url)
+      if (written.status === 'done') return { text: readableText(title, written.summary), source: 'summary' }
+      const page = await summarizer.pageText(url)
+      if (page.replace(/\s+/g, ' ').length < 80) throw new Error('could not read the page')
+      return { text: readableText(title, page), source: 'page' }
+    })
+    return c.json(state, state.status === 'done' ? 200 : 202)
+  })
+  app.get('/api/listen/audio/:file', async (c) => {
+    const file = speech?.listenFile(c.req.param('file'))
+    if (!file || !(await file.exists())) return c.notFound()
+    const size = file.size
+    const range = /^bytes=(\d*)-(\d*)$/.exec(c.req.header('range') ?? '')
+    const headers = { 'content-type': 'audio/mpeg', 'accept-ranges': 'bytes', 'cache-control': 'public, max-age=86400' }
+    if (range && (range[1] || range[2])) {
+      const start = range[1] ? Number(range[1]) : Math.max(0, size - Number(range[2]))
+      const end = range[1] && range[2] ? Math.min(Number(range[2]), size - 1) : size - 1
+      if (start >= size || start > end) return c.body(null, 416, { 'content-range': `bytes */${size}` })
+      return c.body(await file.slice(start, end + 1).arrayBuffer(), 206, { ...headers, 'content-range': `bytes ${start}-${end}/${size}`, 'content-length': String(end - start + 1) })
+    }
+    return c.body(await file.arrayBuffer(), 200, { ...headers, 'content-length': String(size) })
+  })
+
+  const transcriptAudio = (raw: unknown): string | null => (typeof raw === 'string' && raw.length < 2000 && audio.allowed(raw) ? raw : null)
+  app.get('/api/transcript', (c) => {
+    if (!speech?.enabled) return c.json({ error: 'Transcripts are off on this server.' }, 503)
+    const src = c.req.query('audio')
+    if (typeof src !== 'string' || src.length > 2000) return c.json({ error: 'audio must be an episode address' }, 400)
+    return c.json(speech.transcriptStatus(src))
+  })
+  app.post('/api/transcript', async (c) => {
+    if (!speech?.enabled) return c.json({ error: 'Transcripts are off on this server.' }, 503)
+    const body: any = (c.req.header('content-type') ?? '').includes('json') ? await c.req.json().catch(() => ({})) : await c.req.parseBody().catch(() => ({}))
+    const src = transcriptAudio(body?.audio ?? c.req.query('audio'))
+    if (!src) return c.json({ status: 'refused', error: 'Only an episode pit.world is playing can be transcribed. Open its episodes first.' }, 404)
+    const holder = await speechHolder(c)
+    const full = holder.kind !== 'free'
+    // Already written, or being written, as far as this visitor may read: free.
+    if (speech.transcriptCovered(src, full)) return c.json({ ...speech.transcriptStatus(src), pass: full })
+    const refused = await speechAllowance(c, 'transcript', holder)
+    if (refused) return refused
+    return c.json({ ...speech.startTranscript(src, full), pass: full }, 202)
+  })
+
   // --- players (src/players.ts) ----------------------------------------------------
   // Podcast episodes and song previews play through pit.world, so the publisher never sees the visitor. Only
   // files pit.world handed out: an iTunes preview, or an episode from a p0dcasters playlist it just read.
@@ -961,8 +1076,14 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_PAGE_RELAY_URL !== undefined ? { pageRelayUrl: env.PIT_PAGE_RELAY_URL } : {}),
     store: new SummaryStore(env.PIT_SUMMARIES_DB ?? `${dataDir}/summaries.db`),
   })
+  // Listen and Transcript: c0mpute's speech gateway (on dev2, 127.0.0.1:8818, the c0mpute-speech compose project).
+  const speech = new Speech(env.C0MPUTE_SPEECH_URL && env.C0MPUTE_SPEECH_TOKEN ? new SpeechClient(env.C0MPUTE_SPEECH_URL, env.C0MPUTE_SPEECH_TOKEN) : null, {
+    dbPath: env.PIT_SPEECH_DB ?? `${dataDir}/speech.db`,
+    dir: env.PIT_SPEECH_DIR ?? `${dataDir}/speech`,
+    ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
+  })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, speech, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
