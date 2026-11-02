@@ -93,6 +93,21 @@ function upstream(options: { serperFails?: boolean; serperBroke?: boolean } = {}
       return json({ data: [{ handle: 'chovy', name: 'Chovy TV', is_live: false, subscriber_count: 12, description: 'Cats and code' }] })
     if (url.startsWith('https://nixamp.com/api/directory'))
       return json({ streams: [{ name: 'server1', url: 'https://server1.chovy.nixamp.com:4321/view/k', playing: true, nowPlaying: 'Cat radio', tracks: 5719, channels: ['CNN'] }] })
+    if (url.startsWith('https://api.openalex.org/works'))
+      return json({
+        results: [
+          {
+            id: 'https://openalex.org/W1',
+            display_name: 'Cats in history',
+            publication_year: 2001,
+            cited_by_count: 383,
+            doi: 'https://doi.org/10.1/cats',
+            primary_location: { landing_page_url: 'https://journal.example/w1', source: { display_name: 'Journal of Cats' } },
+            authorships: [{ author: { display_name: 'Ann Lee' } }, { author: { display_name: 'Bo Chen' } }],
+            abstract_inverted_index: { Cats: [0], are: [1], studied: [2], 'here.': [3] },
+          },
+        ],
+      })
     if (url.startsWith('https://openlibrary.org/search.json'))
       return json({
         docs: [
@@ -659,6 +674,18 @@ describe('categories: shopping, news, books, podcasts, blogs, places, scholar', 
     expect(html).toContain('A Smith - Journal of Cats, 2019 · 2019 · Cited by 120')
   })
 
+  it('asks OpenAlex for scholar results when Google fails', async () => {
+    const { request, calls } = app({ serperFails: true })
+    const res = await request('/search?q=cats&t=scholar')
+    const html = await res.text()
+    expect(res.status).toBe(200)
+    expect(calls.some((c) => c.url.startsWith('https://api.openalex.org/works?') && c.url.includes('search=cats'))).toBe(true)
+    expect(html).toContain('href="https://doi.org/10.1/cats"')
+    expect(html).toContain('Ann Lee, Bo Chen - Journal of Cats · 2001 · Cited by 383')
+    expect(html).toContain('<p>Cats are studied here.</p>')
+    expect(html).toContain('Scholar from OpenAlex')
+  })
+
   it('serves every new tab through the API too', async () => {
     const { request } = app()
     for (const t of ['shopping', 'news', 'books', 'podcasts', 'blogs', 'places', 'scholar']) {
@@ -672,12 +699,12 @@ describe('categories: shopping, news, books, podcasts, blogs, places, scholar', 
 
   it('says Google-only tabs are unavailable without a Google key, and keeps the free ones working', async () => {
     const { request } = app({ keys: { linkup: 'LINKUP-KEY' } })
-    for (const t of ['shopping', 'places', 'scholar']) {
+    for (const t of ['shopping', 'places']) {
       const res = await request(`/search?q=cats&t=${t}`)
       expect(res.status).toBe(503)
       expect(await res.text()).toContain('unavailable for a moment')
     }
-    for (const t of ['books', 'podcasts', 'blogs']) expect((await request(`/search?q=cats&t=${t}`)).status).toBe(200)
+    for (const t of ['books', 'podcasts', 'blogs', 'news', 'scholar']) expect((await request(`/search?q=cats&t=${t}`)).status).toBe(200)
   })
 
   it('offers no PairUX or nixamp strip outside Videos, Music and Live', async () => {
