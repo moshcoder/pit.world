@@ -15,6 +15,7 @@
  */
 import type { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
+import type { ReaderHealth } from './reader-health.js'
 
 export const KINDS = ['result', 'featured', 'ad', 'promo', 'blog', 'listing'] as const
 export type VoteKind = (typeof KINDS)[number]
@@ -83,6 +84,9 @@ export const resultItem = (url: string) => {
 }
 
 export class Votes {
+  /** Reader health (src/reader-health.ts), when the server has it: one more bounded term in nudges(). */
+  health: ReaderHealth | null = null
+
   constructor(
     readonly db: Database,
     private readonly secret: string,
@@ -95,6 +99,36 @@ export class Votes {
       PRIMARY KEY (visitor, item, qkey))`)
     db.run('CREATE INDEX IF NOT EXISTS votes_item_qkey ON votes (item, qkey)')
     db.run('CREATE INDEX IF NOT EXISTS votes_domain ON votes (domain, kind)')
+    // The signed-in account a vote was cast from ('' when anonymous), for /account/votes. Additive.
+    const cols = db.query('PRAGMA table_info(votes)').all() as Array<{ name: string }>
+    if (!cols.some((c) => c.name === 'account')) db.run("ALTER TABLE votes ADD COLUMN account TEXT NOT NULL DEFAULT ''")
+    db.run("CREATE INDEX IF NOT EXISTS votes_account ON votes (account, at) WHERE account <> ''")
+  }
+
+  /**
+   * A signed-in account's votes, newest first. The search a result vote was cast on is only ever a
+   * keyed hash, so history says "on a search", never which words.
+   */
+  history(account: string, options: { limit?: number; before?: number } = {}): Array<{ item: string; kind: VoteKind; target: string; qkey: string; value: number; at: number }> {
+    if (!account) return []
+    const limit = Math.min(200, Math.max(1, Math.trunc(options.limit ?? 50)))
+    const before = options.before ?? Number.MAX_SAFE_INTEGER
+    const rows = this.db
+      .query("SELECT item, kind, qkey, value, at FROM votes WHERE account = ? AND account <> '' AND at < ? ORDER BY at DESC LIMIT ?")
+      .all(account, before, limit) as Array<{ item: string; kind: VoteKind; qkey: string; value: number; at: number }>
+    return rows.map((r) => ({ ...r, target: r.item.slice(r.kind.length + 1) }))
+  }
+
+  /** How many votes an account has standing. */
+  countFor(account: string): number {
+    if (!account) return 0
+    return (this.db.query("SELECT COUNT(*) AS n FROM votes WHERE account = ? AND account <> ''").get(account) as { n: number }).n
+  }
+
+  /** Takes back one of an account's votes from its history (any device). True when there was one. */
+  undo(account: string, item: string, qkey: string): boolean {
+    if (!account) return false
+    return this.db.query("DELETE FROM votes WHERE account = ? AND account <> '' AND item = ? AND qkey = ?").run(account, item, qkey).changes > 0
   }
 
   /** A keyed hash of the normalized search, so per-search tallies need no stored words. '' for no search. */
@@ -107,17 +141,24 @@ export class Votes {
    * Cast, change or take back a vote. `value` 1 or -1; 0 (or the same value
    * again with `toggle`) removes it. Only result votes carry a search.
    */
-  cast(o: { visitor: string; kind: VoteKind; item: string; domain: string; value: number; query?: string | null; toggle?: boolean }): { value: number } & Tally {
+  cast(o: { visitor: string; kind: VoteKind; item: string; domain: string; value: number; query?: string | null; toggle?: boolean; account?: string | null }): { value: number; qkey: string } & Tally {
     const qkey = o.kind === 'result' ? this.qkey(o.query) : ''
     const prev = this.db.query('SELECT value FROM votes WHERE visitor = ? AND item = ? AND qkey = ?').get(o.visitor, o.item, qkey) as { value: number } | null
     let value = Math.sign(o.value)
     if (o.toggle && prev && prev.value === value) value = 0
-    if (value === 0) this.db.query('DELETE FROM votes WHERE visitor = ? AND item = ? AND qkey = ?').run(o.visitor, o.item, qkey)
-    else
+    if (value === 0) {
+      this.db.query('DELETE FROM votes WHERE visitor = ? AND item = ? AND qkey = ?').run(o.visitor, o.item, qkey)
+      // Taken back while signed in: the same vote cast from another device of the account goes too.
+      if (o.account) this.undo(o.account, o.item, qkey)
+    } else
       this.db
-        .query('INSERT INTO votes (visitor, item, qkey, kind, domain, value, at) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (visitor, item, qkey) DO UPDATE SET value = excluded.value, at = excluded.at')
-        .run(o.visitor, o.item, qkey, o.kind, o.domain, value, this.now())
-    return { value, ...this.tally(o.item, o.kind === 'result' ? o.query : undefined) }
+        .query(
+          `INSERT INTO votes (visitor, item, qkey, kind, domain, value, at, account) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT (visitor, item, qkey) DO UPDATE SET value = excluded.value, at = excluded.at,
+             account = CASE WHEN excluded.account <> '' THEN excluded.account ELSE votes.account END`,
+        )
+        .run(o.visitor, o.item, qkey, o.kind, o.domain, value, this.now(), o.account ?? '')
+    return { value, qkey, ...this.tally(o.item, o.kind === 'result' ? o.query : undefined) }
   }
 
   /** One item's tally: on one search when `query` is given (results), else across everything. */
@@ -184,14 +225,18 @@ export class Votes {
   nudges(urls: string[], query: string): Map<string, number> {
     const items = urls.map((u) => resultItem(u))
     const byItem = this.tallies(items.filter((i): i is string => Boolean(i)), { query })
-    const byDomain = this.domainTallies(items.map((i) => (i ? i.slice('result:'.length).split(/[/?]/)[0]! : '')))
+    const domains = items.map((i) => (i ? i.slice('result:'.length).split(/[/?]/)[0]! : ''))
+    const byDomain = this.domainTallies(domains)
+    // Sites that turn the page reader away (src/reader-health.ts): a separate signal, never a vote.
+    const byHealth = this.health?.moves(domains) ?? new Map<string, number>()
     const out = new Map<string, number>()
     urls.forEach((url, i) => {
       const item = items[i]
       if (!item) return
       const q = byItem.get(item)?.score ?? 0
-      const d = byDomain.get(item.slice('result:'.length).split(/[/?]/)[0]!)?.score ?? 0
-      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * q + DOMAIN_WEIGHT * d))
+      const d = byDomain.get(domains[i]!)?.score ?? 0
+      const h = byHealth.get(domains[i]!) ?? 0
+      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * q + DOMAIN_WEIGHT * d + h))
       if (move) out.set(url, move)
     })
     return out

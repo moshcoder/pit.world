@@ -405,6 +405,18 @@ body.has-mini-player { padding-bottom: 72px; }
 .mini-player .mp-title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mini-player .mp-sub { color: var(--muted); font: 11px var(--mono); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .mini-player .mp-seek { flex: 1; min-width: 60px; accent-color: var(--accent); }
+/* @profullstack/player's audio bar fills the space the old seek bar had. */
+.mini-player .mp-stage { flex: 1; min-width: 160px; }
+.mini-player .mp-stage audio { width: 100%; }
+.player-tools { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.player-tools button { appearance: none; border: 1px solid var(--line); background: none; color: var(--text); border-radius: 6px; padding: 3px 10px; font: 13px var(--sans, inherit); cursor: pointer; }
+.player-tools button:hover, .player-tools button:focus-visible { color: var(--accent); }
+/* Our full screen: the whole box, the frame filling it. */
+.player:fullscreen { max-width: none; margin: 0; padding: 0; background: #000; display: flex; flex-direction: column; }
+.player:fullscreen iframe { flex: 1; width: 100%; height: auto; aspect-ratio: auto; border: 0; border-radius: 0; }
+.player:fullscreen .player-tools { position: absolute; top: 8px; right: 8px; opacity: 0; transition: opacity 0.2s; }
+.player:fullscreen:hover .player-tools, .player:fullscreen .player-tools:focus-within { opacity: 1; }
+.player:fullscreen .player-tools button { color: #fff; border-color: rgba(255, 255, 255, 0.4); background: rgba(0, 0, 0, 0.5); }
 .mini-player .mp-time { font: 11px var(--mono); color: var(--muted); white-space: nowrap; }
 .mini-player .mp-tx { border: 1px solid var(--line); font: 12px var(--mono); }
 .mini-player .mp-tx[aria-expanded="true"] { border-color: var(--accent); color: var(--accent); }

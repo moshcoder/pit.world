@@ -46,7 +46,40 @@
     const r = String(s % 60).padStart(2, '0')
     return h ? `${h}:${String(m).padStart(2, '0')}:${r}` : `${m}:${r}`
   }
+  // The mini player is @profullstack/player (src/player-bundle.ts), loaded the first time something plays.
+  // Its bar shows the right button for what is happening (never a pause button over a stopped track),
+  // hides itself while playing, and is the same player every Profullstack site uses.
+  let playerModule = null
+  const loadPlayer = () => {
+    if (!playerModule) {
+      if (!document.querySelector('link[data-pf-player]')) {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = '/pf-player.css'
+        link.dataset.pfPlayer = ''
+        document.head.append(link)
+      }
+      playerModule = import('/pf-player.js').catch((error) => {
+        playerModule = null
+        throw error
+      })
+    }
+    return playerModule
+  }
   let bar = null
+  const stopBar = () => {
+    if (!bar) return
+    try {
+      bar.player?.destroy()
+    } catch {}
+    bar.player = null
+    if (bar.audio) {
+      bar.audio.pause()
+      bar.audio.removeAttribute('src')
+      bar.audio.load()
+    }
+    bar.audio = null
+  }
   const mini = () => {
     if (bar) return bar
     const el = document.createElement('section')
@@ -54,63 +87,36 @@
     el.setAttribute('aria-label', 'Player')
     // threatcrush-disable-next-line js-unescaped-html-sink  a fixed literal with no interpolation; titles and transcript text are set with textContent
     el.innerHTML = `<div class="mp-panel" hidden><div class="mp-panel-head"><b>Transcript</b><span class="mp-panel-note"></span></div><ol class="mp-lines"></ol></div>
-<div class="mp-row"><button type="button" class="mp-toggle" aria-label="Pause">❚❚</button>
-<div class="mp-meta"><span class="mp-title"></span><span class="mp-sub"></span></div>
-<input type="range" class="mp-seek" min="0" max="1000" value="0" step="1" aria-label="Seek">
-<span class="mp-time">0:00</span>
+<div class="mp-row"><div class="mp-meta"><span class="mp-title"></span><span class="mp-sub"></span></div>
+<div class="mp-stage"></div>
 <button type="button" class="mp-tx" hidden aria-expanded="false">Transcript</button>
 <button type="button" class="mp-close" aria-label="Close player">✕</button></div>`
-    const audio = document.createElement('audio')
-    audio.preload = 'none'
-    el.append(audio)
     document.body.append(el)
     document.body.classList.add('has-mini-player')
     const $ = (sel) => el.querySelector(sel)
-    const toggle = $('.mp-toggle')
-    const seek = $('.mp-seek')
-    let seeking = false
-    toggle.addEventListener('click', () => (audio.paused ? audio.play().catch(() => {}) : audio.pause()))
-    audio.addEventListener('play', () => {
-      toggle.textContent = '❚❚'
-      toggle.setAttribute('aria-label', 'Pause')
-    })
-    audio.addEventListener('pause', () => {
-      toggle.textContent = '▶'
-      toggle.setAttribute('aria-label', 'Play')
-    })
-    audio.addEventListener('timeupdate', () => {
-      if (!seeking && audio.duration) seek.value = String(Math.round((audio.currentTime / audio.duration) * 1000))
-      $('.mp-time').textContent = audio.duration && Number.isFinite(audio.duration) ? `${clock(audio.currentTime)} / ${clock(audio.duration)}` : clock(audio.currentTime)
-      // Follow along in the transcript.
-      const lines = $('.mp-lines')
-      if (!$('.mp-panel').hidden) {
-        let current = null
-        for (const li of lines.children) if (Number(li.dataset.start) <= audio.currentTime) current = li
-        for (const li of lines.querySelectorAll('[aria-current]')) if (li !== current) li.removeAttribute('aria-current')
-        if (current && !current.hasAttribute('aria-current')) {
-          current.setAttribute('aria-current', 'true')
-          current.scrollIntoView({ block: 'nearest' })
-        }
-      }
-    })
-    seek.addEventListener('input', () => (seeking = true))
-    seek.addEventListener('change', () => {
-      if (audio.duration) audio.currentTime = (Number(seek.value) / 1000) * audio.duration
-      seeking = false
-    })
     $('.mp-close').addEventListener('click', () => {
-      audio.pause()
-      audio.removeAttribute('src')
-      audio.load()
+      stopBar()
       el.remove()
       document.body.classList.remove('has-mini-player')
       bar = null
     })
     $('.mp-tx').addEventListener('click', () => transcript(bar))
-    bar = { el, audio, $, track: null, polling: null }
+    bar = { el, audio: null, player: null, $, track: null, polling: null }
     return bar
   }
-  const playInBar = (track) => {
+  // Follow along in the transcript while it plays.
+  const follow = (b, audio) =>
+    audio.addEventListener('timeupdate', () => {
+      if (b.$('.mp-panel').hidden) return
+      let current = null
+      for (const li of b.$('.mp-lines').children) if (Number(li.dataset.start) <= audio.currentTime) current = li
+      for (const li of b.$('.mp-lines').querySelectorAll('[aria-current]')) if (li !== current) li.removeAttribute('aria-current')
+      if (current && !current.hasAttribute('aria-current')) {
+        current.setAttribute('aria-current', 'true')
+        current.scrollIntoView({ block: 'nearest' })
+      }
+    })
+  const playInBar = async (track) => {
     const b = mini()
     clearTimeout(b.polling)
     b.track = track
@@ -121,8 +127,29 @@
     const tx = b.$('.mp-tx')
     tx.hidden = !(speechOn && track.transcript)
     tx.setAttribute('aria-expanded', 'false')
-    b.audio.src = track.src
-    b.audio.play().catch(() => {})
+    // One thing plays at a time: an open video under a result closes when sound starts here.
+    closePlayers(null, 'video')
+    stopBar()
+    const stage = b.$('.mp-stage')
+    stage.textContent = ''
+    try {
+      const { createPlayer } = await loadPlayer()
+      if (b.track !== track || bar !== b) return
+      const root = document.createElement('div')
+      stage.append(root)
+      b.player = createPlayer(root, { src: track.src, kind: 'audio', audio: true, autoplay: true, unplayableSubject: 'this track' })
+      b.audio = b.player.media
+    } catch {
+      // The player bundle did not load: the browser's own controls still play it.
+      if (b.track !== track || bar !== b) return
+      const audio = document.createElement('audio')
+      audio.controls = true
+      audio.src = track.src
+      stage.append(audio)
+      b.audio = audio
+      audio.play().catch(() => {})
+    }
+    follow(b, b.audio)
   }
   const deviceHeaders = async () => {
     const headers = { 'content-type': 'application/json' }
@@ -157,6 +184,7 @@
         t.className = 'mp-at'
         t.textContent = clock(seg.start)
         t.addEventListener('click', () => {
+          if (!b.audio) return
           b.audio.currentTime = seg.start
           b.audio.play().catch(() => {})
         })
@@ -203,8 +231,8 @@
 
   // Play / Listen / Read here (src/players.ts): nothing loads until the button is pressed. Videos and books open
   // under the result; sound goes to the mini player. Pressing an open one again closes it.
-  const closePlayers = (except) => {
-    for (const box of document.querySelectorAll('.player')) {
+  const closePlayers = (except, shape) => {
+    for (const box of document.querySelectorAll(shape ? `.player.shape-${shape}` : '.player')) {
       if (box === except) continue
       const b = box.previousElementSibling?.querySelector?.('.play')
       if (b) {
@@ -258,6 +286,39 @@
         frame.allowFullscreen = true
         frame.setAttribute('sandbox', 'allow-scripts allow-same-origin allow-presentation allow-popups allow-popups-to-escape-sandbox')
         box.append(frame)
+        if (button.dataset.shape === 'video') {
+          // Sound in the mini player stops when a video starts: two things playing at once is nobody's intent.
+          stopBar()
+          // Our own Full screen, on pit.world's side of the frame: it works whatever the embedded
+          // player allows, and double-clicking the frame edge or pressing f does the same.
+          const tools = document.createElement('div')
+          tools.className = 'player-tools'
+          const full = document.createElement('button')
+          full.type = 'button'
+          full.className = 'player-full'
+          full.textContent = 'Full screen'
+          const goFull = async () => {
+            try {
+              if (document.fullscreenElement) return await document.exitFullscreen()
+              if (box.requestFullscreen) return await box.requestFullscreen({ navigationUI: 'hide' })
+              if (box.webkitRequestFullscreen) return box.webkitRequestFullscreen()
+            } catch {}
+            full.textContent = 'Use the player’s own full screen button'
+          }
+          full.addEventListener('click', goFull)
+          box.addEventListener('dblclick', (event) => {
+            if (event.target === box) goFull()
+          })
+          box.tabIndex = -1
+          box.addEventListener('keydown', (event) => {
+            if (event.key === 'f' && event.target === box) goFull()
+          })
+          document.addEventListener('fullscreenchange', () => {
+            full.textContent = document.fullscreenElement === box ? 'Exit full screen' : 'Full screen'
+          })
+          tools.append(full)
+          box.append(tools)
+        }
         return
       }
       // A podcast: its newest episodes as a short list; the one you pick plays in the mini player.

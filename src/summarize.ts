@@ -254,62 +254,114 @@ export function markdownText(markdown: string): string {
 const INTERSTITIAL = /(not a (ro)?bot|verify(ing)? you are human|just a moment|enable javascript and cookies|attention required)/i
 
 /**
- * A public page's text through the TronBrowser relay (MCP tools/call fetch_page), which renders
- * JavaScript and gets past most bot walls. "" when the address is not public, the relay fails, or
- * all it got was a bot check.
+ * How a read went, from pit.world's side of it:
+ * - `ok`: there is text.
+ * - `blocked`: the site answered, but with a bot wall, a refusal (401/403/429/451/503) or no text.
+ * - `down`: the reader itself failed (relay unreachable, timed out, 5xx; a network error on a direct fetch).
+ * - `private`: the address is not public; nothing was read.
+ * Only `blocked` is the site's doing, so only `blocked` ever counts against it (src/reader-health.ts).
  */
-export async function relayPageText(raw: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<string> {
+export type ReadState = 'ok' | 'blocked' | 'down' | 'private'
+export type Read = { text: string; state: ReadState }
+
+/** Statuses that mean the site turned the reader away, not that it is broken for everyone. */
+const REFUSED = new Set([401, 403, 429, 451, 503])
+
+/** Enough words to summarize or read aloud. */
+const enough = (text: string) => text.replace(/\s+/g, ' ').length >= 80
+
+/** A public page's text through the TronBrowser relay (MCP tools/call fetch_page), and how the read went. */
+export async function relayRead(raw: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<Read> {
   const url = new URL(raw)
-  if (!(await isPublicPageUrl(url, options.resolve))) return ''
-  const response = await (options.fetch ?? fetch)(options.relayUrl || DEFAULT_PAGE_RELAY_URL, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
-    body: JSON.stringify({
-      jsonrpc: '2.0',
-      id: 1,
-      method: 'tools/call',
-      params: { name: 'fetch_page', arguments: { url: url.href, format: 'markdown', max_chars: 60_000, timeout_s: PAGE_RELAY_ENGINE_S } },
-    }),
-    signal: AbortSignal.timeout(PAGE_RELAY_TIMEOUT_MS),
-  })
-  if (!response.ok) return ''
+  if (!(await isPublicPageUrl(url, options.resolve))) return { text: '', state: 'private' }
+  let response: Response
+  try {
+    response = await (options.fetch ?? fetch)(options.relayUrl || DEFAULT_PAGE_RELAY_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'tools/call',
+        params: { name: 'fetch_page', arguments: { url: url.href, format: 'markdown', max_chars: 60_000, timeout_s: PAGE_RELAY_ENGINE_S } },
+      }),
+      signal: AbortSignal.timeout(PAGE_RELAY_TIMEOUT_MS),
+    })
+  } catch {
+    return { text: '', state: 'down' }
+  }
+  if (!response.ok) return { text: '', state: 'down' }
   const body = (await response.json().catch(() => null)) as { error?: unknown; result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } } | null
-  if (!body || body.error || body.result?.isError) return ''
+  // A JSON-RPC error is the relay's own failure; a tool error is the relay saying the page would not load.
+  if (!body || body.error) return { text: '', state: 'down' }
+  if (body.result?.isError) return { text: '', state: 'blocked' }
   const markdown = (body.result?.content ?? [])
     .filter((c) => c?.type === 'text' && typeof c.text === 'string')
     .map((c) => c.text)
     .join('\n')
   const text = markdownText(markdown)
-  return INTERSTITIAL.test(text.slice(0, 600)) ? '' : text
+  if (INTERSTITIAL.test(text.slice(0, 600))) return { text: '', state: 'blocked' }
+  return { text, state: enough(text) ? 'ok' : 'blocked' }
+}
+
+/**
+ * A public page's text through the TronBrowser relay (MCP tools/call fetch_page), which renders
+ * JavaScript and gets past most bot walls. "" when the address is not public, the relay fails, or
+ * all it got was a bot check.
+ */
+export async function relayPageText(raw: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<string> {
+  return (await relayRead(raw, options)).text
+}
+
+/**
+ * The page's text and how the read went: the relay first, pit.world's own direct fetch when the relay is
+ * off, down or got little. `blocked` needs the relay to have been turned away and the direct fetch not to
+ * have done better. A relay that is down never makes a site `blocked`: that is our outage, not theirs.
+ */
+export async function readPageChecked(url: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<Read> {
+  const relayOff = options.relayUrl === ''
+  const viaRelay: Read = relayOff ? { text: '', state: 'down' } : await relayRead(url, options).catch((): Read => ({ text: '', state: 'down' }))
+  if (viaRelay.text.length >= 200) return viaRelay
+  const direct = await fetchRead(url, options.fetch, options.resolve).catch((): Read => ({ text: '', state: 'down' }))
+  const text = direct.text.length > viaRelay.text.length ? direct.text : viaRelay.text
+  if (enough(text)) return { text, state: 'ok' }
+  if (viaRelay.state === 'private' || direct.state === 'private') return { text, state: 'private' }
+  if (viaRelay.state === 'blocked' && direct.state !== 'ok') return { text, state: 'blocked' }
+  // With the relay switched off on purpose, the direct fetch alone decides.
+  if (relayOff && direct.state === 'blocked') return { text, state: 'blocked' }
+  return { text, state: 'down' }
 }
 
 /** The page's text: the relay first, pit.world's own direct fetch when the relay is off, down or got little. */
 export async function readPage(url: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<string> {
-  const viaRelay = options.relayUrl === '' ? '' : await relayPageText(url, options).catch(() => '')
-  if (viaRelay.length >= 200) return viaRelay
-  const direct = await fetchPageText(url, options.fetch, options.resolve).catch(() => '')
-  return direct.length > viaRelay.length ? direct : viaRelay
+  return (await readPageChecked(url, options)).text
 }
 
-/** A public web page's text: http(s) only, every address public (re-checked on each redirect), 6 s, 512 KB. */
-export async function fetchPageText(raw: string, fetchImpl: Fetch = fetch, resolve: Resolve = defaultResolve): Promise<string> {
+/** A public web page's text and how the read went: http(s) only, every address public (re-checked on each redirect), 6 s, 512 KB. */
+export async function fetchRead(raw: string, fetchImpl: Fetch = fetch, resolve: Resolve = defaultResolve): Promise<Read> {
   let url = new URL(raw)
   for (let hop = 0; hop < 4; hop++) {
-    if (!(await isPublicPageUrl(url, resolve))) return ''
-    // threatcrush-disable-next-line js-ssrf-outbound-request  only a URL pit.world returned as a search result, every hop resolved and checked public above
-    const response = await fetchImpl(url.href, {
-      redirect: 'manual',
-      signal: AbortSignal.timeout(6_000),
-      headers: { accept: 'text/html', 'user-agent': 'pit.world summaries (+https://pit.world/privacy)' },
-    })
+    if (!(await isPublicPageUrl(url, resolve))) return { text: '', state: 'private' }
+    let response: Response
+    try {
+      // threatcrush-disable-next-line js-ssrf-outbound-request  only a URL pit.world returned as a search result, every hop resolved and checked public above
+      response = await fetchImpl(url.href, {
+        redirect: 'manual',
+        signal: AbortSignal.timeout(6_000),
+        headers: { accept: 'text/html', 'user-agent': 'pit.world summaries (+https://pit.world/privacy)' },
+      })
+    } catch {
+      return { text: '', state: 'down' }
+    }
     const location = response.status >= 300 && response.status < 400 ? response.headers.get('location') : null
     if (location) {
       url = new URL(location, url)
       continue
     }
-    if (!response.ok || !/html|text\/plain/i.test(response.headers.get('content-type') ?? '')) return ''
+    if (REFUSED.has(response.status)) return { text: '', state: 'blocked' }
+    if (!response.ok || !/html|text\/plain/i.test(response.headers.get('content-type') ?? '')) return { text: '', state: 'down' }
     const reader = response.body?.getReader()
-    if (!reader) return ''
+    if (!reader) return { text: '', state: 'down' }
     const decoder = new TextDecoder()
     let html = ''
     while (html.length < 512_000) {
@@ -319,9 +371,15 @@ export async function fetchPageText(raw: string, fetchImpl: Fetch = fetch, resol
     }
     reader.cancel().catch(() => {})
     const text = htmlText(html)
-    return INTERSTITIAL.test(text.slice(0, 600)) ? '' : text
+    if (INTERSTITIAL.test(text.slice(0, 600))) return { text: '', state: 'blocked' }
+    return { text, state: enough(text) ? 'ok' : 'blocked' }
   }
-  return ''
+  return { text: '', state: 'down' }
+}
+
+/** A public web page's text: http(s) only, every address public (re-checked on each redirect), 6 s, 512 KB. */
+export async function fetchPageText(raw: string, fetchImpl: Fetch = fetch, resolve: Resolve = defaultResolve): Promise<string> {
+  return (await fetchRead(raw, fetchImpl, resolve)).text
 }
 
 async function defaultResolve(host: string): Promise<string[]> {
@@ -390,6 +448,8 @@ export type SummarizerOptions = C0mputeOptions & {
   pageRelayUrl?: string
   /** How long a result stays summarizable after pit.world showed it. */
   textTtlMs?: number
+  /** Told how every page read went (Summarize and Listen both read through pageText), for src/reader-health.ts. */
+  onRead?: (url: string, state: ReadState) => void
 }
 
 export class Summarizer {
@@ -397,12 +457,17 @@ export class Summarizer {
   private texts = new Map<string, { url: string; text: string; at: number }>()
   private jobs = new Map<string, Promise<void>>()
   private failures = new Map<string, { error: string; at: number }>()
-  constructor(private readonly options: SummarizerOptions = {}) {
+  constructor(private options: SummarizerOptions = {}) {
     this.store = options.store ?? new SummaryStore()
   }
 
   get enabled(): boolean {
     return !!this.options.apiKey
+  }
+
+  /** Be told how every page read goes (reader health). Replaces any earlier observer. */
+  observeReads(fn: (url: string, state: ReadState) => void): void {
+    this.options = { ...this.options, onRead: fn }
   }
 
   /** Remember what the engines said about each result, so its summary can be asked for. In RAM only. */
@@ -473,14 +538,17 @@ export class Summarizer {
 
   /** A page's text, read the way summaries read it (the relay, then a direct fetch). "" when it cannot be read. */
   async pageText(url: string): Promise<string> {
-    const read =
-      this.options.pageText ??
-      ((u: string) =>
-        readPage(u, {
-          ...(this.options.pageRelayUrl !== undefined ? { relayUrl: this.options.pageRelayUrl } : {}),
-          ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
-        }))
-    return (await read(url).catch(() => '')).trim()
+    if (this.options.pageText) return (await this.options.pageText(url).catch(() => '')).trim()
+    const read = await readPageChecked(url, {
+      ...(this.options.pageRelayUrl !== undefined ? { relayUrl: this.options.pageRelayUrl } : {}),
+      ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+    }).catch((): Read => ({ text: '', state: 'down' }))
+    try {
+      this.options.onRead?.(url, read.state)
+    } catch (error) {
+      console.warn(`reader health: ${error instanceof Error ? error.message : String(error)}`)
+    }
+    return read.text.trim()
   }
 
   private async run(key: string, url: string): Promise<void> {
