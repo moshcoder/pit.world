@@ -132,3 +132,44 @@ describe('sponsored listings', () => {
     expect(await (await app.request('/')).text()).not.toContain('sponsored-top')
   })
 })
+
+import { FEATURED_TOP, featureNetwork, hostsFrom, W3bsNetwork } from '../src/w3bs-network.ts'
+
+describe('W3BS network sites are featured', () => {
+  it('reads the registry names and /net links, both spellings, never released names', () => {
+    const hosts = hostsFrom(
+      { names: [{ name: 'knox.agent', status: 'active' }, { name: 'gone.agent', status: 'released' }] },
+      '<a href="https://alt.2600.w3bs.org/">x</a><a href="https://seo.rank.pit.world">y</a><a href="https://github.com/x">z</a>',
+    )
+    for (const h of ['knox.agent.pit.world', 'knox.agent.w3bs.org', 'alt.2600.pit.world', 'alt.2600.w3bs.org', 'seo.rank.w3bs.org', 'w3bs.org']) expect(hosts.has(h)).toBe(true)
+    expect(hosts.has('gone.agent.pit.world')).toBe(false)
+    expect(hosts.has('github.com')).toBe(false)
+  })
+
+  it('badges network hits and leads with up to three, in their own order; the cached result is untouched', () => {
+    const net = new W3bsNetwork(fetch, ['a.agent.pit.world', 'b.bbs.pit.world', 'c.x.pit.world', 'd.y.pit.world'])
+    const hit = (host: string) => ({ url: `https://${host}/`, title: host, description: '', host })
+    const result = { query: 'q', provider: 'serper', failures: [], cached: false, hits: ['nyt.com', 'a.agent.pit.world', 'cnn.com', 'b.bbs.pit.world', 'c.x.pit.world', 'd.y.pit.world'].map(hit) }
+    const out = featureNetwork(result, net)
+    expect(out.hits.map((h) => h.host)).toEqual(['a.agent.pit.world', 'b.bbs.pit.world', 'c.x.pit.world', 'nyt.com', 'cnn.com', 'd.y.pit.world'])
+    expect(out.hits.filter((h) => h.featured)).toHaveLength(4)
+    expect(FEATURED_TOP).toBe(3)
+    expect(result.hits[0]!.host).toBe('nyt.com')
+    expect(result.hits.some((h) => 'featured' in h)).toBe(false)
+  })
+
+  it('the results page shows the Featured badge, and the API carries the flag', async () => {
+    const app = createApp({
+      keys: { serper: 'k' },
+      network: new W3bsNetwork(fetch, ['seo.rank.pit.world']),
+      fetch: (async () => Response.json({ organic: [{ link: 'https://nyt.com/a', title: 'NYT', snippet: 's' }, { link: 'https://seo.rank.pit.world/', title: 'seo.rank', snippet: 'audit' }] })) as unknown as typeof fetch,
+    })
+    const page = await (await app.request('/search?q=seo+audit+tool')).text()
+    const first = page.indexOf('class="featured-hit"')
+    expect(first).toBeGreaterThan(-1)
+    expect(first).toBeLessThan(page.indexOf('nyt.com/a'))
+    expect(page).toContain('>Featured</span>')
+    const api = await (await app.request('/api/search?q=seo+audit+tool')).json()
+    expect(api.results[0]).toMatchObject({ host: 'seo.rank.pit.world', featured: true })
+  })
+})
