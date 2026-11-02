@@ -34,7 +34,9 @@ import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
-import { SESSION_COOKIE } from './accounts.js'
+import { SESSION_COOKIE, type Account } from './accounts.js'
+import { PASS_DAYS, PASS_SUMMARIES, PASS_USD, SummaryPasses } from './summary-pass.js'
+import { mountSummaryPass, passSection } from './summary-pass-routes.js'
 import { createCrawlGate, type CrawlGate } from './crawl-gate.js'
 import { Promotion } from './promotion.js'
 import { mountPromotion } from './promotion-routes.js'
@@ -96,6 +98,8 @@ export type Deps = {
   summarizer?: Summarizer
   /** Summaries a visitor may start per hour: anonymous per address, signed in per account, and all anonymous visitors together. */
   summaryLimits?: { anon: number; signedIn: number; anonTotal: number }
+  /** The $1/week summary pass (src/summary-pass.ts; needs accounts); unset means off. */
+  summaryPasses?: SummaryPasses
   /** Keys every visitor hash and search hash (src/visitor.ts); a random one per process when unset (tests). */
   fingerprintSecret?: string
   /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
@@ -579,12 +583,20 @@ export function createApp(deps: Deps) {
     if (now.status === 'pending') return c.json(now, 202)
     if (!summarizer.known(url)) return c.json({ status: 'refused', url, error: 'Only a page from a recent pit.world result can be summarized. Search for it first.' }, 404)
     const me = summaryAccount(c)
-    if (me) {
+    // A paid pass replaces the hourly allowance with 1,000 a week (src/summary-pass.ts).
+    const pass = me && deps.summaryPasses ? deps.summaryPasses.use(me.id) : 'none'
+    if (pass === 'over') {
+      return c.json({ status: 'limited', url, pass: '/account#summary-pass', error: `That is ${PASS_SUMMARIES.toLocaleString('en-US')} summaries in ${PASS_DAYS} days, your pass's limit. Older ones free up as they pass 7 days.` }, 429)
+    }
+    if (me && pass === 'none') {
       if (await over(perAccount, `acct:${me.id}`)) {
         c.header('retry-after', '3600')
-        return c.json({ status: 'limited', url, error: `That is ${summaryLimits.signedIn} summaries this hour. More in an hour.` }, 429)
+        return c.json(
+          { status: 'limited', url, ...(deps.summaryPasses ? { pass: '/pass' } : {}), error: `That is ${summaryLimits.signedIn} summaries this hour. More in an hour${deps.summaryPasses ? `, or $${PASS_USD} a week for ${PASS_SUMMARIES.toLocaleString('en-US')}` : ''}.` },
+          429,
+        )
       }
-    } else {
+    } else if (!me) {
       const ip = c.env?.ip || 'unknown'
       // Per device when the browser sent its fingerprint (src/visitor.ts), with the address as a looser
       // ceiling; per address otherwise, as before. A bot-scored browser gets nothing.
@@ -692,8 +704,17 @@ export function createApp(deps: Deps) {
 
   if (deps.accounts) {
     const rewards = deps.rewards
-    mountAccounts(app, rewards ? { ...deps.accounts, onSignIn: deps.accounts.onSignIn ?? rewardsOnSignIn(rewards), accountSections: deps.accounts.accountSections ?? rewardsSections(rewards) } : deps.accounts)
+    const passes = deps.summaryPasses
+    // /account shows the rewards section, then the summary pass.
+    const sections = [rewards ? rewardsSections(rewards) : null, passes ? passSection(passes) : null].filter((s) => s !== null)
+    const accountSections = deps.accounts.accountSections ?? (sections.length ? async (me: Account) => (await Promise.all(sections.map((s) => s(me)))).join('\n') : undefined)
+    mountAccounts(app, {
+      ...deps.accounts,
+      ...(rewards ? { onSignIn: deps.accounts.onSignIn ?? rewardsOnSignIn(rewards) } : {}),
+      ...(accountSections ? { accountSections } : {}),
+    })
     if (rewards) mountRewards(app, { rewards, accounts: deps.accounts.accounts, site: deps.accounts.site })
+    if (passes) mountSummaryPass(app, { passes, accounts: deps.accounts.accounts, site: deps.accounts.site })
   }
   if (deps.promoters && deps.accounts) mountPromote(app, { promoters: deps.promoters, accounts: deps.accounts.accounts, site: deps.accounts.site })
   const promoHooks =
@@ -806,6 +827,13 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     setTimeout(tick, 5_000).unref()
     setInterval(tick, 60_000).unref()
   }
+  // The $1/week summary pass: sold through the same pay.agent key; shown but not sellable without it.
+  const summaryPasses = new SummaryPasses(accounts.accounts.db, buildInvoicing ?? null)
+  if (buildInvoicing) {
+    const tick = () => void summaryPasses.tick().catch(() => console.error('Summary pass billing sync failed'))
+    setTimeout(tick, 7_000).unref()
+    setInterval(tick, 60_000).unref()
+  }
   const rewards = new Rewards(accounts.accounts.db, { mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com', promoterCode: (code) => Boolean(promoters.byCode(code)) })
   // c0mpute only (AGENTS.md): no key, no summaries; never a paid provider.
   const summarizer = new Summarizer({
@@ -817,7 +845,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     store: new SummaryStore(env.PIT_SUMMARIES_DB ?? `${dataDir}/summaries.db`),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
