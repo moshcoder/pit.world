@@ -827,6 +827,11 @@ describe('/build', () => {
     expect(html).toContain('We build it. We host it.')
     expect(html).toContain('$49 to build, including the first 30 days, then $2 a month to keep it online.')
     expect(html).not.toContain('action="/build/invoice"')
+    expect(html).toContain('id="specs"')
+    expect(html).toContain('Up to 1 GB of RAM')
+    expect(html).toContain('5 GB of traffic a month')
+    expect(html).toContain('16 vCPU, 31 GiB of RAM')
+    expect(html).not.toContain('The code and the domain are yours')
   })
 
   it('bills by pay.agent invoice: $49 now, $2 monthly from day 31, the builder hears, the buyer lands on the invoice', async () => {
