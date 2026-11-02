@@ -2,7 +2,7 @@
 # Deploy-on-merge for pitbot: when main moves, rebuild and restart the crawler.
 # Runs from cron as the box's user (no root needed), e.g. every 5 minutes:
 #
-#   */5 * * * * ~/www/pit-crawler/app/deploy/crawler/poll.sh >> ~/www/pit-crawler/poll.log 2>&1
+#   */5 * * * * bash ~/www/pit-crawler/app/deploy/crawler/poll.sh >> ~/www/pit-crawler/poll.log 2>&1
 #
 # Layout: ~/www/pit-crawler/{app (a checkout of moshcoder/pit.world), crawler.env (0600)}.
 set -euo pipefail
