@@ -383,7 +383,9 @@ export class Listings {
       links TEXT NOT NULL DEFAULT '[]', moshpit TEXT NOT NULL DEFAULT '',
       edit_key_hash TEXT, claimed_at INTEGER, updated_at INTEGER, meta_at INTEGER)`)
     this.db.run('CREATE TABLE IF NOT EXISTS claims (id TEXT PRIMARY KEY, domain TEXT NOT NULL, token TEXT NOT NULL, created_at INTEGER NOT NULL)')
-    const have = new Set((this.db.query('PRAGMA table_info(listings)').all() as Array<{ name: string }>).map((c) => c.name))
+    // table_xinfo, not table_info: table_info hides generated columns (quality), so a
+    // reboot re-ran the ADD COLUMN and crash-looped on "duplicate column name" (2026-11-02).
+    const have = new Set((this.db.query('PRAGMA table_xinfo(listings)').all() as Array<{ name: string }>).map((c) => c.name))
     for (const [column, statement] of MIGRATIONS) if (!have.has(column)) this.db.run(statement)
     // Listings claimed before the ring existed join it in the order they were claimed.
     this.db.run('UPDATE listings SET ring_joined_at = claimed_at WHERE claimed_at IS NOT NULL AND ring_joined_at IS NULL')
