@@ -308,3 +308,17 @@ form .btn { border: 0; cursor: pointer; }
 /* Results from W3BS network sites: ours, unpaid, never an ad. */
 .hits .src.featured { color: var(--accent); border-color: var(--accent); font-weight: 700; }
 .hits li.featured-hit { border-left: 3px solid var(--accent); padding-left: 10px; margin-left: -13px; }
+
+/* /submit: a list of up to 1,000 addresses, or a file. */
+.submit-form { display: grid; gap: 8px; margin: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.submit-form label { font-weight: 700; font-size: 14px; }
+.submit-form textarea { width: 100%; min-height: 220px; box-sizing: border-box; padding: 10px 12px; font: 14px/1.5 var(--mono); color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; resize: vertical; }
+.submit-form textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.submit-form input[type="file"] { font: 14px var(--sans); color: var(--muted); }
+.submit-form button { justify-self: start; margin-top: 6px; padding: 10px 18px; font: 700 15px var(--sans); color: var(--accent-ink); background: var(--accent); border: 0; border-radius: 999px; cursor: pointer; }
+.submit-form button:hover { filter: brightness(1.08); }
+.submit .kinds li { margin: 4px 0; }
+.submit-list td { overflow-wrap: anywhere; }
+.submit-list .kind { display: inline-block; min-width: 4.5em; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font: 12px var(--mono); text-align: center; }
+.submit-list .kind-site { color: var(--accent); border-color: var(--accent); }
+.submit .rejected code { overflow-wrap: anywhere; }

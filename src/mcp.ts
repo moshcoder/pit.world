@@ -28,6 +28,19 @@ export function createMcpServer(client = new PitClient()): McpServer {
   )
 
   server.tool(
+    'submit_urls',
+    "Put sites, pages, RSS/Atom/JSON feeds, sitemaps or OPML files into pit.world's own search index (pitbot reads them; feeds are also listed on rssamplifier.com). Up to 1,000 addresses; each is answered with what it looks like and queued.",
+    { urls: z.array(z.string().min(3).max(2000)).min(1).max(1000) },
+    async ({ urls }: { urls: string[] }) => {
+      const r = await client.submit(urls)
+      const text = r.ok
+        ? `${r.queued} queued. ${r.accepted.map((a) => `${a.kind}: ${a.url}`).slice(0, 100).join('; ')}${r.rejected.length ? `. Refused: ${r.rejected.map((x) => `${x.url} (${x.error})`).join('; ')}` : ''}. Progress: https://pit.world/status`
+        : r.message ?? 'Not submitted.'
+      return { content: [{ type: 'text', text }], ...(r.ok ? {} : { isError: true }) }
+    },
+  )
+
+  server.tool(
     'moshpit_resolve',
     'Look up a Moshpit network name (for example chovy.hacker) in the Moshpit registry: whether it is registered and where it points.',
     { name: z.string().min(3).max(253) },

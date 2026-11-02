@@ -24,6 +24,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
   pit search WORDS [-n N]      search the web privately
   pit resolve NAME             look up a Moshpit name (chovy.hacker)
   pit network                  live numbers for the Moshpit network
+  pit submit URL... [--file F] put sites, pages, feeds, sitemaps or OPML into pit.world's index (up to 1,000)
   pit listing DOMAIN           a business listing (pit.world/b)
   pit claim DOMAIN             claim your business listing
   pit verify CLAIM_ID          finish a claim; prints your edit key once
@@ -96,6 +97,25 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
           out.log(`${String(i + 1).padStart(2)}. ${hit.title}\n    ${hit.url}${hit.description ? `\n    ${hit.description}` : ''}`)
         })
         if (!result.results.length) out.log('No results.')
+        return 0
+      }
+      case 'submit': {
+        const fileAt = words.indexOf('--file')
+        const fromFile = fileAt === -1 ? [] : (await Bun.file(words[fileAt + 1] ?? '').text()).split(/\s+/)
+        const urls = [...words.filter((_, i) => fileAt === -1 || (i !== fileAt && i !== fileAt + 1)), ...fromFile].filter(Boolean)
+        if (!urls.length) return usage(out, 'pit submit URL... [--file F]')
+        const r = await client.submit(urls.slice(0, 1_000))
+        if (json) {
+          out.log(JSON.stringify(r, null, 2))
+          return r.ok ? 0 : 1
+        }
+        if (!r.ok) {
+          out.error(r.message ?? 'Not submitted.')
+          return 1
+        }
+        out.log(`${r.queued} queued for pit.world's index. Watch it: https://pit.world/status`)
+        for (const a of r.accepted.slice(0, 50)) out.log(`  ${a.kind.padEnd(8)} ${a.url}`)
+        for (const x of r.rejected) out.log(`  refused  ${x.url}  (${x.error})`)
         return 0
       }
       case 'resolve':

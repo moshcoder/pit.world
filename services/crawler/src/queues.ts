@@ -21,6 +21,7 @@ import { Redis } from 'ioredis'
 import type { Config, Role } from './config.ts'
 import { createCrawler, type Crawler, type PageJob, type SiteJob } from './crawler.ts'
 import { RedisFrontier } from './frontier.ts'
+import { submitFeed } from '@profullstack/submit-feed/core'
 import { IndexStore } from './index-store.ts'
 import { ObscuraPool } from './obscura.ts'
 import { urlId } from './url.ts'
@@ -30,6 +31,7 @@ export const QUEUES = {
   page: 'pit-crawl-page',
   render: 'pit-crawl-render',
   publish: 'pit-crawl-publish',
+  submit: 'pit-crawl-submit',
 } as const
 
 /** addBulk in chunks: one call with half a million jobs is one enormous Redis script run. */
@@ -42,6 +44,13 @@ const JOB_DEFAULTS = {
   backoff: { type: 'exponential' as const, delay: 30_000 },
   removeOnComplete: { count: 1_000 },
   removeOnFail: { age: 7 * 86_400, count: 20_000 },
+}
+
+/** Submitted addresses into the submit queue; a resubmission while one is waiting is the same job. */
+export async function enqueueSubmissions(runtime: Runtime, urls: string[]): Promise<number> {
+  const unique = [...new Set(urls)].slice(0, 1_000)
+  await addInChunks(unique, (chunk) => runtime.queues.submit.addBulk(chunk.map((url) => ({ name: 'submit', data: { url }, opts: { jobId: `u-${urlId(url)}`, attempts: 2 } }))))
+  return unique.length
 }
 
 export function connect(url: string): Redis {
@@ -67,6 +76,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     page: new Queue(QUEUES.page, opts),
     render: new Queue(QUEUES.render, opts),
     publish: new Queue(QUEUES.publish, opts),
+    submit: new Queue(QUEUES.submit, opts),
   }
   const frontier = new RedisFrontier(redis, config.maxPages, Math.min(config.seenTtlMs, config.recrawlDays * 86_400_000))
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
@@ -76,6 +86,10 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     frontier,
     renderer: pool,
     index,
+    // A feed submitted at pit.world/submit is offered to the RSS directory as well.
+    async forwardFeed(feedUrl: string) {
+      await submitFeed('https://rssamplifier.com', { url: feedUrl })
+    },
     async pageBacklog() {
       const c = await queues.page.getJobCounts('waiting', 'prioritized', 'delayed')
       return (c.waiting ?? 0) + (c.prioritized ?? 0) + (c.delayed ?? 0)
@@ -130,6 +144,17 @@ export async function startWorkers(config: Config, log: (line: string) => void =
   const role = (r: Role) => config.roles.includes(r)
   const common = { stalledInterval: 60_000, maxStalledCount: 2 }
 
+  if (role('site'))
+    workers.push(
+      new Worker<{ url: string }>(
+        QUEUES.submit,
+        async (job) => {
+          const out = await crawler.submit(job.data.url)
+          log(`submit ${job.data.url}: ${out.kind}, ${out.sites} sites, ${out.pages} pages`)
+        },
+        { ...common, connection: workerConnection(), concurrency: 4 },
+      ),
+    )
   let gate: ReturnType<typeof setInterval> | null = null
   if (role('site')) {
     const siteWorker = new Worker<SiteJob>(
