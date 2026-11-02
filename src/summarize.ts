@@ -299,6 +299,14 @@ export class SummaryStore {
     const row = this.db.query('SELECT summary, model, created_at, source FROM summaries WHERE url = ?').get(url) as { summary: string; model: string; created_at: number; source: string | null } | null
     return row ? { summary: row.summary, model: row.model, createdAt: row.created_at, source: row.source } : null
   }
+  /** Counts for the nightly report: all summaries, and those written in [from, to) by source and model. No URLs. */
+  stats(from: number, to: number): { total: number; written: number; fromPage: number; fromSnippet: number; models: Array<{ model: string; n: number }> } {
+    const total = (this.db.query('SELECT COUNT(*) AS n FROM summaries').get() as { n: number }).n
+    const by = this.db.query('SELECT source, COUNT(*) AS n FROM summaries WHERE created_at >= ? AND created_at < ? GROUP BY source').all(from, to) as Array<{ source: string | null; n: number }>
+    const models = this.db.query('SELECT model, COUNT(*) AS n FROM summaries WHERE created_at >= ? AND created_at < ? GROUP BY model ORDER BY n DESC LIMIT 5').all(from, to) as Array<{ model: string; n: number }>
+    const of = (s: string) => by.find((r) => r.source === s)?.n ?? 0
+    return { total, written: by.reduce((a, r) => a + r.n, 0), fromPage: of('page'), fromSnippet: of('snippet'), models }
+  }
   set(url: string, summary: string, model: string, source: 'page' | 'snippet' = 'page'): void {
     this.db.query('INSERT OR REPLACE INTO summaries (url, summary, model, created_at, source) VALUES (?, ?, ?, ?, ?)').run(url, summary, model, Date.now(), source)
   }
