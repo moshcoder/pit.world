@@ -315,7 +315,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/status', '/bot', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,

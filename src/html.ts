@@ -40,6 +40,8 @@ setRingFooterOptions(
     { label: 'How it works', href: '/about' },
     { label: 'API · CLI · MCP', href: '/about#api' },
     { label: 'Web ring', href: '/ring' },
+    { label: 'Crawler status', href: '/status' },
+    { label: 'pitbot crawler', href: '/bot' },
     { label: 'Moshpit registry', href: LINKS.registry },
   ]),
 )
