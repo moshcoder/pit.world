@@ -162,7 +162,8 @@
           button.hidden = true
           return
         }
-        if (res.status === 429 && (body.signIn || body.pass)) {
+        // 402 is the same limit with an x402 offer attached for agents; people get the same links.
+        if ((res.status === 429 || res.status === 402) && (body.signIn || body.pass)) {
           show(box, `${body.error} `, 'err')
           const a = document.createElement('a')
           a.href = body.signIn || body.pass

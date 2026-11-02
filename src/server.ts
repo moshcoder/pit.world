@@ -35,7 +35,8 @@ import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
 import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './accounts-routes.js'
 import { SESSION_COOKIE, type Account } from './accounts.js'
-import { PASS_DAYS, PASS_SUMMARIES, PASS_USD, SummaryPasses } from './summary-pass.js'
+import { PASS_DAYS, PASS_HEADER, PASS_RESOURCE_PATH, PASS_SUMMARIES, PASS_USD, SummaryPasses } from './summary-pass.js'
+import { paymentRequiredHeader } from '@profullstack/x402-gateway'
 import { mountSummaryPass, passSection } from './summary-pass-routes.js'
 import { createCrawlGate, type CrawlGate } from './crawl-gate.js'
 import { Promotion } from './promotion.js'
@@ -582,6 +583,36 @@ export function createApp(deps: Deps) {
     return c.json(summarizer.status(url))
   })
 
+  /** The summary pass's x402 offer as a 402 (body and PAYMENT-REQUIRED header), or a plain 429 when x402 is off. */
+  const paymentRequired = (c: Context<Env>, url: string, error: string, extra: Record<string, unknown> = {}) => {
+    const offer = deps.summaryPasses?.offer()
+    if (!offer) return c.json({ status: 'limited', url, error, ...extra }, 429)
+    c.header('payment-required', paymentRequiredHeader(offer, { error }))
+    c.header('access-control-expose-headers', `PAYMENT-REQUIRED, PAYMENT-RESPONSE, ${PASS_HEADER}`)
+    return c.json({ ...offer, error, status: 'limited', url, pass: '/pass', passHeader: PASS_HEADER, ...extra }, 402)
+  }
+
+  // The pass alone, for agents: GET (or POST without proof) is the 402 offer; POST with a proof returns the token.
+  const sellPass = async (c: Context<Env>) => {
+    const passes = deps.summaryPasses
+    if (!passes?.x402Enabled) return c.json({ error: 'x402 is not enabled on this server. Signed-in people can buy the pass at /pass.' }, 404)
+    const token = c.req.header(PASS_HEADER)
+    if (token) {
+      const state = await passes.stateOfToken(token)
+      if (state) return c.json({ status: 'active', header: PASS_HEADER, ...state })
+    }
+    const proof = c.req.header('payment-signature') || c.req.header('x-payment')
+    if (!proof) return paymentRequired(c, '', `$${PASS_USD} buys ${PASS_SUMMARIES.toLocaleString('en-US')} summaries in ${PASS_DAYS} days.`)
+    const sale = await passes.sell(proof, c.req.header('user-agent') ?? '')
+    if (!sale.ok) return paymentRequired(c, '', sale.error)
+    if (sale.paymentResponse) c.header('payment-response', sale.paymentResponse)
+    c.header('access-control-expose-headers', `PAYMENT-RESPONSE, ${PASS_HEADER}`)
+    c.header(PASS_HEADER, sale.token)
+    return c.json({ status: 'active', token: sale.token, header: PASS_HEADER, expiresAt: new Date(sale.expiresAt).toISOString(), days: PASS_DAYS, limit: PASS_SUMMARIES })
+  }
+  app.get(PASS_RESOURCE_PATH, sellPass)
+  app.post(PASS_RESOURCE_PATH, sellPass)
+
   app.post('/api/summarize', async (c) => {
     if (!summarizer?.enabled) return c.json({ error: 'Summaries are off on this server.' }, 503)
     const type = c.req.header('content-type') ?? ''
@@ -593,6 +624,26 @@ export function createApp(deps: Deps) {
     if (now.status === 'done') return c.json(now)
     if (now.status === 'pending') return c.json(now, 202)
     if (!summarizer.known(url)) return c.json({ status: 'refused', url, error: 'Only a page from a recent pit.world result can be summarized. Search for it first.' }, 404)
+    const passes = deps.summaryPasses
+    // x402, for bots and agents: a payment proof buys the $1 pass on this very request, and a pass
+    // token (x-summary-pass) is counted against its 1,000 instead of any hourly limit.
+    let token = c.req.header(PASS_HEADER) || null
+    const proof = c.req.header('payment-signature') || c.req.header('x-payment')
+    let sold = false
+    if (proof && passes?.x402Enabled) {
+      const sale = await passes.sell(proof, c.req.header('user-agent') ?? '')
+      if (!sale.ok) return paymentRequired(c, url, sale.error)
+      token = sale.token
+      sold = true
+      c.header(PASS_HEADER, sale.token)
+      if (sale.paymentResponse) c.header('payment-response', sale.paymentResponse)
+    }
+    if (token && passes?.x402Enabled) {
+      const used = await passes.useToken(token)
+      if (used === 'over') return c.json({ status: 'limited', url, error: `That is ${PASS_SUMMARIES.toLocaleString('en-US')} summaries in ${PASS_DAYS} days, this pass's limit. Buy another pass for more.` }, 429)
+      if (used === 'none') return paymentRequired(c, url, 'That summary pass is not valid or has ended.')
+      return c.json({ ...summarizer.start(url), ...(sold ? { pass: { token, header: PASS_HEADER, days: PASS_DAYS, limit: PASS_SUMMARIES } } : {}) }, 202)
+    }
     const me = summaryAccount(c)
     // A paid pass replaces the hourly allowance with 1,000 a week (src/summary-pass.ts).
     const pass = me && deps.summaryPasses ? deps.summaryPasses.use(me.id) : 'none'
@@ -616,7 +667,8 @@ export function createApp(deps: Deps) {
       const who = v.ok ? `fp:${v.visitorKey}` : `ip:${ip}`
       if ((await over(anonPerIp, who)) || (v.ok && (await over(anonIpCeiling, `ip:${ip}`))) || (await over(anonTotal, 'anon'))) {
         c.header('retry-after', '3600')
-        return c.json({ status: 'limited', url, signIn: '/signin', error: `Free summaries are ${summaryLimits.anon} an hour without an account. Sign in for ${summaryLimits.signedIn} an hour.` }, 429)
+        // A 402 with the x402 offer when it is on (a paying agent retries with PAYMENT-SIGNATURE), else a 429.
+        return paymentRequired(c, url, `Free summaries are ${summaryLimits.anon} an hour without an account. Sign in for ${summaryLimits.signedIn} an hour, or pay $${PASS_USD} over x402 for ${PASS_SUMMARIES.toLocaleString('en-US')} in ${PASS_DAYS} days.`, { signIn: '/signin' })
       }
     }
     return c.json(summarizer.start(url), 202)
@@ -872,7 +924,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     setInterval(tick, 60_000).unref()
   }
   // The $1/week summary pass: sold through the same pay.agent key; shown but not sellable without it.
-  const summaryPasses = new SummaryPasses(accounts.accounts.db, buildInvoicing ?? null)
+  const summaryPasses = new SummaryPasses(accounts.accounts.db, buildInvoicing ?? null, Date.now, env.COINPAY_X402_KEY && env.CRAWL_PAY_TO ? { apiKey: env.COINPAY_X402_KEY, payTo: env.CRAWL_PAY_TO, site: env.PIT_SITE || 'https://pit.world' } : null)
   if (buildInvoicing) {
     const tick = () => void summaryPasses.tick().catch(() => console.error('Summary pass billing sync failed'))
     setTimeout(tick, 7_000).unref()

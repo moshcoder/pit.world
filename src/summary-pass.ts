@@ -8,9 +8,21 @@
  * Nothing the browser sends is taken as proof of payment. There is no automatic renewal: each
  * paid invoice adds a week, stacked after any time already paid for.
  */
-import { randomUUID } from 'node:crypto'
+import { createHash, randomUUID } from 'node:crypto'
 import type { Database } from 'bun:sqlite'
+import { buildOffer, decodePayment, expectedFor, mintPass, paymentResponseHeader, readPass, verifyAndSettle } from '@profullstack/x402-gateway'
 import type { BuildInvoicing } from './build-invoice.js'
+
+/** Bots and agents buy the same pass over x402 (USDC), no account needed: CoinPay verifies and settles. */
+export type PassX402 = { apiKey: string; payTo: string; site: string; baseUrl?: string; fetch?: typeof fetch }
+/** The header a bought pass token is sent in. */
+export const PASS_HEADER = 'x-summary-pass'
+/** What an x402 offer for the pass names as its resource, wherever it is offered. */
+export const PASS_RESOURCE_PATH = '/api/summary-pass'
+
+export type X402Sale =
+  | { ok: true; token: string; expiresAt: number; paymentResponse: string | null }
+  | { ok: false; error: string }
 
 export const PASS_USD = 1
 export const PASS_DAYS = 7
@@ -33,11 +45,16 @@ export type PassState = {
 
 export class SummaryPasses {
   private running = false
+  private secret: string | null
   constructor(
     readonly db: Database,
     private cfg: BuildInvoicing | null,
     private now = Date.now,
+    private x402: PassX402 | null = null,
   ) {
+    // Its own signing key, so a crawl day pass (signed with the CoinPay key itself) is never a summary pass.
+    this.secret = x402 ? createHash('sha256').update(`${x402.apiKey}:pit.world summary pass`).digest('base64url') : null
+    db.run('CREATE TABLE IF NOT EXISTS summary_pass_x402 (ref TEXT PRIMARY KEY, token TEXT NOT NULL, expires_at INTEGER NOT NULL, payer TEXT, created_at INTEGER NOT NULL)')
     db.run('CREATE TABLE IF NOT EXISTS summary_passes (account_id TEXT PRIMARY KEY, paid_until INTEGER NOT NULL)')
     db.run(`CREATE TABLE IF NOT EXISTS summary_pass_invoices (
       id TEXT PRIMARY KEY, account_id TEXT NOT NULL, provider_id TEXT UNIQUE, url TEXT, status TEXT NOT NULL,
@@ -78,11 +95,80 @@ export class SummaryPasses {
    */
   use(accountId: string): 'ok' | 'over' | 'none' {
     if (!this.activeUntil(accountId)) return 'none'
+    return this.count(accountId)
+  }
+
+  private count(holder: string): 'ok' | 'over' {
     return this.db.transaction(() => {
-      if (this.used(accountId) >= PASS_SUMMARIES) return 'over' as const
-      this.db.run('INSERT INTO summary_pass_usage (account_id, at) VALUES (?, ?)', [accountId, this.now()])
+      if (this.used(holder) >= PASS_SUMMARIES) return 'over' as const
+      this.db.run('INSERT INTO summary_pass_usage (account_id, at) VALUES (?, ?)', [holder, this.now()])
       return 'ok' as const
     })()
+  }
+
+  // ---- x402: the same pass for bots and agents, no account ------------------------------
+
+  get x402Enabled(): boolean {
+    return !!this.x402
+  }
+
+  /** The x402 offer: $1 in USDC for a 7-day, 1,000-summary pass token. */
+  offer() {
+    if (!this.x402) return null
+    return buildOffer({
+      payTo: this.x402.payTo,
+      priceCents: PASS_USD * 100,
+      resource: `${this.x402.site.replace(/\/+$/, '')}${PASS_RESOURCE_PATH}`,
+      description: `pit.world summary pass: up to ${PASS_SUMMARIES} result summaries in ${PASS_DAYS} days. Send the token you get back in the ${PASS_HEADER} header.`,
+    })
+  }
+
+  /** A token's holder id, or null when it is not a live pass this server signed. */
+  async tokenHolder(token: string | null | undefined): Promise<{ holder: string; expiresAt: number } | null> {
+    if (!this.secret || !token) return null
+    const pass = await readPass(token, { secret: this.secret, now: Math.floor(this.now() / 1000) }).catch(() => null)
+    return pass?.ref ? { holder: `x402:${pass.ref}`, expiresAt: pass.exp * 1000 } : null
+  }
+
+  /** One summary on a bought token: 'none' when the token is not a live pass. */
+  async useToken(token: string | null | undefined): Promise<'ok' | 'over' | 'none'> {
+    const held = await this.tokenHolder(token)
+    return held ? this.count(held.holder) : 'none'
+  }
+
+  stateOfToken = async (token: string) => {
+    const held = await this.tokenHolder(token)
+    return held ? { activeUntil: held.expiresAt, used: this.used(held.holder), limit: PASS_SUMMARIES } : null
+  }
+
+  /**
+   * Sells a pass for an x402 payment proof (the PAYMENT-SIGNATURE or X-PAYMENT header). CoinPay
+   * verifies and settles it. The same proof sent again gets the same token back, never a second pass.
+   */
+  async sell(proofHeader: string, userAgent = ''): Promise<X402Sale> {
+    const offer = this.offer()
+    if (!offer || !this.x402 || !this.secret) return { ok: false, error: 'x402 is not enabled on this server.' }
+    const payment = decodePayment(proofHeader) as any
+    if (!payment) return { ok: false, error: 'The payment proof is not base64 JSON.' }
+    const ref = String(payment?.payload?.authorization?.nonce ?? payment?.payload?.nonce ?? payment?.payload?.hash ?? payment?.payload?.block?.hash ?? '')
+    if (ref) {
+      const sold = this.db.query<{ token: string; expires_at: number }, [string]>('SELECT token, expires_at FROM summary_pass_x402 WHERE ref = ?').get(ref)
+      if (sold) return sold.expires_at > this.now() ? { ok: true, token: sold.token, expiresAt: sold.expires_at, paymentResponse: null } : { ok: false, error: 'That payment bought a pass that has ended.' }
+    }
+    const expected = expectedFor(payment, offer)
+    if (!expected) return { ok: false, error: 'Pay with one of the networks in the offer.' }
+    const result = await verifyAndSettle(payment, expected, {
+      apiKey: this.x402.apiKey,
+      baseUrl: (this.x402.baseUrl ?? 'https://coinpayportal.com').replace(/\/+$/, ''),
+      ...(this.x402.fetch ? { fetch: this.x402.fetch } : {}),
+      metadata: { property: 'pit.world', resource_path: PASS_RESOURCE_PATH, product: 'summary-pass', user_agent: userAgent.slice(0, 300) },
+    })
+    if (!result.ok) return { ok: false, error: result.reason || 'Payment could not be settled.' }
+    const key = ref || result.ref || result.txHash || randomUUID()
+    const expiresAt = this.now() + WEEK
+    const pass = await mintPass({ secret: this.secret, ref: key, expiresAt: Math.floor(expiresAt / 1000), now: Math.floor(this.now() / 1000) })
+    this.db.run('INSERT OR IGNORE INTO summary_pass_x402 (ref, token, expires_at, payer, created_at) VALUES (?, ?, ?, ?, ?)', [key, pass.token, expiresAt, result.payer, this.now()])
+    return { ok: true, token: pass.token, expiresAt, paymentResponse: paymentResponseHeader({ transaction: result.txHash, network: result.network, payer: result.payer }) }
   }
 
   /** Opens (or returns the open) $1 invoice for one week. Returns the pay.agent invoice URL. */
