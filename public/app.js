@@ -527,6 +527,19 @@
   const ANON = 'form[action="/subscribe"], form[action$="//pit.world/subscribe"], form[action="/build/invoice"], form[action$="/claim"], form[action$="/quote"], form[action="/submit"]'
   if (document.querySelector(ANON)) fp().then((m) => m.attachToForms({ selector: ANON })).catch(() => {})
 
+  // Shared result page: Copy link (shown only with script and a clipboard), and select-all on focus.
+  for (const button of document.querySelectorAll('.share-copy .copy')) {
+    if (!navigator.clipboard) continue
+    button.hidden = false
+    button.addEventListener('click', () => {
+      navigator.clipboard.writeText(button.dataset.copy || '').then(
+        () => { button.textContent = 'Copied'; setTimeout(() => { button.textContent = 'Copy link' }, 2000) },
+        () => { button.textContent = 'Select and copy' },
+      )
+    })
+  }
+  for (const input of document.querySelectorAll('.share-copy input')) input.addEventListener('focus', () => input.select())
+
   // Installable app + offline page. The worker caches the static shell only, never a search.
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
 })()
