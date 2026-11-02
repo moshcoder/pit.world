@@ -38,6 +38,36 @@ export function sitesFromRing(): string[] {
   return RING.map((s) => (s.moshpit ? `${s.name}.pit.world` : s.name))
 }
 
+/** Directories whose whole list we publish as OPML: every site behind every feed. */
+export const OPML_SOURCES: Record<string, string> = {
+  rssamplifier: 'https://rssamplifier.com/opml',
+  p0dcasters: 'https://p0dcasters.com/opml',
+}
+
+/**
+ * The sites behind an OPML file's feeds. The site is the outline's htmlUrl (the
+ * blog or the show's own page); the feed's xmlUrl is used only when there is no
+ * htmlUrl, because feeds are often hosted elsewhere (Buzzsprout, Libsyn).
+ */
+export function sitesFromOpml(xml: string): string[] {
+  const found = new Set<string>()
+  for (const m of xml.matchAll(/<outline\b[^>]*>/g)) {
+    const tag = m[0]
+    const attr = (name: string) => tag.match(new RegExp(`\\b${name}="([^"]*)"`, 'i'))?.[1]?.replace(/&amp;/g, '&')
+    const site = siteFromInput(attr('htmlUrl') || attr('xmlUrl') || '')
+    if (site) found.add(site)
+  }
+  return [...found]
+}
+
+export async function opmlText(source: string, fetchImpl: Fetch = fetch): Promise<string> {
+  const url = OPML_SOURCES[source] ?? source
+  if (!/^https?:\/\//.test(url)) return Bun.file(url).text()
+  const response = await fetchImpl(url, { headers: { accept: 'text/x-opml, application/xml;q=0.9, */*;q=0.1' }, signal: AbortSignal.timeout(300_000) })
+  if (!response.ok) throw new Error(`${url} answered HTTP ${response.status}`)
+  return response.text()
+}
+
 export function sitesFromText(text: string): string[] {
   return text
     .split(/[\s,]+/)

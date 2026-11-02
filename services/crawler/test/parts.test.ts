@@ -165,3 +165,16 @@ test("a publisher's JSON-LD never titles the page", () => {
   expect(doc.record.kind).toBe('page')
   expect(doc.record.jsonld).toHaveLength(2)
 })
+
+import { sitesFromOpml } from '../src/seed.ts'
+
+test('OPML: the site behind each feed, htmlUrl first, once each, never a private host', () => {
+  const xml = `<opml><body>
+<outline text="A" type="rss" xmlUrl="https://feeds.buzzsprout.com/1.rss" htmlUrl="https://www.Show-One.example/" />
+<outline text="B" type="rss" xmlUrl="https://blog.example/feed" />
+<outline text="C" type="rss" xmlUrl="https://feeds.buzzsprout.com/2.rss" htmlUrl="https://show-one.example/ep?a=1&amp;b=2" />
+<outline text="D" type="rss" xmlUrl="http://localhost/feed" />
+<outline text="group"><outline text="E" xmlUrl="https://e.example/rss" htmlUrl="" /></outline>
+</body></opml>`
+  expect(sitesFromOpml(xml)).toEqual(['show-one.example', 'blog.example', 'e.example'])
+})

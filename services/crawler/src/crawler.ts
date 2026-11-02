@@ -29,6 +29,8 @@ export type Deps = {
   resolver?: Resolver
   renderer?: { size: number; render(url: string): Promise<Rendered> } | null
   log?: (line: string) => void
+  /** Page jobs queued now; a site start waits while it is over config.maxPageBacklog. */
+  pageBacklog?: () => Promise<number>
   /** The local search mirror; every published batch lands here first. */
   index?: { add(entries: string[]): number } | null
 }
@@ -94,8 +96,13 @@ export function createCrawler(deps: Deps) {
   }
 
   /** A site's start: robots.txt, then the home page and whatever its sitemaps list, up to maxPages. */
-  async function crawlSite(job: SiteJob): Promise<{ admitted: number; outcome: string }> {
+  async function crawlSite(job: SiteJob): Promise<{ admitted: number; outcome: string; delayMs?: number }> {
     const { site } = job
+    // A seed of half a million sites must not become half a billion page jobs in Redis:
+    // a site starts only while the pages already queued are under the backlog cap.
+    if (deps.pageBacklog && (await deps.pageBacklog()) > config.maxPageBacklog) {
+      return { admitted: 0, outcome: 'waiting for the page backlog', delayMs: 60_000 }
+    }
     if (!(await resolver(site))) {
       await frontier.bump('sites_refused')
       await frontier.log({ kind: 'skip', site, note: 'not on the public internet' })
