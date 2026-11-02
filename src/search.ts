@@ -18,7 +18,7 @@
 
 export type Hit = { url: string; title: string; description: string; host: string; sources?: Provider[] }
 
-export type Provider = 'serper' | 'bing' | 'brave' | 'tavily' | 'ceramic' | 'exa' | 'linkup' | 'searxng' | 'perplexity'
+export type Provider = 'serper' | 'bing' | 'brave' | 'tavily' | 'ceramic' | 'exa' | 'linkup' | 'searxng' | 'pit' | 'perplexity'
 
 export type Keys = Partial<Record<Provider, string>>
 
@@ -32,7 +32,7 @@ export type SearchResult = {
   cached: boolean
 }
 /** Asked together and merged. Broad indexes first: fusion ties go to the earlier list, and SearXNG already blends five engines. */
-export const PRIMARY: Provider[] = ['serper', 'bing', 'searxng', 'brave', 'tavily', 'exa', 'linkup', 'ceramic']
+export const PRIMARY: Provider[] = ['serper', 'bing', 'searxng', 'brave', 'tavily', 'exa', 'linkup', 'ceramic', 'pit']
 /** Tried one by one, only when every primary failed. */
 export const FALLBACK: Provider[] = ['perplexity']
 export const ORDER: Provider[] = [...PRIMARY, ...FALLBACK]
@@ -51,6 +51,7 @@ export const LABELS: Record<Provider, string> = {
   exa: 'Exa',
   linkup: 'Linkup',
   searxng: 'SearXNG',
+  pit: 'pit.world index',
   perplexity: 'Perplexity',
 }
 export const MAX_QUERY = 512
@@ -152,6 +153,16 @@ function stripTags(value: unknown): string {
   return typeof value === 'string' ? value.replace(/<[^>]*>/g, '') : ''
 }
 
+/**
+ * Our own index: pages pit.world's crawler (services/crawler) read and
+ * published to nichedb.dev/c/sites, searched there. Title, summary (the page's
+ * description or an excerpt of its text) and keyword tags are what match.
+ */
+export function parsePitIndex(body: any): Hit[] {
+  const items: any[] = Array.isArray(body?.items) ? body.items : []
+  return cleanHits(items.map((i) => ({ url: i?.url, title: i?.title, description: i?.summary })))
+}
+
 export function parsePerplexity(body: any): Hit[] {
   const results: any[] = Array.isArray(body?.results) ? body.results : []
   return cleanHits(results.map((r) => ({ url: r?.url, title: r?.title, description: r?.snippet })))
@@ -215,6 +226,17 @@ export async function callProvider(provider: Provider, key: string, query: strin
     case 'searxng':
       // key is the instance's base URL, e.g. http://127.0.0.1:8888, reached over loopback.
       return parseSearxng(await getJson(fetchImpl, `${key.replace(/\/+$/, '')}/search?${new URLSearchParams({ q: query, format: 'json' })}`, {})).slice(0, limit)
+    case 'pit': {
+      // key is "<nichedb base URL>[ <api key>]": the index is public, a key only lifts the rate limit.
+      const [base = '', token] = key.trim().split(/\s+/)
+      return parsePitIndex(
+        await getJson(
+          fetchImpl,
+          `${base.replace(/\/+$/, '')}/api/v1/search?${new URLSearchParams({ q: query, collection: 'sites', limit: String(limit) })}`,
+          token ? { authorization: `Bearer ${token}` } : {},
+        ),
+      ).slice(0, limit)
+    }
     case 'linkup':
       return parseLinkup(
         await postJson(fetchImpl, 'https://api.linkup.so/v1/search', { authorization: `Bearer ${key}` }, { q: query, depth: 'standard', outputType: 'searchResults' }),

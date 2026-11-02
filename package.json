@@ -1,6 +1,6 @@
 {
   "name": "pitworld",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "mcpName": "world.pit/pit",
   "description": "pit.world MCP server: private web search and Moshpit name lookups for AI agents (stdio, no API key). Also a web app, API, CLI and TUI.",
   "license": "MIT",
@@ -20,6 +20,9 @@
     "README.md",
     "LICENSE"
   ],
+  "workspaces": [
+    "services/*"
+  ],
   "engines": {
     "bun": ">=1.1"
   },
@@ -27,7 +30,8 @@
     "start": "bun src/server.ts",
     "dev": "bun --watch src/server.ts",
     "test": "bun test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "crawler": "bun services/crawler/src/cli.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",

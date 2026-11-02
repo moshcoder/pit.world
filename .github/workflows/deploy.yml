@@ -31,6 +31,7 @@ jobs:
             *-----BEGINOPENSSHPRIVATEKEY-----*)
               body=${flat#*-----BEGINOPENSSHPRIVATEKEY-----}
               body=${body%%-----ENDOPENSSHPRIVATEKEY-----*}
+              # threatcrush-disable-next-line secret-private-key  rebuilds the PIT_DEPLOY_KEY secret's armour at run time; no key material is committed
               { echo '-----BEGIN OPENSSH PRIVATE KEY-----'; printf '%s\n' "$body" | fold -w 70; echo '-----END OPENSSH PRIVATE KEY-----'; } > ~/.ssh/id_ed25519 ;;
             *) printf '%s' "$flat" | base64 -d > ~/.ssh/id_ed25519 ;;
           esac

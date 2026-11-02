@@ -6,6 +6,7 @@ import type { Listing } from './listings.js'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
+import type { CrawlStatus } from './crawl-status.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
 import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
@@ -392,7 +393,7 @@ export function privacyPage(): string {
 <h2>What happens to a search</h2>
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
-<li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, and our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
+<li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo, and <a href="/bot">our own index</a>, kept at nichedb.dev), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 </ol>
@@ -409,6 +410,108 @@ export function privacyPage(): string {
 <p>One pit.world account signs you in on every <code>social.&lt;name&gt;.pit.world</code> feed and <code>bbs.&lt;name&gt;.pit.world</code> board, so you never make an account per site. You sign in with CoinPay (OAuth 2.1). We keep your CoinPay id, the name and email CoinPay gives us, a session cookie for <code>pit.world</code> only, and the list of pit.world sites you signed in to, which you can see and clear on <a href="/account">your account page</a>. A site gets your CoinPay id and name, nothing else. Search never reads the cookie. Delete the account from the same page and it is gone; what you posted on a board or feed stays there until you delete it on that site.</p>
 <h2>Source</h2>
 <p>The code that does all of this is public: <a href="https://github.com/moshcoder/pit.world">github.com/moshcoder/pit.world</a>.</p>
+</main>`,
+  })
+}
+
+/** pitbot's live status: is the crawler running, what is waiting, how fast it goes, what it just read. */
+export function statusPage(st: CrawlStatus): string {
+  const label: Record<string, string> = { healthy: 'Healthy', idle: 'Idle', degraded: 'Degraded', stalled: 'Stalled', offline: 'Offline' }
+  const stat = (name: string, value: string, note: string) => `<div class="stat"><span class="stat-label">${esc(name)}</span><b>${esc(value)}</b><small>${esc(note)}</small></div>`
+  const ago = (iso: string) => {
+    const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
+    return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`
+  }
+  const eta = (hours: number | null) => (hours === null ? '' : hours < 1 ? `${Math.max(1, Math.round(hours * 60))} min` : hours < 48 ? `${hours} h` : `${Math.round(hours / 24)} days`)
+  const max = Math.max(1, ...st.hourly.map((x) => x.pages + x.failed))
+  const bars = st.hourly
+    .map((x, i) => {
+      const ok = Math.round((x.pages / max) * 60)
+      const bad = Math.round((x.failed / max) * 60)
+      return `<g><title>${esc(new Date(x.at).toISOString().slice(11, 16))} UTC: ${fmt(x.pages)} read, ${fmt(x.failed)} failed</title><rect class="bar-ok" x="${i * 10}" y="${64 - ok}" width="8" height="${ok}"/><rect class="bar-bad" x="${i * 10}" y="${64 - ok - bad}" width="8" height="${bad}"/></g>`
+    })
+    .join('')
+  const chart = st.hourly.length
+    ? `<figure class="crawl-chart"><svg viewBox="0 0 ${st.hourly.length * 10} 66" preserveAspectRatio="none" role="img" aria-label="Pages read per hour, last 24 hours">${bars}</svg><figcaption>Pages read per hour, last 24 hours (UTC). Failures stacked on top.</figcaption></figure>`
+    : ''
+  const jobs = st.jobs.length
+    ? `<table class="crawl-jobs"><thead><tr><th>Job</th><th>State</th><th>Waiting</th><th>Last hour</th><th>Errors (1h)</th><th>Clears in</th></tr></thead><tbody>${st.jobs
+        .map(
+          (j) =>
+            `<tr><td><b>${esc(j.label)}</b><br><small>${esc(j.what)}</small></td><td><span class="state state-${j.state}">${esc(j.state)}</span></td><td>${fmt(j.backlog)}</td><td>${fmt(j.ratePerHour)}</td><td>${fmt(j.errorsLastHour)}</td><td>${esc(eta(j.clearsInHours))}</td></tr>`,
+        )
+        .join('')}</tbody></table>`
+    : ''
+  const log = st.log.length
+    ? `<ol class="crawl-log">${st.log
+        .map((e) => {
+          const what = e.url
+            ? `<a href="${esc(e.url)}" rel="noopener noreferrer nofollow">${esc(e.title || e.url)}</a>`
+            : esc(e.site ?? '')
+          const record = e.url && (e.kind === 'page' || e.kind === 'render') ? ` <a class="rec" href="https://nichedb.dev/c/sites/${esc(e.url.replace(/^https?:\/\//, ''))}" rel="noopener">record</a>` : ''
+          return `<li class="ev-${esc(e.kind)}"><time datetime="${esc(e.at)}">${esc(e.at.slice(11, 19))}</time> <span class="kind">${esc(e.kind)}</span> ${e.url && e.site ? `<span class="site">${esc(e.site)}</span> ` : ''}${what}${record}${e.note ? ` <small>${esc(e.note)}</small>` : ''}</li>`
+        })
+        .join('')}</ol>`
+    : '<p class="meta">Nothing logged yet.</p>'
+  const set = st.settings
+  return layout({
+    title: 'Crawler status: pitbot',
+    description: "Live status of pitbot, the crawler behind pit.world's own index: pages read in the last hour and day, what is waiting, and what it just read.",
+    path: '/status',
+    bodyClass: 'doc',
+    head: '<meta http-equiv="refresh" content="15">',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose crawl-status">
+<h1>Crawler status</h1>
+<p>Live view of <a href="/bot">pitbot</a>, the crawler that builds pit.world's own index: up to ${fmt(set?.maxPages ?? 1000)} pages per site, published as open records to <a href="https://nichedb.dev/c/sites">nichedb.dev/c/sites</a> and searched next to the other engines. This page refreshes every 15 seconds; the same numbers are at <a href="/api/status">/api/status</a>.</p>
+<p class="crawl-health crawl-health-${st.health}"><strong>${label[st.health]}</strong> ${esc(st.summary)}</p>
+${
+  st.reachable
+    ? `<div class="stat-grid">
+${stat('Sites', fmt(st.totals.sites), 'known to the crawler')}
+${stat('Pages read', fmt(st.totals.pagesIndexed), `${fmt(st.totals.pagesRendered)} through a browser`)}
+${stat('Read (1h)', fmt(st.lastHour.pages), `${fmt(st.lastHour.rendered)} rendered`)}
+${stat('Read (24h)', fmt(st.lastDay.pages), `${fmt(st.lastDay.sitesStarted)} sites started`)}
+${stat('Published', fmt(st.totals.published), `${fmt(st.lastHour.published)} in the last hour`)}
+${stat('Waiting to publish', fmt(st.totals.outbox), set?.publishing ? 'records for nichedb' : 'publishing is off')}
+${stat('Failed (24h)', fmt(st.lastDay.failed), `${fmt(st.totals.failed)} all time`)}
+</div>
+${chart}
+<h2>Jobs</h2>
+${jobs}
+<h2>Live log</h2>
+${log}
+<p class="meta">${set ? `${fmt(set.concurrency)} pages at once per worker, ${fmt(set.hostDelayMs / 1000)} s between requests to one site, ${fmt(set.renderers)} browsers, ${fmt(set.maxDepth)} link hops, every site re-read each ${fmt(set.recrawlDays)} days${set.discover ? ', following links to new sites' : ''}. ` : ''}Generated ${esc(ago(st.generatedAt))}.</p>`
+    : ''
+}
+</main>`,
+  })
+}
+
+/** pitbot: who reads your site for pit.world's own index, and how to say no. */
+export function botPage(): string {
+  return layout({
+    title: 'pitbot: the pit.world crawler',
+    description: 'pitbot reads up to a thousand pages per site for pit.world\'s own search index. It obeys robots.txt, noindex and nofollow, and waits between requests.',
+    path: '/bot',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<h1>pitbot, the pit.world crawler</h1>
+<p>pitbot reads pages for pit.world's own search index. What it reads is published as open <a href="https://logicsrc.com/opensite">OpenSite</a> records at <a href="https://nichedb.dev/c/sites">nichedb.dev/c/sites</a>, one per page, and pit.world searches them alongside the other indexes it asks.</p>
+<h2>How it behaves</h2>
+<ul>
+<li>It identifies itself: <code>Mozilla/5.0 (compatible; pitbot/0.1; +https://pit.world/bot)</code>.</li>
+<li>It obeys <code>robots.txt</code>: a group for <code>pitbot</code> if you write one, else <code>*</code>, and <code>Crawl-delay</code> up to 30 seconds.</li>
+<li>It obeys <code>&lt;meta name="robots" content="noindex"&gt;</code> and <code>nofollow</code>, and does not follow <code>rel="nofollow"</code>, <code>sponsored</code> or <code>ugc</code> links.</li>
+<li>It sends one request at a time to a site, with a pause between them, and reads at most a thousand pages per site per month.</li>
+<li>Pages that are an empty shell until JavaScript runs are read once more in a headless browser, so the index sees what a visitor sees.</li>
+<li>It reads only public pages: no forms, no logins, no carts.</li>
+</ul>
+<h2>Keep it out</h2>
+<pre><code>User-agent: pitbot
+Disallow: /</code></pre>
+<p>A page already in the index is dropped on its next read. To ask for anything else, write to <a href="mailto:riotcoder@profullstack.com">riotcoder@profullstack.com</a>.</p>
 </main>`,
   })
 }
