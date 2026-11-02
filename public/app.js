@@ -69,11 +69,11 @@
           button.hidden = true
           return
         }
-        if (res.status === 429 && body.signIn) {
+        if (res.status === 429 && (body.signIn || body.pass)) {
           show(box, `${body.error} `, 'err')
           const a = document.createElement('a')
-          a.href = body.signIn
-          a.textContent = 'Sign in'
+          a.href = body.signIn || body.pass
+          a.textContent = body.signIn ? 'Sign in' : body.pass === '/pass' ? 'Get the $1 weekly pass' : 'Your pass'
           box.append(a)
         } else {
           show(box, body.error || 'Summary unavailable. Try again.', 'err')
