@@ -167,6 +167,12 @@ export async function startWorkers(config: Config, log: (line: string) => void =
     w.on('failed', (job, error) => {
       if (error instanceof DelayedError) return
       log(`${w.name} ${job?.id ?? '?'} failed: ${error.message}`)
+      const data = (job?.data ?? {}) as Partial<PageJob>
+      const field = w.name === QUEUES.render ? 'renders_errored' : w.name === QUEUES.publish ? 'publish_errored' : 'pages_errored'
+      void runtime.frontier.bump(field).catch(() => {})
+      void runtime.frontier
+        .log({ kind: 'fail', ...(data.site ? { site: data.site } : {}), ...(data.url ? { url: data.url } : {}), note: `${w.name.replace('pit-crawl-', '')}: ${error.message.slice(0, 160)}` })
+        .catch(() => {})
     })
     w.on('error', (error) => log(`${w.name} error: ${error.message}`))
   }
@@ -191,4 +197,25 @@ export async function snapshot(runtime: Runtime) {
   const queues: Record<string, Record<string, number>> = {}
   Object.keys(runtime.queues).forEach((k, i) => (queues[k] = counts[i]!))
   return { stats, queues }
+}
+
+/** Everything /status shows: the snapshot, rates over the hour and the day, the log tail. */
+export async function report(runtime: Runtime, config: Config) {
+  const [snap, activity, log] = await Promise.all([snapshot(runtime), runtime.frontier.activity(), runtime.frontier.recent(60)])
+  return {
+    ...snap,
+    activity,
+    log,
+    settings: {
+      maxPages: config.maxPages,
+      maxDepth: config.maxDepth,
+      concurrency: config.concurrency,
+      hostDelayMs: config.hostDelayMs,
+      recrawlDays: config.recrawlDays,
+      renderers: config.obscuraUrls.length,
+      discover: config.discover,
+      publishing: Boolean(config.nichedbKey),
+    },
+    generatedAt: new Date().toISOString(),
+  }
 }

@@ -4,10 +4,11 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
+import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, botPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { aboutPage, botPage, statusPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
@@ -52,6 +53,8 @@ export type Deps = {
   newsletter?: Newsletter
   /** Bearer token for /api/admin/*; unset means the admin API is off. */
   adminToken?: string
+  /** pitbot's status for /status; defaults to the crawler's loopback /stats (CRAWLER_STATUS_URL). */
+  crawlStatus?: () => Promise<CrawlStatus>
   /** PairUX + nixamp listings for the Videos, Music and Live tabs. */
   promoted?: Promoted
   /** Claimable business listings (/b); unset means the feature is off. */
@@ -93,6 +96,7 @@ export function createApp(deps: Deps) {
   const cache = deps.cache ?? new Cache()
   const limiter = deps.limiter ?? new RateLimiter()
   const promoted = deps.promoted ?? new Promoted(deps.fetch)
+  const crawlStatus = deps.crawlStatus ?? createCrawlStatus(process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807')
   const app = new Hono<Env>()
 
   // Training crawlers buy a day pass before anything else, and ahead of the header
@@ -220,6 +224,16 @@ export function createApp(deps: Deps) {
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/bot', (c) => c.html(botPage()))
+  // pitbot's live status: the crawler is its own service, read over loopback.
+  app.get('/status', async (c) => {
+    c.header('cache-control', 'no-store')
+    return c.html(statusPage(await crawlStatus()))
+  })
+  app.get('/api/status', async (c) => {
+    c.header('cache-control', 'no-store')
+    c.header('access-control-allow-origin', '*')
+    return c.json(await crawlStatus())
+  })
   app.get('/connect', (c) => c.html(connectPage()))
   // The house form guard on the invoice form: a signed token minted with the page (a bot that POSTs
   // without rendering /build has none), a fill-time floor and the honeypot. Rate limiting stays ours.

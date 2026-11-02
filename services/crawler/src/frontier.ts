@@ -17,6 +17,31 @@ import type { Redis } from 'ioredis'
 import { EMPTY, type Robots } from './robots.ts'
 import { urlId } from './url.ts'
 
+/** One line of the crawl log, newest first on /status. */
+export type CrawlEvent = {
+  at: string
+  kind: 'site' | 'page' | 'render' | 'skip' | 'fail' | 'publish'
+  site?: string
+  url?: string
+  title?: string
+  note?: string
+}
+
+/** Counters over time: the last hour, the last day, and the day hour by hour (oldest first). */
+export type Activity = {
+  lastHour: Record<string, number>
+  lastDay: Record<string, number>
+  hours: Array<{ at: string; counts: Record<string, number> }>
+}
+
+const LOG_MAX = 200
+const minuteOf = (t: number) => Math.floor(t / 60_000)
+const hourOf = (t: number) => Math.floor(t / 3_600_000)
+const add = (into: Record<string, number>, from: Record<string, string | number>) => {
+  for (const [k, v] of Object.entries(from)) into[k] = (into[k] ?? 0) + Number(v)
+  return into
+}
+
 export interface Frontier {
   /** Admit a page to this cycle: 'new', 'seen', or 'full' (the site has had its maxPages). */
   admit(site: string, url: string): Promise<'new' | 'seen' | 'full'>
@@ -33,8 +58,12 @@ export interface Frontier {
   push(entries: unknown[], max: number): Promise<void>
   take(count: number): Promise<string[]>
   giveBack(raw: string[]): Promise<void>
+  /** A counter, kept as a total and in minute and hour buckets for rates. */
   bump(field: string, by?: number): Promise<void>
   stats(): Promise<Record<string, number>>
+  log(event: Omit<CrawlEvent, 'at'>): Promise<void>
+  recent(count: number): Promise<CrawlEvent[]>
+  activity(): Promise<Activity>
 }
 
 const K = {
@@ -45,6 +74,9 @@ const K = {
   sites: 'pitcrawl:sites',
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
+  minute: (m: number) => `pitcrawl:m:${m}`,
+  hour: (h: number) => `pitcrawl:h:${h}`,
+  log: 'pitcrawl:log',
 }
 
 const ADMIT = `
@@ -134,7 +166,15 @@ export class RedisFrontier implements Frontier {
   }
 
   async bump(field: string, by = 1) {
-    await this.redis.hincrby(K.stats, field, by)
+    const now = Date.now()
+    await this.redis
+      .multi()
+      .hincrby(K.stats, field, by)
+      .hincrby(K.minute(minuteOf(now)), field, by)
+      .expire(K.minute(minuteOf(now)), 7_200)
+      .hincrby(K.hour(hourOf(now)), field, by)
+      .expire(K.hour(hourOf(now)), 49 * 3_600)
+      .exec()
   }
 
   async stats() {
@@ -142,6 +182,45 @@ export class RedisFrontier implements Frontier {
     const out: Record<string, number> = { sites, outbox }
     for (const [k, v] of Object.entries(hash)) out[k] = Number(v)
     return out
+  }
+
+  async log(event: Omit<CrawlEvent, 'at'>) {
+    await this.redis
+      .multi()
+      .lpush(K.log, JSON.stringify({ at: new Date().toISOString(), ...event }))
+      .ltrim(K.log, 0, LOG_MAX - 1)
+      .exec()
+  }
+
+  async recent(count: number) {
+    const raw = await this.redis.lrange(K.log, 0, Math.min(count, LOG_MAX) - 1)
+    return raw.flatMap((line) => {
+      try {
+        return [JSON.parse(line) as CrawlEvent]
+      } catch {
+        return []
+      }
+    })
+  }
+
+  async activity() {
+    const now = Date.now()
+    const m = minuteOf(now)
+    const h = hourOf(now)
+    const pipe = this.redis.pipeline()
+    for (let i = 0; i < 60; i++) pipe.hgetall(K.minute(m - i))
+    for (let i = 23; i >= 0; i--) pipe.hgetall(K.hour(h - i))
+    const results = ((await pipe.exec()) ?? []).map(([, v]) => (v ?? {}) as Record<string, string>)
+    const lastHour: Record<string, number> = {}
+    for (const r of results.slice(0, 60)) add(lastHour, r)
+    const hourly = results.slice(60)
+    const lastDay: Record<string, number> = {}
+    for (const r of hourly) add(lastDay, r)
+    return {
+      lastHour,
+      lastDay,
+      hours: hourly.map((r, i) => ({ at: new Date((h - 23 + i) * 3_600_000).toISOString(), counts: add({}, r) })),
+    }
   }
 }
 
@@ -197,10 +276,23 @@ export class MemoryFrontier implements Frontier {
   async giveBack(raw: string[]) {
     this.outbox.unshift(...raw)
   }
+  events: CrawlEvent[] = []
   async bump(field: string, by = 1) {
     this.counters[field] = (this.counters[field] ?? 0) + by
   }
   async stats() {
     return { ...this.counters, sites: this.sites.size, outbox: this.outbox.length }
+  }
+  async log(event: Omit<CrawlEvent, 'at'>) {
+    this.events.unshift({ at: new Date().toISOString(), ...event })
+    this.events.length = Math.min(this.events.length, LOG_MAX)
+  }
+  async recent(count: number) {
+    return this.events.slice(0, count)
+  }
+  async activity() {
+    // In memory everything counted happened "this hour".
+    const now = new Date(hourOf(Date.now()) * 3_600_000).toISOString()
+    return { lastHour: { ...this.counters }, lastDay: { ...this.counters }, hours: [{ at: now, counts: { ...this.counters } }] }
   }
 }

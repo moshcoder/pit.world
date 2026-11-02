@@ -14,7 +14,7 @@ import { configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
-import { createRuntime, snapshot, startWorkers } from './queues.ts'
+import { createRuntime, report, snapshot, startWorkers } from './queues.ts'
 import { sitesFromNichedb, sitesFromRing, sitesFromText } from './seed.ts'
 import { normalizeUrl, resolvesPublic, siteOf } from './url.ts'
 
@@ -52,7 +52,9 @@ async function worker() {
           const path = new URL(request.url).pathname
           if (path !== '/healthz' && path !== '/stats') return new Response('not found', { status: 404 })
           try {
-            return Response.json({ ok: true, version: VERSION, roles: config.roles, ...(await snapshot(runtime)) })
+            // /healthz is the cheap one (Docker asks every 30 s); /stats is what pit.world/status reads.
+            const body = path === '/stats' ? await report(runtime, config) : await snapshot(runtime)
+            return Response.json({ ok: true, version: VERSION, roles: config.roles, ...body })
           } catch (error) {
             return Response.json({ ok: false, error: (error as Error).message }, { status: 503 })
           }

@@ -107,6 +107,11 @@ describe('a site, start to finish', () => {
     expect(records[0].enrichment.keywords).toContain('ovens')
     // Discovery is off by default: friend.example is not scheduled.
     expect(queued.sites).toEqual([])
+    // The log /status shows, newest first.
+    const kinds = frontier.events.map((e) => e.kind)
+    expect(kinds).toEqual(['page', 'render', 'page', 'site'])
+    expect(frontier.events[0]).toMatchObject({ site: 'shop.example', url: 'https://www.shop.example/b2', title: 'Page B' })
+    expect(frontier.events.at(-1)!.note).toBe('started: 2 pages queued (2 in sitemaps)')
   })
 
   test('discovery on: linked sites are scheduled too', async () => {

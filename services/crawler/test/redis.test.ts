@@ -41,6 +41,22 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     expect(await frontier.noteSite('once.example', 10, 0)).toBe(true)
   })
 
+  test('counters land in the hour and the day; the log is newest first and bounded', async () => {
+    await redis.flushdb()
+    const frontier = new RedisFrontier(redis, 5, 60_000)
+    await frontier.bump('pages_indexed', 3)
+    await frontier.bump('pages_indexed')
+    const activity = await frontier.activity()
+    expect(activity.lastHour.pages_indexed).toBe(4)
+    expect(activity.lastDay.pages_indexed).toBe(4)
+    expect(activity.hours).toHaveLength(24)
+    expect(activity.hours.at(-1)!.counts.pages_indexed).toBe(4)
+    for (let i = 0; i < 205; i++) await frontier.log({ kind: 'page', note: String(i) })
+    const recent = await frontier.recent(500)
+    expect(recent).toHaveLength(200)
+    expect(recent[0]!.note).toBe('204')
+  })
+
   test('the outbox keeps order through a give-back and is bounded', async () => {
     const frontier = new RedisFrontier(redis, 5, 60_000)
     await frontier.push([1, 2, 3, 4], 3)

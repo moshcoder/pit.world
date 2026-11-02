@@ -96,15 +96,18 @@ export function createCrawler(deps: Deps) {
     const { site } = job
     if (!(await resolver(site))) {
       await frontier.bump('sites_refused')
+      await frontier.log({ kind: 'skip', site, note: 'not on the public internet' })
       return { admitted: 0, outcome: 'not public' }
     }
     const robots = await robotsFor(site)
     if (robots === 'unavailable') {
       await frontier.bump('sites_unavailable')
+      await frontier.log({ kind: 'skip', site, note: 'robots.txt answered 5xx; trying another day' })
       return { admitted: 0, outcome: 'robots.txt unavailable' }
     }
     if (!allows(robots, '/')) {
       await frontier.bump('sites_disallowed')
+      await frontier.log({ kind: 'skip', site, note: 'robots.txt disallows pitbot' })
       return { admitted: 0, outcome: 'robots.txt disallows /' }
     }
     const home = `https://${site}/`
@@ -129,19 +132,34 @@ export function createCrawler(deps: Deps) {
     const jobs = [...(await admitAll(site, [home], 0, robots)), ...(await admitAll(site, listed.slice(0, config.maxPages), 1, robots))]
     if (jobs.length) await enqueue.pages(jobs)
     await frontier.bump('sites_started')
+    await frontier.bump('pages_queued', jobs.length)
+    await frontier.log({ kind: 'site', site, note: `started: ${jobs.length} pages queued (${listed.length} in sitemaps)` })
     return { admitted: jobs.length, outcome: 'started' }
   }
 
   /** What a read page becomes: a record waiting for nichedb, and the next pages. */
   async function accept(doc: Extracted, job: PageJob, robots: Robots): Promise<string> {
+    const rendered = doc.enrichment.rendered
     if (!doc.noindex) {
       await frontier.push([{ record: doc.record, enrichment: doc.enrichment }], config.outboxMax)
-      await frontier.bump(doc.enrichment.rendered ? 'pages_rendered' : 'pages_indexed')
+      await frontier.bump(rendered ? 'pages_rendered' : 'pages_indexed')
     } else await frontier.bump('pages_noindex')
+    let followed = 0
     if (job.depth < config.maxDepth && doc.internal.length) {
       const next = await admitAll(job.site, doc.internal.slice(0, LINKS_PER_PAGE), job.depth + 1, robots)
-      if (next.length) await enqueue.pages(next)
+      if (next.length) {
+        await enqueue.pages(next)
+        await frontier.bump('pages_queued', next.length)
+      }
+      followed = next.length
     }
+    await frontier.log({
+      kind: doc.noindex ? 'skip' : rendered ? 'render' : 'page',
+      site: job.site,
+      url: doc.record.url,
+      title: doc.record.title,
+      note: doc.noindex ? 'noindex' : `${doc.enrichment.words} words${followed ? `, ${followed} new links` : ''}`,
+    })
     if (config.discover && doc.external.length) await scheduleSites(doc.external.slice(0, SITES_PER_PAGE), 'link')
     return doc.noindex ? 'noindex' : 'indexed'
   }
@@ -162,6 +180,7 @@ export function createCrawler(deps: Deps) {
     }
     if (r.status >= 400) {
       await frontier.bump('pages_failed')
+      await frontier.log({ kind: 'fail', site: job.site, url: job.url, note: `HTTP ${r.status}` })
       return { outcome: `HTTP ${r.status}` }
     }
     if (!/html/.test(r.contentType)) return { outcome: `not a page (${r.contentType || 'no type'})` }
@@ -223,6 +242,7 @@ export function createCrawler(deps: Deps) {
       await frontier.bump('published', sent)
       await frontier.bump('published_new', added)
       if (rejected) await frontier.bump('published_rejected', rejected)
+      await frontier.log({ kind: 'publish', note: `${sent} records to nichedb: ${added} new${rejected ? `, ${rejected} refused` : ''}` })
     }
     return { sent, added, rejected, waiting: false }
   }
