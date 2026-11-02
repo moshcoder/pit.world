@@ -29,7 +29,7 @@ import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
-import { importNicheDb } from './nichedb-import.js'
+import { CATEGORY_RULES_VERSION, categoryFor, importNicheDb } from './nichedb-import.js'
 import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
@@ -862,6 +862,12 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
         running = false
         setTimeout(importDirectory, caughtUp ? 3600_000 : 5 * 60_000).unref()
       }
+    }
+    try {
+      const n = listings.recategorizeImported(categoryFor, CATEGORY_RULES_VERSION)
+      if (n) console.log(`NicheDB directory import: re-categorised ${n} imported listings`)
+    } catch (err) {
+      console.error(`NicheDB directory re-categorise failed: ${(err as Error).message}`)
     }
     setTimeout(importDirectory, 90_000).unref()
   }

@@ -931,6 +931,31 @@ export class Listings {
     return changed
   }
 
+  /**
+   * Recompute every imported listing's category from its stored topics when the rules change (only
+   * import sets an imported listing's category: nobody can edit one until they claim it). Once per version.
+   */
+  recategorizeImported(categoryFor: (topic: string) => string, version: string): number {
+    const key = 'categories'
+    if (this.importCursor(key) === version) return 0
+    const rows = this.db.query(`SELECT domain, research_topics, category FROM listings WHERE ${IMPORTED}`).all() as Array<{ domain: string; research_topics: string; category: string }>
+    const update = this.db.prepare(`UPDATE listings SET category = ? WHERE domain = ? AND ${IMPORTED}`)
+    let changed = 0
+    this.db.transaction(() => {
+      for (const r of rows) {
+        let first = ''
+        try {
+          first = String((JSON.parse(r.research_topics) as unknown[])[0] ?? '')
+        } catch {}
+        const next = categoryOf(categoryFor(first))?.slug ?? ''
+        if (next !== r.category) changed += update.run(next, r.domain).changes
+      }
+    })()
+    this.setImportCursor(key, version)
+    this.counts = null
+    return changed
+  }
+
   /** The saved position of an importer (see src/nichedb-import.ts). */
   importCursor(source: string): string | null {
     return (this.db.query('SELECT cursor FROM import_state WHERE source = ?').get(source) as { cursor: string | null } | null)?.cursor ?? null
