@@ -3,7 +3,8 @@
  * Videos, Music, Live, Shopping, News, Books, Podcasts, Blogs, Places and
  * Scholar. Images, videos, shopping, news, places and scholar come from Google
  * through Serper's own endpoints; Music is a web search kept to music sites;
- * Live is a video search for streams. Our own directories answer where we have
+ * Live is a video search for streams. Scholar falls back to OpenAlex (free, no
+ * key). Our own directories answer where we have
  * one: Blogs from rssamplifier.com, Podcasts from p0dcasters.com. Books come
  * from Open Library (free, no key). News falls back to rssamplifier.com's
  * newsrooms when Google is not configured or does not answer. Every one is
@@ -32,7 +33,7 @@ export const VERTICALS: Array<{ id: Vertical; label: string }> = [
 ]
 
 /** The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing. */
-const SERPER_ONLY: Vertical[] = ['images', 'videos', 'music', 'live', 'shopping', 'places', 'scholar']
+const SERPER_ONLY: Vertical[] = ['images', 'videos', 'music', 'live', 'shopping', 'places']
 
 type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs'>
 
@@ -64,7 +65,7 @@ export type Media = {
   extra?: string
 }
 
-export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary'
+export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex'
 
 export type MediaResult = {
   query: string
@@ -82,6 +83,7 @@ export const MEDIA_SOURCES: Record<MediaProvider, string> = {
   rssamplifier: 'the RSS Amplifier directory (rssamplifier.com)',
   p0dcasters: 'the p0dcasters.com directory',
   openlibrary: 'Open Library',
+  openalex: 'OpenAlex',
 }
 
 export const MUSIC_SITES = ['bandcamp.com', 'soundcloud.com', 'open.spotify.com', 'music.apple.com', 'music.youtube.com', 'audiomack.com', 'mixcloud.com']
@@ -277,6 +279,48 @@ export function parseSerperScholar(body: any): Media[] {
   })
 }
 
+/** OpenAlex /works (free, no key): Scholar when Google is not configured or does not answer. */
+export function parseOpenAlex(body: any): Media[] {
+  const rows: any[] = Array.isArray(body?.results) ? body.results : []
+  return rows.flatMap((w) => {
+    const url = httpUrl(w?.doi) || httpUrl(w?.primary_location?.landing_page_url) || httpUrl(w?.id)
+    const title = str(w?.display_name)
+    if (!url || !title) return []
+    const authors: string[] = Array.isArray(w?.authorships) ? w.authorships.map((a: any) => str(a?.author?.display_name)).filter(Boolean) : []
+    const venue = str(w?.primary_location?.source?.display_name)
+    const cited = num(w?.cited_by_count)
+    const year = num(w?.publication_year)
+    return [
+      {
+        url,
+        title,
+        host: host(url),
+        description: abstract(w?.abstract_inverted_index) || undefined,
+        author: [authors.slice(0, 3).join(', ') + (authors.length > 3 ? ' et al.' : ''), venue].filter(Boolean).join(' - ') || undefined,
+        date: year ? String(year) : undefined,
+        extra: cited ? `Cited by ${cited.toLocaleString('en-US')}` : undefined,
+      },
+    ]
+  })
+}
+
+/** OpenAlex ships an abstract as { word: [positions] }; the first forty words are plenty for a snippet. */
+function abstract(index: unknown): string {
+  if (!index || typeof index !== 'object') return ''
+  const words: string[] = []
+  let longer = false
+  for (const [word, positions] of Object.entries(index as Record<string, unknown>)) {
+    if (!Array.isArray(positions)) continue
+    for (const p of positions) {
+      if (typeof p !== 'number' || p < 0) continue
+      if (p < 40) words[p] = word
+      else longer = true
+    }
+  }
+  const text = words.filter(Boolean).join(' ')
+  return text ? `${text}${longer ? '…' : ''}` : ''
+}
+
 /** Open Library's search.json: one row per work. Covers go through /img like every other picture. */
 export function parseOpenLibrary(body: any): Media[] {
   const docs: any[] = Array.isArray(body?.docs) ? body.docs : []
@@ -462,6 +506,20 @@ export async function searchMedia(
         // Google's news index first; our own directory of newsrooms when it is not configured or does not answer.
         const google = key ? await askSerper(fetchImpl, key, 'news', q, limit).catch(() => null) : null
         result = google ? make('serper', google) : make('rssamplifier', (await askRssAmplifier(fetchImpl, 'news', q)).posts)
+        break
+      }
+      case 'scholar': {
+        // Google Scholar first; OpenAlex (free, no key) when Google is not configured or does not answer.
+        const google = key ? await askSerper(fetchImpl, key, 'scholar', q, limit).catch(() => null) : null
+        if (google) result = make('serper', google)
+        else {
+          const params = new URLSearchParams({
+            search: q,
+            'per-page': String(limit),
+            select: 'id,display_name,publication_year,cited_by_count,doi,primary_location,authorships,abstract_inverted_index',
+          })
+          result = make('openalex', parseOpenAlex(await fetchJson(fetchImpl, `https://api.openalex.org/works?${params}`, { headers: OURS })))
+        }
         break
       }
       default:
