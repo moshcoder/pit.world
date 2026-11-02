@@ -942,8 +942,13 @@ export class Listings {
 
   /** Listings per source: claimed, written by pit.world, imported (and how many of those are indexable). */
   sourceCounts(): { claimed: number; seeded: number; imported: number; importedIndexable: number } {
-    const n = (sql: string) => (this.db.query(`SELECT COUNT(*) AS n FROM listings WHERE ${sql}`).get() as { n: number }).n
-    return { claimed: n('claimed_at IS NOT NULL'), seeded: n('seeded_at IS NOT NULL AND claimed_at IS NULL'), imported: n(IMPORTED), importedIndexable: n(INDEXABLE_IMPORT) }
+    const row = this.db.query(`SELECT
+        SUM(claimed_at IS NOT NULL) AS claimed,
+        SUM(seeded_at IS NOT NULL AND claimed_at IS NULL) AS seeded,
+        SUM(${IMPORTED}) AS imported,
+        SUM(${INDEXABLE_IMPORT}) AS importedIndexable
+      FROM listings`).get() as Record<string, number | null>
+    return { claimed: row.claimed ?? 0, seeded: row.seeded ?? 0, imported: row.imported ?? 0, importedIndexable: row.importedIndexable ?? 0 }
   }
 
   /** Every curated listing in the directory (claimed or written by pit.world); imported ones are not here. */
