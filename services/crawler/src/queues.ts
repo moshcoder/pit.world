@@ -130,19 +130,43 @@ export async function startWorkers(config: Config, log: (line: string) => void =
   const role = (r: Role) => config.roles.includes(r)
   const common = { stalledInterval: 60_000, maxStalledCount: 2 }
 
-  if (role('site'))
-    workers.push(
-      new Worker<SiteJob>(
-        QUEUES.site,
-        (job, token) =>
-          politely(job, token, async () => {
-            const out = await crawler.crawlSite(job.data)
-            if (!out.delayMs) log(`site ${job.data.site}: ${out.outcome}, ${out.admitted} pages queued`)
-            return out
-          }),
-        { ...common, connection: workerConnection(), concurrency: Math.max(2, Math.ceil(config.concurrency / 4)) },
-      ),
+  let gate: ReturnType<typeof setInterval> | null = null
+  if (role('site')) {
+    const siteWorker = new Worker<SiteJob>(
+      QUEUES.site,
+      (job, token) =>
+        politely(job, token, async () => {
+          const out = await crawler.crawlSite(job.data)
+          if (!out.delayMs) log(`site ${job.data.site}: ${out.outcome}, ${out.admitted} pages queued`)
+          return out
+        }),
+      { ...common, connection: workerConnection(), concurrency: Math.max(2, Math.ceil(config.concurrency / 4)) },
     )
+    workers.push(siteWorker)
+    // Backpressure without losing places: a site job delayed for the page backlog came
+    // back at the END of the waiting list (BullMQ returns delayed jobs behind everything),
+    // so seed --first sites fell behind a 358k-site seed. Instead the site worker stops
+    // taking jobs while the backlog is over the cap and resumes under 90% of it.
+    const pageBacklog = async () => {
+      const c = await runtime.queues.page.getJobCounts('waiting', 'prioritized', 'delayed')
+      return (c.waiting ?? 0) + (c.prioritized ?? 0) + (c.delayed ?? 0)
+    }
+    let paused = false
+    gate = setInterval(async () => {
+      try {
+        const backlog = await pageBacklog()
+        if (!paused && backlog > config.maxPageBacklog) {
+          paused = true
+          await siteWorker.pause(true)
+        } else if (paused && backlog < config.maxPageBacklog * 0.9) {
+          paused = false
+          siteWorker.resume()
+        }
+      } catch {
+        // Redis trouble is the watchdog's to handle.
+      }
+    }, 5_000)
+  }
   if (role('page'))
     workers.push(
       new Worker<PageJob>(QUEUES.page, (job, token) => politely(job, token, () => crawler.crawlPage(job.data)), {
@@ -200,6 +224,7 @@ export async function startWorkers(config: Config, log: (line: string) => void =
     runtime,
     workers,
     async close() {
+      if (gate) clearInterval(gate)
       await Promise.all(workers.map((w) => w.close()))
       await runtime.close()
     },

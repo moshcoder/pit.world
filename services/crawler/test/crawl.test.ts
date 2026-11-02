@@ -120,9 +120,9 @@ describe('a site, start to finish', () => {
     expect(queued.sites).toEqual([{ site: 'friend.example', source: 'link' }])
   })
 
-  test('a site start waits while the page backlog is over the cap', async () => {
+  test('a site start stops hard past 120% of the page backlog cap', async () => {
     const { config, frontier, queued } = setup({ CRAWL_MAX_PAGE_BACKLOG: '100' })
-    let backlog = 101
+    let backlog = 121
     const crawler = createCrawler({
       config,
       frontier,
@@ -133,7 +133,7 @@ describe('a site, start to finish', () => {
     })
     expect(await crawler.crawlSite({ site: 'shop.example', source: 'opml' })).toEqual({ admitted: 0, outcome: 'waiting for the page backlog', delayMs: 60_000 })
     expect(queued.pages).toEqual([])
-    backlog = 100
+    backlog = 120
     expect((await crawler.crawlSite({ site: 'shop.example', source: 'opml' })).outcome).toBe('started')
   })
 
