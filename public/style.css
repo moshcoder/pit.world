@@ -370,3 +370,26 @@ form .btn { border: 0; cursor: pointer; }
 .ad-slot .vote { margin: 0; flex: none; }
 .card .row .vote, .pros .row .vote, .prose .row .vote { margin: 0 0 0 auto; }
 .business-preview .vote { display: flex; }
+
+/* Play / Listen / Read here (src/players.ts): a quiet button, the player opens under the result once pressed. */
+.play-row { margin-top: 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.play-row[hidden] { display: none; }
+.play { appearance: none; border: 1px solid var(--line); background: transparent; color: var(--text); font: 12px/1 var(--mono); padding: 6px 10px; border-radius: 999px; cursor: pointer; }
+.play::before { content: "▶ "; color: var(--accent); }
+.play[aria-expanded="true"]::before { content: "✕ "; }
+.play:hover, .play:focus-visible { border-color: var(--accent); }
+.play-note { color: var(--muted); font: 11px var(--mono); }
+.player { margin-top: 8px; max-width: 720px; }
+.player iframe { display: block; width: 100%; border: 1px solid var(--line); border-radius: 10px; background: #000; }
+.player.shape-video iframe { aspect-ratio: 16 / 9; height: auto; }
+.player.shape-audio iframe { height: 152px; background: transparent; }
+.player.shape-book iframe { height: min(80vh, 640px); background: var(--panel); }
+.player audio { display: block; width: 100%; }
+.player.err { color: var(--muted); font-size: 14px; }
+.player .now-playing { margin: 0 0 6px; font-size: 14px; font-weight: 600; }
+.player .episodes { list-style: none; padding: 0; margin: 8px 0 0; max-height: 240px; overflow-y: auto; border-top: 1px solid var(--line); }
+.player .episodes button { appearance: none; border: 0; border-bottom: 1px solid var(--line); background: none; color: var(--text); text-align: left; width: 100%; padding: 6px 2px; font: 13px var(--sans, inherit); cursor: pointer; }
+.player .episodes button:hover, .player .episodes button[aria-current="true"] { color: var(--accent); }
+/* Grid cards (videos, books): the player takes the whole card width under the thumbnail and text. */
+.videos li:has(.player), .books li:has(.player) { grid-template-columns: 1fr; }
+.videos li:has(.player) > a, .books li:has(.player) > a { display: none; }

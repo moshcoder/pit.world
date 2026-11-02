@@ -47,6 +47,7 @@ import { mountRewards, rewardsOnSignIn, rewardsSections } from './rewards-routes
 import { Boards, serviceRequest } from './services.js'
 import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type SearchResult } from './search.js'
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
+import { AudioRegistry, embedHosts, FIXED_FRAME_HOSTS, proxyAudio, showEpisodes, showPage } from './players.js'
 import { Summarizer, SummaryStore } from './summarize.js'
 import { createThrottle } from '@profullstack/throttle'
 import { Database } from 'bun:sqlite'
@@ -104,6 +105,10 @@ export type Deps = {
   fingerprintSecret?: string
   /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
   votes?: Votes
+  /** Audio files /audio may stream (players.ts); a fresh in-memory registry by default. */
+  audio?: AudioRegistry
+  /** DNS for /audio's public-address check; injectable for tests. */
+  resolve?: (host: string) => Promise<string[]>
 }
 
 /** The visitor's address arrives as a binding from serve() (or a test), never from a header the visitor controls. */
@@ -111,7 +116,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC}; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
+    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC}; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com ${FIXED_FRAME_HOSTS.join(' ')}; media-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
@@ -141,7 +146,11 @@ export function createApp(deps: Deps) {
 
   app.use('*', async (c, next) => {
     await next()
-    for (const [name, value] of Object.entries(SECURITY_HEADERS)) c.header(name, value)
+    // A page with PeerTube players names their instances (x-frame-hosts, never sent on); only those join frame-src.
+    const frames = (c.res.headers.get('x-frame-hosts') ?? '').split(' ').filter((h) => /^https:\/\/[a-z0-9.-]+$/i.test(h))
+    c.res.headers.delete('x-frame-hosts')
+    for (const [name, value] of Object.entries(SECURITY_HEADERS))
+      c.header(name, name === 'content-security-policy' && frames.length ? value.replace('frame-src ', `frame-src ${frames.join(' ')} `) : value)
     // Belt and braces: only the sign-in and account routes set a cookie, and only after you press Sign in.
     if (!deps.accounts || !COOKIE_PATHS.test(c.req.path)) c.res.headers.delete('set-cookie')
   })
@@ -426,6 +435,8 @@ export function createApp(deps: Deps) {
         back,
         query,
       )
+      const frameHosts = embedHosts(result?.hits.map((h) => h.player) ?? [])
+      if (frameHosts.length) c.header('x-frame-hosts', frameHosts.join(' '))
       return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
@@ -672,6 +683,39 @@ export function createApp(deps: Deps) {
       const body = await upstream.arrayBuffer()
       if (body.byteLength > 2_000_000) return c.body(null, 502)
       return c.body(body, 200, { 'content-type': type, 'cache-control': 'public, max-age=86400' })
+    } catch {
+      return c.body(null, 502)
+    }
+  })
+
+  // --- players (src/players.ts) ----------------------------------------------------
+  // Podcast episodes and song previews play through pit.world, so the publisher never sees the visitor. Only
+  // files pit.world handed out: an iTunes preview, or an episode from a p0dcasters playlist it just read.
+  const audio = deps.audio ?? new AudioRegistry()
+  const episodeCache = new Map<string, { at: number; episodes: Array<{ title: string; seconds?: number; src: string }> }>()
+  app.get('/api/episodes', async (c) => {
+    const show = showPage(c.req.query('show') ?? '')
+    if (!show) return c.json({ error: 'show must be a p0dcasters.com/podcast/<name> page' }, 400)
+    const hit = episodeCache.get(show)
+    if (hit && Date.now() - hit.at < 3600_000) {
+      for (const e of hit.episodes) audio.add(decodeURIComponent(e.src.slice('/audio?u='.length)))
+      return c.json({ show, episodes: hit.episodes })
+    }
+    if (limited(c)) return c.json({ error: 'Too many requests. Try again in a minute.' }, 429)
+    try {
+      const episodes = (await showEpisodes(show, audio, deps.fetch)).map((e) => ({ title: e.title, ...(e.seconds ? { seconds: e.seconds } : {}), src: `/audio?u=${encodeURIComponent(e.url)}` }))
+      episodeCache.set(show, { at: Date.now(), episodes })
+      while (episodeCache.size > 2_000) episodeCache.delete(episodeCache.keys().next().value!)
+      return c.json({ show, episodes })
+    } catch {
+      return c.json({ error: 'That show\'s episodes could not be read right now.' }, 502)
+    }
+  })
+  app.get('/audio', async (c) => {
+    const u = c.req.query('u') ?? ''
+    if (!audio.allowed(u)) return c.body(null, 403)
+    try {
+      return await proxyAudio(u, c.req.header('range') ?? null, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.resolve ? { resolve: deps.resolve } : {}) })
     } catch {
       return c.body(null, 502)
     }
