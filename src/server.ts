@@ -4,7 +4,7 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
-import { featureNetwork, W3bsNetwork } from './w3bs-network.js'
+import { featureNetwork, networkPagesFromIndex, W3bsNetwork } from './w3bs-network.js'
 import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
@@ -134,9 +134,11 @@ export function createApp(deps: Deps) {
 
   async function runSearch(query: string, limit = 20): Promise<{ result: SearchResult | null; error: string | null }> {
     try {
+      // Our index's network pages are asked alongside the engines (loopback, capped at 1.5 s).
+      const fromIndex = networkPagesFromIndex(query, deps.keys.pit, network, deps.fetch)
       const result = await search(query, deps.keys, { cache, limit, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
       logFailures(result.failures)
-      return { result: featureNetwork(result, network), error: null }
+      return { result: featureNetwork(result, network, await fromIndex), error: null }
     } catch (error) {
       // No query in the message or the log.
       if (error instanceof SearchUnavailable) console.warn(`search: ${error.message}`)

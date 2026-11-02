@@ -173,3 +173,59 @@ describe('W3BS network sites are featured', () => {
     expect(api.results[0]).toMatchObject({ host: 'seo.rank.pit.world', featured: true })
   })
 })
+
+import { networkPagesFromIndex } from '../src/w3bs-network.ts'
+
+describe('featured slots filled from our own index', () => {
+  const net = new W3bsNetwork(fetch, ['seo.rank.pit.world', 'family.ancestry.pit.world', 'alt.2600.pit.world'])
+  const hit = (url: string) => ({ url, title: url, description: 'd', host: new URL(url).hostname })
+  const base = { query: 'q', provider: 'serper', failures: [], cached: false }
+
+  it('fills the free slots, one page per site, never a page or site already shown, never off the network', () => {
+    const result = { ...base, hits: [hit('https://semrush.com/'), hit('https://seo.rank.pit.world/')] }
+    const fromIndex = [
+      hit('https://seo.rank.pit.world/'), // already on the page
+      hit('https://seo.rank.pit.world/docs'), // same site as a featured hit
+      hit('https://family.ancestry.pit.world/famous'),
+      hit('https://family.ancestry.pit.world/other'), // second page of a site
+      hit('https://outside.example/'), // not on the network
+      hit('https://alt.2600.pit.world/'),
+    ]
+    const out = featureNetwork(result, net, fromIndex)
+    expect(out.hits.map((h) => h.url)).toEqual([
+      'https://seo.rank.pit.world/',
+      'https://family.ancestry.pit.world/famous',
+      'https://alt.2600.pit.world/',
+      'https://semrush.com/',
+    ])
+    expect(out.hits.slice(0, 3).every((h) => h.featured)).toBe(true)
+    expect(out.hits[1]!.sources).toEqual(['pit'])
+  })
+
+  it('asks the index for 50 and keeps only network pages; a failing index adds nothing', async () => {
+    let asked = ''
+    const ok = (async (input: string | URL | Request) => {
+      asked = String(input)
+      return Response.json({ items: [{ url: 'https://outside.example/', title: 'o' }, { url: 'https://alt.2600.pit.world/x', title: 'x', summary: 's' }] })
+    }) as unknown as typeof fetch
+    const pages = await networkPagesFromIndex('hacker zines', 'http://127.0.0.1:8807', net, ok)
+    expect(asked).toContain('limit=50')
+    expect(pages.map((p) => p.url)).toEqual(['https://alt.2600.pit.world/x'])
+    const broken = (async () => {
+      throw new Error('down')
+    }) as unknown as typeof fetch
+    expect(await networkPagesFromIndex('x', 'http://127.0.0.1:8807', net, broken)).toEqual([])
+    expect(await networkPagesFromIndex('x', undefined, net, ok)).toEqual([])
+  })
+
+  it('end to end: a query no engine answers with a network site still leads with one', async () => {
+    const fake = (async (input: string | URL | Request) => {
+      const url = String(input)
+      if (url.startsWith('http://index.test')) return Response.json({ items: [{ url: 'https://family.ancestry.pit.world/', title: 'family.ancestry', summary: 'Your family tree' }] })
+      return Response.json({ organic: [{ link: 'https://familysearch.org/', title: 'FamilySearch', snippet: 's' }] })
+    }) as unknown as typeof fetch
+    const app = createApp({ keys: { serper: 'k', pit: 'http://index.test' }, network: net, fetch: fake })
+    const api = await (await app.request('/api/search?q=family+tree')).json()
+    expect(api.results[0]).toMatchObject({ host: 'family.ancestry.pit.world', featured: true })
+  })
+})
