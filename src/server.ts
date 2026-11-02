@@ -60,6 +60,10 @@ import { Database } from 'bun:sqlite'
 import { randomBytes } from 'node:crypto'
 import { clientSource, CLIENT_HEADERS } from '@profullstack/browser-fingerprint/source'
 import { itemFor, KINDS, Votes, type VoteKind } from './votes.js'
+import { ReaderHealth } from './reader-health.js'
+import { VoteRewards } from './vote-rewards.js'
+import { playerCss, playerJs } from './player-bundle.js'
+import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-routes.js'
 import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
 import { AD_SLOT, featuredTarget, TOP_ADS, votePage } from './html.js'
@@ -111,6 +115,10 @@ export type Deps = {
   fingerprintSecret?: string
   /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
   votes?: Votes
+  /** Which sites turn the page reader away (src/reader-health.ts); defaults to the votes database. */
+  readerHealth?: ReaderHealth
+  /** Points for signed-in votes (src/vote-rewards.ts); defaults to the votes database, no payout rate. */
+  voteRewards?: VoteRewards
   /** Audio files /audio may stream (players.ts); a fresh in-memory registry by default. */
   audio?: AudioRegistry
   /** Listen (read aloud) and Transcript through c0mpute's speech workers (src/speech.ts); off without a gateway. */
@@ -173,6 +181,11 @@ export function createApp(deps: Deps) {
   const fpSecret = deps.fingerprintSecret ?? randomBytes(32).toString('base64url')
   const visitors = new VisitorGate(fpSecret, (ip) => limiter.take(ip || 'unknown'))
   const votes = deps.votes ?? new Votes(deps.listings?.db ?? new Database(':memory:'), fpSecret)
+  const readerHealth = deps.readerHealth ?? votes.health ?? new ReaderHealth(votes.db)
+  votes.health = readerHealth
+  const voteRewards = deps.voteRewards ?? new VoteRewards(votes.db)
+  // Summarize and Listen both read pages through the summarizer: every read it makes is a reader-health sample.
+  deps.summarizer?.observeReads((url, state) => readerHealth.record(url, state))
   deps.listings?.setVoteMoves((domains) => votes.listingMoves(domains))
   const fpOf = (c: Context<Env>, body?: Record<string, unknown> | null): unknown => c.req.header('x-fingerprint') || body?.fp || null
   /** True when an anonymous write is over its limit (or comes from a bot-scored browser). */
@@ -532,8 +545,11 @@ export function createApp(deps: Deps) {
       return { status: status as 400 | 403 | 429, json: { ok: false, error: gate.reason } }
     }
     const query = typeof body.q === 'string' ? normalizeQuery(body.q) : ''
-    const result = votes.cast({ visitor: gate.visitor, ...target, value, query, toggle: body.toggle === true || body.toggle === '1' })
-    return { status: 200 as const, json: { ok: true, item: target.item, ...result } }
+    // Signed in, the vote is also the account's: it shows in /account/votes and can earn a point.
+    const account = deps.accounts ? accountOf(deps.accounts.accounts, c)?.id ?? null : null
+    const { qkey, ...result } = votes.cast({ visitor: gate.visitor, ...target, value, query, toggle: body.toggle === true || body.toggle === '1', account })
+    const points = voteRewards.onVote(account, target.item, qkey, result.value)
+    return { status: 200 as const, json: { ok: true, item: target.item, ...result, ...(account ? { signedIn: true, points } : {}) } }
   }
   app.post('/api/vote', async (c) => {
     c.header('cache-control', 'no-store')
@@ -760,6 +776,25 @@ export function createApp(deps: Deps) {
       }),
     })
   })
+  // Sites that turn pit.world's page reader away (Summarize and Listen), decayed to now. Never says who searched.
+  app.get('/api/reader-health', (c) => {
+    const domain = (c.req.query('domain') ?? '').trim().toLowerCase().replace(/^www\./, '')
+    const round = (h: NonNullable<ReturnType<ReaderHealth['get']>>) => ({
+      domain: h.domain,
+      blocked: Number(h.blocked.toFixed(3)),
+      ok: Number(h.ok.toFixed(3)),
+      share: Number(h.share.toFixed(4)),
+      blocksReaders: readerHealth.blocks(h),
+      lastBlockedAt: h.lastBlockedAt ? new Date(h.lastBlockedAt).toISOString() : null,
+      lastOkAt: h.lastOkAt ? new Date(h.lastOkAt).toISOString() : null,
+    })
+    if (domain) {
+      const h = readerHealth.get(domain)
+      return c.json(h ? round(h) : { domain, blocked: 0, ok: 0, share: 0, blocksReaders: false, lastBlockedAt: null, lastOkAt: null })
+    }
+    const n = Number(c.req.query('n') ?? 50)
+    return c.json({ items: readerHealth.worst(Number.isFinite(n) ? n : 50).map(round) })
+  })
   app.get('/api/votes/top', (c) => {
     const kind = c.req.query('kind') ?? 'result'
     if (!(KINDS as readonly string[]).includes(kind)) return c.json({ error: 'kind must be one of ' + KINDS.join(', ') }, 400)
@@ -947,6 +982,16 @@ export function createApp(deps: Deps) {
   app.get('/pfs-footer.css', (c) =>
     c.body(ringFooterCss(), 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' }),
   )
+  // @profullstack/player, bundled once on first use (src/player-bundle.ts); app.js loads it only to play something.
+  app.get('/pf-player.js', async (c) => {
+    try {
+      return c.body(await playerJs(), 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=3600' })
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      return c.text('player unavailable', 503)
+    }
+  })
+  app.get('/pf-player.css', (c) => c.body(playerCss(), 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' }))
   const dir = deps.publicDir ?? new URL('../public/', import.meta.url).pathname
   const TYPES: Record<string, string> = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', svg: 'image/svg+xml', png: 'image/png', webmanifest: 'application/manifest+json' }
   app.get('/:file{[a-z0-9-]+\\.(css|js|svg|png|webmanifest)}', async (c) => {
@@ -971,13 +1016,14 @@ export function createApp(deps: Deps) {
     const rewards = deps.rewards
     const passes = deps.summaryPasses
     // /account shows the rewards section, then the summary pass.
-    const sections = [rewards ? rewardsSections(rewards) : null, passes ? passSection(passes) : null, deps.corpus ? corpusSection(deps.corpus) : null].filter((s) => s !== null)
+    const sections = [voteHistorySection(votes, voteRewards), rewards ? rewardsSections(rewards) : null, passes ? passSection(passes) : null, deps.corpus ? corpusSection(deps.corpus) : null].filter((s) => s !== null)
     const accountSections = deps.accounts.accountSections ?? (sections.length ? async (me: Account) => (await Promise.all(sections.map((s) => s(me)))).join('\n') : undefined)
     mountAccounts(app, {
       ...deps.accounts,
       ...(rewards ? { onSignIn: deps.accounts.onSignIn ?? rewardsOnSignIn(rewards) } : {}),
       ...(accountSections ? { accountSections } : {}),
     })
+    mountVoteHistory(app, { votes, rewards: voteRewards, accounts: deps.accounts.accounts, site: deps.accounts.site, ...(deps.accounts.admins ? { admins: deps.accounts.admins } : {}), ...(deps.adminToken ? { adminToken: deps.adminToken } : {}) })
     if (rewards) mountRewards(app, { rewards, accounts: deps.accounts.accounts, site: deps.accounts.site })
     if (passes) mountSummaryPass(app, { passes, accounts: deps.accounts.accounts, site: deps.accounts.site })
   }
@@ -1127,7 +1173,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
