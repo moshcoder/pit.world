@@ -75,6 +75,11 @@ pre code { background: none; padding: 0; }
 .pitch a { color: var(--accent); text-decoration: none; }
 .pitch a:hover { text-decoration: underline; }
 .tag { margin: 0 0 8px; color: var(--muted); font-size: clamp(16px, 2.4vw, 20px); }
+.howto { list-style: none; padding: 0; margin: -4px 0 0; max-width: 1080px; display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 22px; color: var(--muted); font-size: 13px; }
+.howto span { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); font: 700 11px/1 var(--mono); vertical-align: 1px; }
+.howto b { color: var(--text); font-weight: 600; }
+.howto a { color: var(--accent); }
+@media (max-width: 560px) { .howto { flex-direction: column; align-items: flex-start; text-align: left; } }
 .promises { list-style: none; padding: 0; margin: 8px 0 0; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 22px; color: var(--muted); font-size: 14px; }
 .promises b { color: var(--text); }
 .promises li::before { content: '✓ '; color: var(--accent); font-weight: 700; }

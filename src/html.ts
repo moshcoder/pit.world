@@ -235,6 +235,11 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     <p class="pitch"><a href="/why">ICANN doesn't scale for the agentic web.</a> <a href="#moshpit">Meet pit.world.</a></p>
     <p class="tag">Search like nobody's watching. Because nobody is.</p>
     ${searchForm('', true)}
+    <ol class="howto" aria-label="How pit.world works">
+      <li><span>1</span> <b>Search the web</b>: Google, Bing, Brave and more, at once</li>
+      <li><span>2</span> <b>Vote ▲ ▼</b> to move results for everyone</li>
+      <li><span>3</span> <b>Open Moshpit names</b> like <a href="/search?q=deadman.switch">deadman.switch</a></li>
+    </ol>
     <ul class="promises">
       <li><b>No logs</b> of what you search</li>
       <li><b>No cookies</b> to search, ever</li>
