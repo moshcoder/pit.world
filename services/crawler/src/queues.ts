@@ -239,16 +239,24 @@ export async function snapshot(runtime: Runtime) {
   ])
   const queues: Record<string, Record<string, number>> = {}
   Object.keys(runtime.queues).forEach((k, i) => (queues[k] = counts[i]!))
-  const media = runtime.index.mediaCount()
-  const withIndex: Record<string, number> = { ...stats, index_pages: runtime.index.count(), index_images: media.images, index_videos: media.videos }
-  return { stats: withIndex, queues }
+  // Redis only: this answers the container health check, which must never wait on SQLite.
+  return { stats, queues }
 }
 
 /** Everything /status shows: the snapshot, rates over the hour and the day, the log tail. */
 export async function report(runtime: Runtime, config: Config) {
   const [snap, activity, log] = await Promise.all([snapshot(runtime), runtime.frontier.activity(), runtime.frontier.recent(60)])
+  // Cheap index figures: max(id) for pages, Redis counters for media (a GROUP BY over
+  // millions of media rows is a multi-second synchronous scan).
+  const stats: Record<string, number> = {
+    ...snap.stats,
+    index_pages: runtime.index.count(),
+    index_images: snap.stats.images_found ?? 0,
+    index_videos: snap.stats.videos_found ?? 0,
+  }
   return {
     ...snap,
+    stats,
     activity,
     log,
     settings: {

@@ -175,6 +175,7 @@ export class IndexStore {
     return all.length || terms.length === 1 ? all : run(terms.join(' OR '))
   }
 
+  /** Full scan: tests and one-off checks only, never a request path. */
   mediaCount(): { images: number; videos: number } {
     const rows = this.db.query('SELECT kind, count(*) AS n FROM media GROUP BY kind').all() as Array<{ kind: string; n: number }>
     return { images: rows.find((r) => r.kind === 'image')?.n ?? 0, videos: rows.find((r) => r.kind === 'video')?.n ?? 0 }
@@ -199,8 +200,13 @@ export class IndexStore {
     return all.length || terms.length === 1 ? all : run(terms.join(' OR '))
   }
 
+  /**
+   * Pages kept, instantly: the highest id. Rows are upserted, never deleted, so it is the
+   * count. A count(*) here took 14 s at 812k pages and blocked the event loop until the
+   * health check failed (2026-11-02).
+   */
   count(): number {
-    return (this.db.query('SELECT count(*) AS n FROM pages').get() as { n: number }).n
+    return (this.db.query('SELECT coalesce(max(id), 0) AS n FROM pages').get() as { n: number }).n
   }
 
   close(): void {
