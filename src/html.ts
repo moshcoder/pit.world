@@ -1070,9 +1070,25 @@ ${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
 <ul>
 <li><b>A real app, not a mock-up.</b> It is not called finished until it can be shown working.</li>
 <li><b>You approve the launch.</b> Nothing goes live without your yes.</li>
-<li><b>You own it.</b> The code and the domain are yours. Take them anywhere.</li>
+<li><b>You own the code.</b> Export it from chovy.com and take it anywhere.</li>
 <li><b>An open stack.</b> MIT-licensed packages pulled out of 170 products that run on them, with a CLI, a terminal app and an MCP server where it makes sense.</li>
 </ul>
+
+<h2 id="specs">What the $2 a month runs on</h2>
+<table class="methods"><tbody>
+<tr><th scope="row">Your app</th><td>One app, running as its own always-on Node.js process (current Node, v22 or newer), restarted automatically if it crashes.</td></tr>
+<tr><th scope="row">Memory</th><td>Up to 1 GB of RAM for your app. It is slowed down above 768 MB and restarted if it goes past 1 GB, so a leak in one app cannot take down the others.</td></tr>
+<tr><th scope="row">Storage</th><td>1 GB, for the code, uploads and the database.</td></tr>
+<tr><th scope="row">Database</th><td>SQLite, built into Node and stored with your app. No separate database server.</td></tr>
+<tr><th scope="row">Bandwidth</th><td>5 GB of traffic a month.</td></tr>
+<tr><th scope="row">Address</th><td>A chovy.com subdomain with HTTPS (Let's Encrypt), on IPv4 and IPv6. Your own domain is not included on this plan.</td></tr>
+<tr><th scope="row">Version history</th><td>30 days.</td></tr>
+<tr><th scope="row">People</th><td>One account. No collaborators and no staging copy on this plan.</td></tr>
+<tr><th scope="row">Host totals</th><td>The current shared host has 16 vCPU, 31 GiB of RAM and a 314 GB system disk, in a data center in Vienna, Austria (checked 2026-11-02). Those are machine totals shared with every app on it, not resources reserved for you; the host may change.</td></tr>
+<tr><th scope="row">Access</th><td>You change the app through chovy.com. No root, sudo or server shell is included.</td></tr>
+<tr><th scope="row">Late payment</th><td>The app stays up for 7 days after the date it is paid through. After that it is paused, never deleted.</td></tr>
+</tbody></table>
+<p>This plan does not include guaranteed CPU, backups, an uptime SLA or a custom domain. More apps, bandwidth, storage, your own domain, collaborators and staging come with the monthly plans on <a href="https://chovy.com">chovy.com</a>.</p>
 
 <h2>Questions</h2>
 <h3>Do I need to know how to code?</h3>
