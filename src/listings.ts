@@ -57,6 +57,14 @@ export type Listing = {
    * directory, marked as unclaimed, never routed quote requests. Claiming hands it to the owner.
    */
   seeded: boolean
+  /**
+   * Imported from NicheDB's public company directory (the public half of OutreachGraph: no emails or
+   * phones) and never claimed. In /pros after the claimed and seeded ones; indexable only once it has
+   * a real description and a category.
+   */
+  imported: boolean
+  /** Where the listing came from: 'pit' (claimed or written by pit.world) or 'nichedb' (imported). */
+  source: 'pit' | 'nichedb'
   /** Editorial order in the directory: higher first. Never sold. */
   featured: number
   /** Paid feature window; expired placements are never marked sponsored. */
@@ -119,6 +127,7 @@ const QUOTE_LIMITS = { hour: 5, day: 20, siteDay: 400 }
 const CONTACT_TTL_MS = 48 * 3600 * 1000
 const CLAIM_TTL_MS = 7 * 24 * 3600 * 1000
 const META_TTL_MS = 24 * 3600 * 1000
+const IMPORT_META_TTL_MS = 30 * 24 * 3600 * 1000
 const hash = (value: string) => createHash('sha256').update(value).digest('hex')
 
 /** `https://www.Acme-Bakery.com/menu` -> `acme-bakery.com`. Hostnames only: no IPs, no single labels, no ports. */
@@ -291,7 +300,17 @@ export type ContactResult = 'pending' | 'cleared' | 'unchanged' | 'invalid' | 'u
 export type ContactStatus = 'none' | 'pending' | 'confirmed'
 export type QuoteInput = { name?: unknown; email?: unknown; phone?: unknown; message?: unknown }
 export type QuoteResult = 'sent' | 'invalid' | 'undeliverable' | 'unavailable' | 'limited' | 'failed'
-export type DirectoryQuery = { category?: unknown; near?: unknown; q?: unknown; limit?: number; offset?: number; claimedOnly?: boolean }
+export type DirectoryQuery = { category?: unknown; near?: unknown; q?: unknown; limit?: number; offset?: number; claimedOnly?: boolean; source?: 'pit' | 'nichedb' | '' }
+
+/** One company read from NicheDB's directory, ready to list. */
+export type ImportInput = { domain: string; name: string; category?: string; country?: string; topics?: string[]; sourceUrl: string }
+
+/** Imported listings worth a search engine's time: a real description and a category. */
+export const INDEXABLE_IMPORT = "imported_at IS NOT NULL AND claimed_at IS NULL AND seeded_at IS NULL AND directory_opt_out = 0 AND description <> '' AND category <> ''"
+/** Imported, never claimed, never written by pit.world itself. */
+const IMPORTED = 'imported_at IS NOT NULL AND claimed_at IS NULL AND seeded_at IS NULL AND directory_opt_out = 0'
+/** Curated: claimed by the owner or written by pit.world. */
+const CURATED = '(claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0'
 
 /**
  * Columns added after the first release. Each statement is written out whole, never assembled, so the
@@ -328,10 +347,15 @@ const MIGRATIONS: Array<[string, string]> = [
   ['researched_at', 'ALTER TABLE listings ADD COLUMN researched_at INTEGER'],
   ['views', 'ALTER TABLE listings ADD COLUMN views INTEGER NOT NULL DEFAULT 0'],
   ['directory_opt_out', 'ALTER TABLE listings ADD COLUMN directory_opt_out INTEGER NOT NULL DEFAULT 0'],
+  ['source', "ALTER TABLE listings ADD COLUMN source TEXT NOT NULL DEFAULT ''"],
+  ['imported_at', 'ALTER TABLE listings ADD COLUMN imported_at INTEGER'],
+  ['quality', "ALTER TABLE listings ADD COLUMN quality INTEGER GENERATED ALWAYS AS ((description <> '') + (category <> '')) VIRTUAL"],
 ]
 
 const ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
 const escHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, (c) => ESC[c]!)
+/** A word for LIKE: % and _ are literal. */
+const likeEscape = (w: string) => w.replace(/[\\%_]/g, (c) => `\\${c}`)
 const words = (value: unknown) => clean(value, 120).toLowerCase().split(/\s+/).filter(Boolean)
 
 export class Listings {
@@ -366,6 +390,10 @@ export class Listings {
     // Quote requests are counted, never kept: a domain and a time, so the per-listing limit survives a restart.
     this.db.run('CREATE TABLE IF NOT EXISTS quote_log (domain TEXT NOT NULL, at INTEGER NOT NULL)')
     this.db.run('CREATE INDEX IF NOT EXISTS quote_log_domain_at ON quote_log (domain, at)')
+    // Imported listings are read a page at a time in SQL (there can be hundreds of thousands): best first, then by domain.
+    this.db.run(`CREATE INDEX IF NOT EXISTS listings_imported ON listings (quality DESC, domain) WHERE ${IMPORTED}`)
+    this.db.run(`CREATE INDEX IF NOT EXISTS listings_imported_category ON listings (category, quality DESC, domain) WHERE ${IMPORTED}`)
+    this.db.run('CREATE TABLE IF NOT EXISTS import_state (source TEXT PRIMARY KEY, cursor TEXT, updated_at INTEGER NOT NULL)')
     ensurePromotionSchema(this.db)
   }
 
@@ -406,11 +434,13 @@ export class Listings {
       price: row?.price ?? '',
       quotes: Boolean(row?.claimed_at && row?.contact_email),
       ring: Boolean(row?.claimed_at && !row?.ring_opt_out && ringEligible(domain, Boolean(row?.moshpit_only))),
-      listed: Boolean((row?.claimed_at || row?.seeded_at) && !row?.directory_opt_out),
+      listed: Boolean((row?.claimed_at || row?.seeded_at || row?.imported_at) && !row?.directory_opt_out),
       feed: row?.feed_url ?? '',
       moshpitOnly: Boolean(row?.moshpit_only),
       claimed: Boolean(row?.claimed_at),
       seeded: Boolean(row?.seeded_at && !row?.claimed_at),
+      imported: Boolean(row?.imported_at && !row?.claimed_at && !row?.seeded_at),
+      source: row?.imported_at && !row?.claimed_at && !row?.seeded_at ? 'nichedb' : 'pit',
       featured: row?.featured ?? 0,
       sponsoredUntil: (row?.featured_paid_until ?? 0) > this.now() ? row.featured_paid_until : null,
       license: row?.license ?? '',
@@ -430,12 +460,16 @@ export class Listings {
     if (!domain) return null
     let row = this.row(domain)
     // A listing pit.world wrote itself keeps what it wrote; only bare unclaimed ones follow the homepage.
-    const stale = !row || (!row.claimed_at && !row.seeded_at && (row.meta_at ?? 0) < this.now() - META_TTL_MS)
+    // An imported one reads its homepage once (then monthly) for a description: hundreds of thousands
+    // of them must not each cost a fetch a day.
+    const ttl = row?.imported_at ? IMPORT_META_TTL_MS : META_TTL_MS
+    const stale = !row || (!row.claimed_at && !row.seeded_at && (row.meta_at ?? 0) < this.now() - ttl)
     if (stale && options.fetchMeta !== false) {
       const html = await this.verifier.homepage(domain)
       if (html) {
         const meta = readMeta(html)
-        if (row) this.db.run('UPDATE listings SET name = ?, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL', [meta.name, meta.description, this.now(), domain])
+        if (row?.imported_at) this.db.run("UPDATE listings SET name = CASE WHEN name = '' THEN ? ELSE name END, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL", [meta.name, meta.description, this.now(), domain])
+        else if (row) this.db.run('UPDATE listings SET name = ?, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL', [meta.name, meta.description, this.now(), domain])
         else this.db.run('INSERT INTO listings (domain, name, description, meta_at) VALUES (?, ?, ?, ?)', [domain, meta.name, meta.description, this.now()])
         row = this.row(domain)
       }
@@ -447,7 +481,7 @@ export class Listings {
   toPublic(input: unknown): Listing | null {
     const domain = normalizeDomain(input)
     const row = domain ? this.row(domain) : null
-    return row && (row.claimed_at || row.seeded_at) && !row.directory_opt_out ? this.toListing(row, domain!) : null
+    return row && (row.claimed_at || row.seeded_at || row.imported_at) && !row.directory_opt_out ? this.toListing(row, domain!) : null
   }
 
   /** Claimed listings only, without touching the network: the search results card. */
@@ -477,6 +511,7 @@ export class Listings {
 
   /** Check the TXT record, then the meta tag. Success hands out a new edit key; any earlier key stops working. */
   async verify(claimId: unknown): Promise<VerifyResult> {
+    this.counts = null
     const claim = this.claimFor(claimId)
     if (!claim) return { ok: false, reason: 'unknown-claim' }
     const value = claim.token.slice('pit-verify='.length)
@@ -512,6 +547,7 @@ export class Listings {
 
   /** Owner edits. Every field is trimmed, length-capped and stripped of control characters; links must be http(s). */
   edit(input: unknown, editKey: unknown, changes: ListingEdit, isMoshpitName: (name: string) => boolean): Listing | null {
+    this.counts = null
     const domain = normalizeDomain(input)
     if (!domain || !this.authorized(domain, editKey)) return null
     const current = this.toListing(this.row(domain), domain)
@@ -656,13 +692,15 @@ export class Listings {
     // then by name); then featured (an editorial pick, never paid), owner-verified listings by latest edit,
     // and the ones pit.world listed itself. Filters below keep this order and pagination slices after them,
     // so every page, the API and the mobile view agree. claimedOnly leaves seeded ones out (the feed of claims).
-    const rows = this.db
+    const wantCurated = query.source !== 'nichedb'
+    const wantImported = !query.claimedOnly && query.source !== 'pit'
+    const rows = !wantCurated ? [] : this.db
       .query(
         query.claimedOnly
           ? 'SELECT * FROM listings WHERE claimed_at IS NOT NULL ORDER BY updated_at DESC'
           : `SELECT *, (SELECT MIN(COALESCE(m.display_order, 1000000)) FROM promo_members m JOIN promo_campaigns pc ON pc.id = m.campaign_id
                        WHERE m.domain = listings.domain AND m.priority = 1 AND m.state = 'verified' AND pc.state IN ('active', 'paused')) AS promo_rank
-             FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0
+             FROM listings WHERE ${CURATED}
              ORDER BY CASE WHEN featured_paid_until > ? THEN 0 ELSE 1 END, promo_rank IS NULL, promo_rank, featured DESC, CASE WHEN promo_rank IS NULL THEN '' ELSE lower(name) END, claimed_at IS NULL, updated_at DESC, domain`,
       )
       .all(...(query.claimedOnly ? [] : [this.now()])) as any[]
@@ -691,13 +729,51 @@ export class Listings {
       })
     const offset = Math.max(0, Math.trunc(query.offset ?? 0))
     const limit = Math.min(100, Math.max(1, Math.trunc(query.limit ?? 20)))
-    return { total: matched.length, listings: matched.slice(offset, offset + limit) }
+    const page = matched.slice(offset, offset + limit)
+    if (!wantImported) return { total: matched.length, listings: page }
+    // Imported listings follow every curated one. There can be hundreds of thousands, so they are
+    // filtered, counted and paged in SQL, never loaded whole.
+    const where = [IMPORTED]
+    const args: Array<string | number> = []
+    if (category) {
+      where.push('category = ?')
+      args.push(category)
+    }
+    for (const w of near) {
+      where.push("lower(area || ' ' || city || ' ' || region || ' ' || country || ' ' || address) LIKE ? ESCAPE '\\'")
+      args.push(`%${likeEscape(w)}%`)
+    }
+    for (const w of terms) {
+      where.push("lower(domain || ' ' || name || ' ' || description || ' ' || research_topics) LIKE ? ESCAPE '\\'")
+      args.push(`%${likeEscape(w)}%`)
+    }
+    const sql = where.join(' AND ')
+    const importedTotal = (this.db.query(`SELECT COUNT(*) AS n FROM listings WHERE ${sql}`).get(...args) as { n: number }).n
+    const room = limit - page.length
+    if (room > 0 && importedTotal) {
+      const skip = Math.max(0, offset - matched.length)
+      let tail = this.db
+        .query(`SELECT * FROM listings WHERE ${sql} ORDER BY quality DESC, domain LIMIT ? OFFSET ?`)
+        .all(...args, room, skip) as any[]
+      // Votes nudge imported listings too, within the page they are read on (never past a curated one).
+      if (this.voteMoves && tail.length) {
+        const moves = this.voteMoves(tail.map((r) => r.domain))
+        if (moves.size) tail = applyMoves(tail, (r) => moves.get(r.domain) ?? 0)
+      }
+      page.push(...tail.map((row) => this.toListing(row, row.domain)))
+    }
+    return { total: matched.length + importedTotal, listings: page }
   }
 
   /** How many directory listings (claimed or listed by pit.world) each category has. */
+  private counts: { at: number; value: Record<string, number> } | null = null
   categoryCounts(): Record<string, number> {
-    const rows = this.db.query("SELECT category, COUNT(*) AS n FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0 AND category <> '' GROUP BY category").all() as Array<{ category: string; n: number }>
-    return Object.fromEntries(rows.map((r) => [r.category, r.n]))
+    // A scan over every imported listing: kept for a minute, every /pros page shows it.
+    if (this.counts && this.counts.at > this.now() - 60_000) return this.counts.value
+    const rows = this.db.query(`SELECT category, COUNT(*) AS n FROM listings WHERE ((${CURATED}) OR (${IMPORTED})) AND category <> '' GROUP BY category`).all() as Array<{ category: string; n: number }>
+    const value = Object.fromEntries(rows.map((r) => [r.category, r.n]))
+    this.counts = { at: this.now(), value }
+    return value
   }
 
   /** The pit.world web ring: every claimed *.pit.world or Moshpit listing that has not opted out, in the order they joined. */
@@ -714,6 +790,7 @@ export class Listings {
    * it again. Re-seeding the same domain updates what pit.world wrote and keeps its view count.
    */
   seed(input: SeedInput): Listing | null {
+    this.counts = null
     const domain = normalizeDomain(input.domain)
     const name = clean(input.name, LIMITS.name)
     if (!domain || !name) return null
@@ -745,6 +822,7 @@ export class Listings {
 
   /** Take a listing pit.world wrote back out of the directory (an owner asked, or a license lapsed). */
   unseed(input: unknown): boolean {
+    this.counts = null
     const domain = normalizeDomain(input)
     if (!domain) return false
     return this.db.run('DELETE FROM listings WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NOT NULL', [domain]).changes > 0
@@ -807,10 +885,73 @@ export class Listings {
   /** Count one view of a listing that is in the directory. Bare unclaimed pages are not counted. */
   view(input: unknown): void {
     const domain = normalizeDomain(input)
-    if (domain) this.db.run('UPDATE listings SET views = views + 1 WHERE domain = ? AND (claimed_at IS NOT NULL OR seeded_at IS NOT NULL)', [domain])
+    if (domain) this.db.run('UPDATE listings SET views = views + 1 WHERE domain = ? AND (claimed_at IS NOT NULL OR seeded_at IS NOT NULL OR imported_at IS NOT NULL)', [domain])
   }
 
-  /** Every listing in the directory, for the sitemap. */
+  /**
+   * What the sitemap lists: every curated listing, then imported ones with a real description and a
+   * category, best first, up to `max` URLs in all.
+   */
+  sitemapDomains(max = 45_000): string[] {
+    const curated = this.directoryDomains()
+    const room = Math.max(0, max - curated.length)
+    const imported = room
+      ? (this.db.query(`SELECT domain FROM listings WHERE ${INDEXABLE_IMPORT} ORDER BY quality DESC, domain LIMIT ?`).all(room) as Array<{ domain: string }>).map((r) => r.domain)
+      : []
+    return [...curated, ...imported].slice(0, max)
+  }
+
+  /**
+   * Add or refresh companies read from NicheDB's directory, in one transaction. Never touches a listing
+   * that is claimed or that pit.world wrote itself; a bare page someone opened before becomes imported.
+   * Returns how many rows changed.
+   */
+  importListings(rows: ImportInput[]): number {
+    this.counts = null
+    const now = this.now()
+    const upsert = this.db.prepare(`INSERT INTO listings (domain, name, category, country, research_topics, research_url, researched_at, source, imported_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'nichedb', ?, ?)
+      ON CONFLICT(domain) DO UPDATE SET
+        name = CASE WHEN listings.name = '' THEN excluded.name ELSE listings.name END,
+        category = CASE WHEN listings.category = '' THEN excluded.category ELSE listings.category END,
+        country = CASE WHEN listings.country = '' THEN excluded.country ELSE listings.country END,
+        research_topics = excluded.research_topics, research_url = excluded.research_url, researched_at = excluded.researched_at,
+        source = 'nichedb', imported_at = COALESCE(listings.imported_at, excluded.imported_at)
+      WHERE listings.claimed_at IS NULL AND listings.seeded_at IS NULL`)
+    let changed = 0
+    this.db.transaction(() => {
+      for (const r of rows) {
+        const domain = normalizeDomain(r.domain)
+        const name = clean(r.name, LIMITS.name) || domain
+        if (!domain || !name || !/^https:\/\/nichedb\.dev\/i\/\d+$/.test(r.sourceUrl)) continue
+        const topics = [...new Set((r.topics ?? []).map((t) => clean(t, 80)).filter(Boolean))].slice(0, 20)
+        changed += upsert.run(domain, name, categoryOf(r.category)?.slug ?? '', clean(r.country, LIMITS.place), JSON.stringify(topics), r.sourceUrl, now, now, now).changes
+      }
+    })()
+    return changed
+  }
+
+  /** The saved position of an importer (see src/nichedb-import.ts). */
+  importCursor(source: string): string | null {
+    return (this.db.query('SELECT cursor FROM import_state WHERE source = ?').get(source) as { cursor: string | null } | null)?.cursor ?? null
+  }
+
+  setImportCursor(source: string, cursor: string | null): void {
+    this.db.run('INSERT INTO import_state (source, cursor, updated_at) VALUES (?, ?, ?) ON CONFLICT(source) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at', [source, cursor, this.now()])
+  }
+
+  /** Listings per source: claimed, written by pit.world, imported (and how many of those are indexable). */
+  sourceCounts(): { claimed: number; seeded: number; imported: number; importedIndexable: number } {
+    const row = this.db.query(`SELECT
+        SUM(claimed_at IS NOT NULL) AS claimed,
+        SUM(seeded_at IS NOT NULL AND claimed_at IS NULL) AS seeded,
+        SUM(${IMPORTED}) AS imported,
+        SUM(${INDEXABLE_IMPORT}) AS importedIndexable
+      FROM listings`).get() as Record<string, number | null>
+    return { claimed: row.claimed ?? 0, seeded: row.seeded ?? 0, imported: row.imported ?? 0, importedIndexable: row.importedIndexable ?? 0 }
+  }
+
+  /** Every curated listing in the directory (claimed or written by pit.world); imported ones are not here. */
   directoryDomains(): string[] {
     return (this.db.query('SELECT domain FROM listings WHERE (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0 ORDER BY featured DESC, domain').all() as Array<{ domain: string }>).map((r) => r.domain)
   }

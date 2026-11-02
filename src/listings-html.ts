@@ -143,6 +143,12 @@ function websiteHref(l: Listing, via: string): string {
   return `/b/${p(l.domain)}/go${via ? `?via=${p(via)}` : ''}`
 }
 
+/** Where an imported listing's data came from, linked to its NicheDB record. */
+export function importedNote(l: Listing): string {
+  const source = l.researchUrl ? `<a href="${esc(l.researchUrl)}" rel="noopener">nichedb.dev</a>` : '<a href="https://nichedb.dev/c/directory" rel="noopener">nichedb.dev</a>'
+  return `<p class="small notice">Unclaimed listing, data from ${source} (OutreachGraph's public company directory: a company by its domain, never an email or phone). Nobody at ${esc(l.domain)} wrote or paid for this page. Check with ${esc(l.domain)} before you hire. The owner can claim it below to rewrite it or take it down.</p>`
+}
+
 /** Directory listings (claimed or listed by pit.world, and not taken out) publish an OpenProfile. */
 export const hasOpenProfile = (l: Listing) => l.listed
 
@@ -166,9 +172,10 @@ export function listingPage(l: Listing, options: { quote?: QuoteState; via?: str
     title: `${title} · pit.world`,
     description: l.description || `${l.domain} on pit.world`,
     path: `/b/${p(l.domain)}`,
-    noindex: !l.claimed && !l.seeded,
+    // An imported listing is worth indexing only once it says something: a real description and a category.
+    noindex: !l.claimed && !l.seeded && !(l.imported && l.description && l.category),
     ...(hasOpenProfile(l) ? { head: `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n<script type="application/ld+json">${organizationJsonLd(l)}</script>\n` } : {}),
-    body: `<p class="kicker">${l.sponsoredUntil ? 'Featured · Paid placement · ' : ''}Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : ' · unclaimed'}</p>
+    body: `<p class="kicker">${l.sponsoredUntil ? 'Featured · Paid placement · ' : ''}Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : l.imported ? ' · unclaimed listing' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
 ${l.category ? `<p class="row"><a class="chip" href="/pros/${p(l.category)}">${esc(categoryOf(l.category)?.label ?? l.category)}</a></p>` : ''}
 <p class="small"><a href="/pros">Business directory</a> · <a href="/b/${p(l.domain)}/featured">Feature or manage this business · $19/month</a></p>
@@ -177,7 +184,7 @@ ${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' :
 ${details(l, { domain: l.domain, via })}
 ${services(l)}
 ${l.claimed ? quoteForm(l, options.quote) : ''}
-${l.claimed ? '' : l.seeded ? `<p class="small">Written by pit.world from public information, not by the business. Details can go out of date: check with ${esc(l.domain)} before you hire. Something wrong? The owner can claim this page to correct it, or take it down.</p>` : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
+${l.claimed ? '' : l.imported ? importedNote(l) : l.seeded ? `<p class="small">Written by pit.world from public information, not by the business. Details can go out of date: check with ${esc(l.domain)} before you hire. Something wrong? The owner can claim this page to correct it, or take it down.</p>` : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
 ${claim}
 ${l.listed && l.phone ? '<script src="/listing.js" defer></script>' : ''}`,
   })
@@ -360,7 +367,8 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   ${l.services.length ? `<p class="small">${esc(l.services.slice(0, 5).join(' · '))}</p>` : ''}
   ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
   ${l.researchTopics.length ? `<p class="small">${esc(l.researchTopics.slice(0, 4).join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'Source')}` : ''}</p>` : ''}
-  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}${voteBox('listing', l.domain, options.votes, l.name || l.domain)}</p>
+  ${l.imported ? `<p class="small">Unclaimed listing, data from ${l.researchUrl ? ext(l.researchUrl, 'nichedb.dev') : 'nichedb.dev'}</p>` : ''}
+  <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded || l.imported ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}${voteBox('listing', l.domain, options.votes, l.name || l.domain)}</p>
 </li>`
     })
     .join('')

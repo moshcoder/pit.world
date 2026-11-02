@@ -35,6 +35,8 @@ export const CATEGORIES: Category[] = [
   { slug: 'food', label: 'Food & catering', examples: 'caterers, personal chefs, bakeries' },
   { slug: 'community', label: 'Nonprofit & community', examples: 'charities, clubs, co-ops, places of worship' },
   { slug: 'industrial', label: 'Industrial power & equipment', examples: 'switchgear, electrical distribution, industrial controls, data centers' },
+  { slug: 'media', label: 'News, media & podcasts', examples: 'newsrooms, magazines, podcasts, publishers, film and music' },
+  { slug: 'retail', label: 'Shops & retail', examples: 'online stores, retailers, wholesalers, brands' },
   { slug: 'other', label: 'Other services', examples: 'anything that fits nowhere else' },
 ]
 
