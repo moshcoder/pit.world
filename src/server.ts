@@ -37,6 +37,7 @@ import { COOKIE_PATHS, mountAccounts, parseCookies, type AccountDeps } from './a
 import { SESSION_COOKIE, type Account } from './accounts.js'
 import { PASS_DAYS, PASS_HEADER, PASS_RESOURCE_PATH, PASS_SUMMARIES, PASS_USD, SummaryPasses } from './summary-pass.js'
 import { paymentRequiredHeader } from '@profullstack/x402-gateway'
+import { dayRange, nightlyStats } from './admin-stats.js'
 import { mountSummaryPass, passSection } from './summary-pass-routes.js'
 import { createCrawlGate, type CrawlGate } from './crawl-gate.js'
 import { Promotion } from './promotion.js'
@@ -273,6 +274,26 @@ export function createApp(deps: Deps) {
     const me = a ? a.accounts.sessionAccount(parseCookies(c.req.header('cookie'))[SESSION_COOKIE]) : null
     return Boolean(me && (a!.admins ?? []).includes(me.sub))
   }
+  // The nightly report's numbers for one UTC day (src/admin-stats.ts): counts only. Default yesterday.
+  app.get('/api/admin/stats.json', (c) => {
+    if (!subscriberAdmin(c)) return c.json({ error: 'unauthorized' }, 401)
+    const day = c.req.query('day') ?? new Date(Date.now() - 86_400_000).toISOString().slice(0, 10)
+    if (!dayRange(day)) return c.json({ error: 'day must be YYYY-MM-DD' }, 400)
+    c.header('cache-control', 'no-store')
+    return c.json(
+      nightlyStats(
+        {
+          ...(deps.accounts ? { accounts: deps.accounts.accounts } : {}),
+          ...(deps.summarizer ? { summarizer: deps.summarizer } : {}),
+          ...(deps.summaryPasses ? { passes: deps.summaryPasses } : {}),
+          ...(deps.listings ? { listings: deps.listings } : {}),
+          ...(newsletter ? { newsletter } : {}),
+          ...(deps.votes ? { votesDb: deps.votes.db } : {}),
+        },
+        day,
+      ),
+    )
+  })
   app.get('/api/admin/subscribers.json', (c) => {
     if (!newsletter || !subscriberAdmin(c)) return c.json({ error: 'unauthorized' }, 401)
     const source = normalizeSource(c.req.query('site')) ?? undefined
