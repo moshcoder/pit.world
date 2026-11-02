@@ -13,7 +13,7 @@ import type { Promo } from './promoted.js'
 import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
-import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
+import { MEDIA_SOURCES, thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 
 export const SITE = 'https://pit.world'
 
@@ -258,7 +258,7 @@ function moshpitCard(resolution: Resolution): string {
 </aside>`
 }
 
-/** All · Images · Videos · Music · Live, each the same query in another index. */
+/** All · Images · Videos · Music · Live · Shopping · News · Books · Podcasts · Blogs · Places · Scholar: the same query in another index. */
 function tabs(query: string, active: Vertical): string {
   return `<nav class="tabs" aria-label="Search type">${VERTICALS.map((v) => {
     const href = `/search?q=${encodeURIComponent(query)}${v.id === 'web' ? '' : `&t=${v.id}`}`
@@ -302,18 +302,46 @@ function thumb(m: Media, cls = 'thumb'): string {
   return src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : `<span class="${cls} none" aria-hidden="true"></span>`
 }
 
+/** "★ 4.6 (1,234)", or nothing. */
+function stars(m: Media): string {
+  if (m.rating === undefined) return ''
+  return `★ ${m.rating.toFixed(1)}${m.reviews ? ` (${m.reviews.toLocaleString('en-US')})` : ''}`
+}
+
+/** The small line under a title: where it is from and the facts that tell results apart. */
+function metaLine(m: Media): string {
+  return esc([m.host, m.channel, m.author, m.address, m.date, m.extra, stars(m)].filter(Boolean).join(' · '))
+}
+
 function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
   if (vertical === 'images') {
     return `<ul class="images">${hits
       .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a></li>`)
       .join('')}</ul>`
   }
-  if (vertical === 'music') {
+  if (vertical === 'shopping') {
+    return `<ul class="shop">${hits
+      .map(
+        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}<b>${esc(m.title)}</b>${m.price ? `<span class="price">${esc(m.price)}</span>` : ''}<small>${esc([m.host, stars(m)].filter(Boolean).join(' · '))}</small></a></li>`,
+      )
+      .join('')}</ul>`
+  }
+  if (vertical === 'books') {
+    return `<ol class="books">${hits
+      .map(
+        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}</a>
+    <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
+    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div></div></li>`,
+      )
+      .join('')}</ol>`
+  }
+  if (vertical !== 'videos' && vertical !== 'live' && vertical !== 'news') {
+    // Music, podcasts, blogs, places, scholar: words, no pictures.
     return `<ol class="hits">${hits
       .map(
         (m) => `<li>
       <a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
-      <div class="url">${esc(m.host)}</div>
+      <div class="url">${metaLine(m)}</div>
       ${m.description ? `<p>${esc(m.description)}</p>` : ''}
     </li>`,
       )
@@ -329,6 +357,34 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[]): string {
     .join('')}</ol>`
 }
 
+/** Blogs: the blogs that write about the search, on rssamplifier.com, above their posts. */
+function blogSites(sites: Media[] | undefined): string {
+  if (!sites?.length) return ''
+  return `<section class="promo" aria-label="Blogs on RSS Amplifier">
+  <p class="kicker">Blogs on RSS Amplifier</p>
+  <ul>${sites
+    .map(
+      (s) => `<li>
+    <a href="${esc(s.url)}" rel="noreferrer noopener"><span class="from">rssamplifier</span><b>${esc(s.title)}</b>${s.description ? `<small class="clamp">${esc(s.description)}</small>` : ''}</a>
+  </li>`,
+    )
+    .join('')}</ul>
+</section>`
+}
+
+/** Says who answered, and that they never saw the visitor. */
+function viaLine(label: string, result: MediaResult): string {
+  const from = `${label} from ${MEDIA_SOURCES[result.provider]}, fetched by pit.world`
+  switch (result.provider) {
+    case 'serper':
+      return `${from}. Thumbnails are loaded through pit.world too, so Google and YouTube never see your IP address, browser or cookies.`
+    case 'openlibrary':
+      return `${from}. Covers are loaded through pit.world too, so Open Library never sees your IP address, browser or cookies.`
+    default:
+      return `${from}, so the directory sees our server and the words, never your IP address, browser or cookies.`
+  }
+}
+
 export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite }): string {
   const { query, vertical, result, promos, error } = options
   const hits = result?.hits ?? []
@@ -342,12 +398,13 @@ ${tabs(query, vertical)}
   ${featuredBox(options.featured)}
   ${promoStrip(promos, vertical)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
+  ${blogSites(result?.sites)}
   ${hits.length ? sponsoredTop() : ''}
   ${hits.length ? mediaList(vertical, hits) : ''}
   ${hits.length ? adUnit() : ''}
   ${featuredBox(options.backfill ? [options.backfill] : undefined)}
   ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
-  ${result ? `<p class="via">${label} from the Google index, fetched by pit.world. Thumbnails are loaded through pit.world too, so Google and YouTube never see your IP address, browser or cookies.</p>` : ''}
+  ${result ? `<p class="via">${viaLine(label, result)}</p>` : ''}
 </main>`
   return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
 }
@@ -415,6 +472,7 @@ export function privacyPage(): string {
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
 <li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo, and <a href="/bot">our own index</a>, kept at nichedb.dev), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
+<li>The tabs above the results work the same way. Images, Videos, Live, Shopping, News, Places and Scholar ask Google through Serper; Books asks <a href="https://openlibrary.org/">Open Library</a>; Podcasts asks our own <a href="https://p0dcasters.com/">p0dcasters.com</a>; Blogs asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a>, which also answers News when Google does not. Pictures and book covers are fetched by pit.world and handed to you, so none of them sees your IP address either.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 </ol>
