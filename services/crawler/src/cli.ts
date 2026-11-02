@@ -17,7 +17,7 @@ import { configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
-import { createRuntime, report, snapshot, startWorkers } from './queues.ts'
+import { createRuntime, enqueueSubmissions, report, snapshot, startWorkers } from './queues.ts'
 import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
 import { normalizeUrl, resolvesPublic, siteOf } from './url.ts'
 
@@ -60,6 +60,13 @@ async function worker() {
             const limit = Number(url.searchParams.get('limit')) || 10
             const items = q ? runtime.index.search(q, limit) : []
             return Response.json({ q, count: items.length, items })
+          }
+          if (path === '/api/v1/submit' && request.method === 'POST') {
+            // Loopback only (the port is published on 127.0.0.1): pit.world's /submit posts here.
+            const body = (await request.json().catch(() => null)) as { urls?: unknown } | null
+            const urls = Array.isArray(body?.urls) ? body.urls.filter((u): u is string => typeof u === 'string') : []
+            if (!urls.length) return Response.json({ error: 'send { "urls": [ ... ] }' }, { status: 400 })
+            return Response.json({ queued: await enqueueSubmissions(runtime, urls) }, { status: 202 })
           }
           if (path === '/api/v1/media') {
             const q = (url.searchParams.get('q') ?? '').slice(0, 512)

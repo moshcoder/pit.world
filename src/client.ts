@@ -62,6 +62,11 @@ export class PitClient {
     return data as T
   }
 
+  /** Put sites, pages, feeds, sitemaps or OPML into pit.world's own index (up to 1,000). */
+  submit(urls: string[]): Promise<{ ok: boolean; accepted: Array<{ url: string; kind: string }>; rejected: Array<{ url: string; error: string }>; queued: number; message?: string }> {
+    return this.post('/api/submit', { urls })
+  }
+
   /** Start claiming a listing: returns the TXT record / meta tag to publish and a claim id. */
   claim(domain: string): Promise<{ domain: string; claimId: string; token: string; txtHost: string; meta: string; page: string }> {
     return this.post('/api/listing/claim', { domain })

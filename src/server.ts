@@ -4,6 +4,7 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
+import { mountSubmit } from './submit-routes.js'
 import { featureNetwork, networkPagesFromIndex, W3bsNetwork } from './w3bs-network.js'
 import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
@@ -56,6 +57,8 @@ export type Deps = {
   adminToken?: string
   /** The W3BS network's sites, featured in results; defaults to the live list from w3bs.org. */
   network?: Pick<W3bsNetwork, 'has'>
+  /** The crawler's loopback base for /submit; defaults to CRAWLER_STATUS_URL. */
+  crawlerUrl?: string
   /** pitbot's status for /status; defaults to the crawler's loopback /stats (CRAWLER_STATUS_URL). */
   crawlStatus?: () => Promise<CrawlStatus>
   /** PairUX + nixamp listings for the Videos, Music and Live tabs. */
@@ -231,6 +234,8 @@ export function createApp(deps: Deps) {
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/bot', (c) => c.html(botPage()))
+  // Sites, pages, feeds, sitemaps and OPML into our own index (src/submit-routes.ts).
+  mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', limited, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
   // pitbot's live status: the crawler is its own service, read over loopback.
   app.get('/status', async (c) => {
     c.header('cache-control', 'no-store')
@@ -324,7 +329,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/status', '/bot', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.directoryDomains().map((d) => `/b/${encodeURIComponent(d)}`) : [])]
         .map((p) => `<url><loc>https://pit.world${p}</loc></url>`)
         .join('')}</urlset>`,
       200,

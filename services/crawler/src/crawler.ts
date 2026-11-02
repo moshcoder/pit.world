@@ -10,6 +10,8 @@ import { politeGet, readSitemapXml } from './fetcher.ts'
 import type { Frontier } from './frontier.ts'
 import type { Rendered } from './obscura.ts'
 import { allows, EMPTY, parseRobots, pathOf, type Robots } from './robots.ts'
+import { sitesFromOpml } from './seed.ts'
+import { feedLinks, guessKind, sniff, type SubmitKind } from './submit.ts'
 import { crawlable, normalizeUrl, resolvesPublic, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
 
 /** `first`: ahead of everything already waiting (seed --first). */
@@ -32,6 +34,8 @@ export type Deps = {
   log?: (line: string) => void
   /** Page jobs queued now; a site start waits while it is over config.maxPageBacklog. */
   pageBacklog?: () => Promise<number>
+  /** Offer a submitted feed to rssamplifier.com too (best effort). */
+  forwardFeed?: (feedUrl: string) => Promise<void>
   /** The local search mirror; every published batch lands here first. */
   index?: { add(entries: string[]): number } | null
 }
@@ -312,7 +316,84 @@ export function createCrawler(deps: Deps) {
     return due.length
   }
 
-  return { scheduleSites, crawlSite, crawlPage, renderPage, publish, recrawl }
+  /** Pages put straight into the queue (depth 0, shallow-first), their sites scheduled ahead. */
+  async function submitPages(urls: string[]): Promise<{ sites: number; pages: number }> {
+    const bySite = new Map<string, string[]>()
+    for (const url of urls) {
+      const site = siteOf(url)
+      if (!site || !crawlable(url)) continue
+      bySite.set(site, [...(bySite.get(site) ?? []), url])
+    }
+    const { queued } = await scheduleSites([...bySite.keys()], 'submit', { first: true })
+    const jobs: PageJob[] = []
+    for (const [site, pages] of bySite) {
+      for (const url of pages.slice(0, config.maxPages)) {
+        const verdict = await frontier.admit(site, url)
+        if (verdict === 'full') break
+        if (verdict === 'new') jobs.push({ url, site, depth: 0 })
+      }
+    }
+    if (jobs.length) await enqueue.pages(jobs)
+    return { sites: queued, pages: jobs.length }
+  }
+
+  /**
+   * One submitted address (pit.world/submit): find out what it is by reading it, then
+   * queue what it names. A bare origin needs no read: it is a site.
+   */
+  async function submit(input: string): Promise<{ kind: SubmitKind | 'refused' | 'unreadable'; sites: number; pages: number }> {
+    const raw = input.trim()
+    const url = normalizeUrl(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`)
+    if (!url || !(await resolver(new URL(url).hostname))) {
+      await frontier.bump('submitted_refused')
+      return { kind: 'refused', sites: 0, pages: 0 }
+    }
+    let out: { kind: SubmitKind | 'refused' | 'unreadable'; sites: number; pages: number }
+    if (guessKind(url) === 'site') {
+      out = { kind: 'site', ...(await scheduleSites([url], 'submit', { first: true }).then((r) => ({ sites: r.queued, pages: 0 }))) }
+    } else {
+      let r
+      try {
+        r = await politeGet(url, { userAgent: config.userAgent, resolver, ...(deps.fetch ? { fetch: deps.fetch } : {}), accept: 'application/xml,text/xml,application/rss+xml,application/atom+xml,application/feed+json,text/html;q=0.9,*/*;q=0.5' })
+      } catch {
+        await frontier.bump('submitted_unreadable')
+        return { kind: 'unreadable', sites: 0, pages: 0 }
+      }
+      if (r.status >= 400) {
+        await frontier.bump('submitted_unreadable')
+        return { kind: 'unreadable', sites: 0, pages: 0 }
+      }
+      const landed = normalizeUrl(r.finalUrl) ?? url
+      const kind = sniff(r.body, r.contentType)
+      if (kind === 'sitemap') {
+        const pages: string[] = []
+        const { urls, sitemaps } = readSitemapXml(r.body)
+        pages.push(...urls)
+        for (const nested of sitemaps.slice(0, 5)) {
+          if (pages.length >= 1_000) break
+          try {
+            const n = await politeGet(nested, { userAgent: config.userAgent, resolver, ...(deps.fetch ? { fetch: deps.fetch } : {}), accept: 'application/xml,text/xml;q=0.9,*/*;q=0.1' })
+            if (n.status < 400) pages.push(...readSitemapXml(n.body).urls)
+          } catch {
+            // one bad nested sitemap does not sink the rest
+          }
+        }
+        out = { kind: 'sitemap', ...(await submitPages(pages.map((p) => normalizeUrl(p)).filter((p): p is string => Boolean(p)).slice(0, 1_000))) }
+      } else if (kind === 'feed') {
+        if (deps.forwardFeed) await deps.forwardFeed(landed).catch(() => {})
+        out = { kind: 'feed', ...(await submitPages(feedLinks(r.body, landed))) }
+      } else if (kind === 'opml') {
+        out = { kind: 'opml', ...(await scheduleSites(sitesFromOpml(r.body), 'submit', { first: true }).then((x) => ({ sites: x.queued, pages: 0 }))) }
+      } else {
+        out = { kind: 'page', ...(await submitPages([landed])) }
+      }
+    }
+    await frontier.bump(`submitted_${out.kind}`)
+    await frontier.log({ kind: 'site', url, note: `submitted ${out.kind}: ${out.sites} sites, ${out.pages} pages queued` })
+    return out
+  }
+
+  return { scheduleSites, crawlSite, crawlPage, renderPage, publish, recrawl, submit }
 }
 
 export type Crawler = ReturnType<typeof createCrawler>

@@ -13,6 +13,7 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
+    "@profullstack/submit-feed": "0.1.3",
     "bullmq": "5.81.5",
     "ioredis": "^5.8.2",
     "node-html-parser": "^9.0.6"

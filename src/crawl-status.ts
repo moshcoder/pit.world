@@ -102,6 +102,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
     job('sites', 'Site starts', 'robots.txt, sitemaps and the home page of each site', depth(queues.site), n(h, 'sites_started', 'sites_refused', 'sites_disallowed', 'sites_unavailable'), 0),
     job('pages', 'Page reads', 'fetch, read and follow same-site links, one request per site at a time', depth(queues.page), fetchedLastHour, n(h, 'pages_failed', 'pages_errored')),
     job('render', 'Browser renders', 'pages that are an empty shell until JavaScript runs, read again in Obscura', depth(queues.render), n(h, 'pages_rendered'), n(h, 'renders_errored'), report.settings.renderers > 0),
+    job('submit', 'Submissions', 'addresses sent to pit.world/submit: read, sorted (site, page, feed, sitemap, OPML) and queued', depth(queues.submit), n(h, 'submitted_site', 'submitted_page', 'submitted_feed', 'submitted_sitemap', 'submitted_opml'), n(h, 'submitted_refused', 'submitted_unreadable')),
     job('publish', 'Publishing', 'records sent to nichedb.dev/c/sites, two hundred a call', n(stats, 'outbox'), n(h, 'published'), n(h, 'publish_errored'), report.settings.publishing),
   ]
 
@@ -112,7 +113,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
   if (stalled.length && fetchedLastHour === 0) {
     health = 'stalled'
     summary = `${fmt(waiting)} jobs are waiting and nothing has been read in the last hour.`
-  } else if (report.settings.publishing && jobs[3]!.state === 'stalled') {
+  } else if (report.settings.publishing && jobs.find((j) => j.key === 'publish')?.state === 'stalled') {
     health = 'degraded'
     summary = `${fmt(n(stats, 'outbox'))} records are waiting for nichedb and none were accepted in the last hour.`
   } else if (lastHour.failed > Math.max(20, lastHour.pages)) {

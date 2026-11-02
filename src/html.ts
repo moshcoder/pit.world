@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import type { CrawlStatus } from './crawl-status.js'
+import { KIND_LABELS, type SubmitKind, SUBMIT_MAX } from './submit-kinds.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
 import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
@@ -40,6 +41,7 @@ setRingFooterOptions(
     { label: 'How it works', href: '/about' },
     { label: 'API · CLI · MCP', href: '/about#api' },
     { label: 'Web ring', href: '/ring' },
+    { label: 'Submit your site', href: '/submit' },
     { label: 'Crawler status', href: '/status' },
     { label: 'pitbot crawler', href: '/bot' },
     { label: 'Moshpit registry', href: LINKS.registry },
@@ -509,6 +511,95 @@ ${log}
 </main>`,
   })
 }
+
+export type SubmitOutcome = {
+  accepted: Array<{ url: string; kind: SubmitKind }>
+  rejected: Array<{ url: string; error: string }>
+  queued: number
+  truncated: boolean
+  error: string | null
+}
+
+const submitHeader = () => `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>`
+
+/** pit.world/submit: sites, pages, feeds, sitemaps and OPML into our own index, up to a thousand at once. */
+export function submitPage(options: { error?: string } = {}): string {
+  return layout({
+    title: 'Submit your site to pit.world',
+    description: "Add sites, pages, RSS feeds, sitemaps or an OPML file to pit.world's own search index: up to a thousand at once, free.",
+    path: '/submit',
+    bodyClass: 'doc',
+    body: `${submitHeader()}
+<main class="prose submit">
+<h1>Submit your site</h1>
+<p>Put your site in pit.world's own index, the one <a href="/bot">pitbot</a> builds and pit.world searches next to the other engines. Free, no account. Paste one address or up to ${fmt(SUBMIT_MAX)}, one per line, of any kind:</p>
+<ul class="kinds">
+<li><b>Site</b> <code>example.com</code>: its home page, robots.txt and sitemaps, then up to a thousand pages.</li>
+<li><b>Page</b> <code>example.com/post/42</code>: read right away.</li>
+<li><b>Feed</b> RSS, Atom or JSON Feed: every item is read, and the feed is listed on <a href="https://rssamplifier.com">RSS Amplifier</a> too.</li>
+<li><b>Sitemap</b> <code>example.com/sitemap.xml</code>, or a sitemap index: every page it lists.</li>
+<li><b>OPML</b>: every site behind every feed in it.</li>
+</ul>
+${options.error ? `<p class="notice">${esc(options.error)}</p>` : ''}
+<form class="submit-form" method="post" action="/submit" enctype="multipart/form-data">
+<label for="submit-input">Addresses, one per line</label>
+<textarea id="submit-input" name="input" rows="12" spellcheck="false" autocomplete="off" placeholder="example.com
+https://example.com/feed.xml
+https://example.com/sitemap.xml
+https://example.com/a-page"></textarea>
+<label for="submit-file">Or a file: a list (.txt, .csv), an OPML file, or a sitemap you saved</label>
+<input id="submit-file" name="file" type="file" accept=".txt,.csv,.opml,.xml,text/plain,text/x-opml,application/xml">
+<button type="submit">Submit to the index</button>
+</form>
+<p class="meta">Everything is read in the crawler's queue: the list is answered at once, the reading takes minutes to hours, and <a href="/status">the crawler's status page</a> shows it working. pitbot obeys robots.txt; to keep a site out, see <a href="/bot">pitbot</a>. Submitting does not buy a ranking. To be on top, sponsored listings are sold through <a href="https://ad.network.pit.world">ad.network</a> and marked Sponsored.</p>
+<h2 id="api">From a script or an agent</h2>
+<pre><code>curl -X POST https://pit.world/api/submit -H 'content-type: application/json' \
+  -d '{"urls": ["example.com", "https://example.com/feed.xml"]}'
+pit submit example.com https://example.com/sitemap.xml</code></pre>
+<p>The MCP server (<code>pit mcp</code>) has a <code>submit_urls</code> tool. The reply follows the shared submit contract: <code>accepted</code>, <code>rejected</code> with a reason each, <code>queued</code>.</p>
+</main>`,
+  })
+}
+
+export function submitResultPage(o: SubmitOutcome): string {
+  const counts = new Map<SubmitKind, number>()
+  for (const a of o.accepted) counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1)
+  const summary = [...counts.entries()].map(([k, n]) => `${fmt(n)} ${KIND_LABELS[k].toLowerCase()}${n === 1 ? '' : 's'}`).join(', ')
+  const rows = o.accepted
+    .slice(0, 200)
+    .map((a) => `<tr><td><span class="kind kind-${a.kind}">${KIND_LABELS[a.kind]}</span></td><td>${esc(a.url)}</td></tr>`)
+    .join('')
+  const rejected = o.rejected
+    .slice(0, 200)
+    .map((r) => `<li><code>${esc(r.url)}</code> <small>${esc(explainSubmitError(r.error))}</small></li>`)
+    .join('')
+  return layout({
+    title: 'Submitted · pit.world',
+    description: 'Your addresses are in the crawl queue.',
+    path: '/submit',
+    bodyClass: 'doc',
+    noindex: true,
+    body: `${submitHeader()}
+<main class="prose submit">
+<h1>${o.error ? 'Not submitted' : 'Submitted'}</h1>
+${
+  o.error
+    ? `<p class="notice">${esc(o.error)}</p>`
+    : `<p class="crawl-health crawl-health-healthy"><strong>${fmt(o.queued)} queued.</strong> ${esc(summary)}${o.truncated ? `. Only the first ${fmt(SUBMIT_MAX)} were taken; send the rest as another list` : ''}.</p>
+<p>The crawler reads each one, works out for certain what it is (a link that turns out to be a feed is treated as a feed), and queues its pages ahead of the backlog. Watch it on <a href="/status">the status page</a>; pages become searchable as they are read.</p>`
+}
+${rows ? `<table class="crawl-jobs submit-list"><thead><tr><th>Looks like</th><th>Address</th></tr></thead><tbody>${rows}</tbody></table>${o.accepted.length > 200 ? `<p class="meta">and ${fmt(o.accepted.length - 200)} more.</p>` : ''}` : ''}
+${rejected ? `<h2>Not taken</h2><ul class="rejected">${rejected}</ul>` : ''}
+<p><a href="/submit">Submit more</a></p>
+</main>`,
+  })
+}
+
+const SUBMIT_ERRORS: Record<string, string> = {
+  'invalid-url': 'not a web address',
+  'blocked-host': 'a private or internal address, which pitbot never reads',
+}
+const explainSubmitError = (code: string) => SUBMIT_ERRORS[code] ?? code
 
 /** pitbot: who reads your site for pit.world's own index, and how to say no. */
 export function botPage(): string {
