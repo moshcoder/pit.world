@@ -138,7 +138,8 @@ export function createApp(deps: Deps) {
       const fromIndex = networkPagesFromIndex(query, deps.keys.pit, network, deps.fetch)
       const result = await search(query, deps.keys, { cache, limit, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
       logFailures(result.failures)
-      return { result: featureNetwork(result, network, await fromIndex), error: null }
+      const preferred = featuredFor(query, 1)[0]
+      return { result: featureNetwork(result, network, await fromIndex, preferred), error: null }
     } catch (error) {
       // No query in the message or the log.
       if (error instanceof SearchUnavailable) console.warn(`search: ${error.message}`)
@@ -360,8 +361,10 @@ export function createApp(deps: Deps) {
     }
     const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     const claimed = deps.listings?.claimedOnly(query)
-    const featured = featuredFor(query)
-    const backfill = featured.length ? undefined : backfillFor(query)
+    // The site leading the results already says "Featured": the box above them does not repeat it.
+    const leadHost = result?.hits[0]?.featured ? result.hits[0].host : null
+    const featured = featuredFor(query).filter((s) => !leadHost || new URL(siteHref(s, false)).hostname !== leadHost)
+    const backfill = featured.length || leadHost ? undefined : backfillFor(query)
     return c.html(resultsPage({ query, result, resolution, error, featured, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
   })
 

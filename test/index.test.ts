@@ -1,3 +1,4 @@
+import { RING } from '../src/ring.ts'
 import { describe, expect, it } from 'bun:test'
 import { createCrawlStatus, type CrawlerReport, describe as describeCrawl } from '../src/crawl-status.ts'
 import { callProvider, LABELS, parsePitIndex, PRIMARY } from '../src/search.ts'
@@ -219,5 +220,34 @@ describe('featured slots filled from our own index', () => {
     const app = createApp({ keys: { serper: 'k', pit: 'http://index.test' }, network: net, fetch: fake })
     const api = await (await app.request('/api/search?q=family+tree')).json()
     expect(api.results[0]).toMatchObject({ host: 'family.ancestry.pit.world', featured: true })
+  })
+})
+
+describe('the featured lead goes to the site whose keywords match', () => {
+  const net = new W3bsNetwork(fetch, ['seo.rank.pit.world', 'built.indie.pit.world'])
+  const hit = (url: string) => ({ url, title: url, description: 'd', host: new URL(url).hostname })
+  const base = { query: 'seo audit tool', provider: 'serper', failures: [], cached: false }
+  const seoRank = RING.find((s) => s.name === 'seo.rank')!
+
+  it('its page from the engines first, else from our index, else its home page', () => {
+    const fromEngines = featureNetwork({ ...base, hits: [hit('https://semrush.com/'), hit('https://seo.rank.pit.world/check')] }, net, [hit('https://built.indie.pit.world/p/seo')], seoRank)
+    expect(fromEngines.hits.map((h) => h.url)).toEqual(['https://seo.rank.pit.world/check', 'https://semrush.com/'])
+    const fromIndex = featureNetwork({ ...base, hits: [hit('https://semrush.com/')] }, net, [hit('https://built.indie.pit.world/p/seo'), hit('https://seo.rank.pit.world/docs')], seoRank)
+    expect(fromIndex.hits[0]).toMatchObject({ url: 'https://seo.rank.pit.world/docs', featured: true })
+    const home = featureNetwork({ ...base, hits: [hit('https://semrush.com/')] }, net, [hit('https://built.indie.pit.world/p/seo')], seoRank)
+    expect(home.hits[0]).toMatchObject({ url: 'https://seo.rank.pit.world/', featured: true, description: seoRank.about })
+    expect(home.hits.map((h) => h.url)).toEqual(['https://seo.rank.pit.world/', 'https://semrush.com/'])
+  })
+
+  it('on the page: seo.rank leads "seo audit", and the box above does not repeat it', async () => {
+    const fake = (async (input: string | URL | Request) => {
+      if (String(input).startsWith('http://index.test')) return Response.json({ items: [{ url: 'https://built.indie.pit.world/p/seo', title: 'built.indie: seo.rank', summary: 's' }] })
+      return Response.json({ organic: [{ link: 'https://semrush.com/', title: 'Semrush', snippet: 's' }] })
+    }) as unknown as typeof fetch
+    const app = createApp({ keys: { serper: 'k', pit: 'http://index.test' }, network: net, fetch: fake })
+    const api = await (await app.request('/api/search?q=seo+audit')).json()
+    expect(api.results[0]).toMatchObject({ host: 'seo.rank.pit.world', featured: true })
+    const page = await (await app.request('/search?q=seo+audit')).text()
+    expect(page).not.toContain('class="promo featured"')
   })
 })

@@ -11,7 +11,7 @@
  * Featured is ours and unpaid, never an ad: a search result from one of these
  * sites carries a Featured badge, and up to FEATURED_TOP of them lead the page.
  */
-import { RING } from './ring.ts'
+import { RING, type RingSite, siteHref } from './ring.ts'
 import { callProvider, type Hit, type SearchResult, urlKey } from './search.ts'
 
 export const FEATURED_TOP = 1
@@ -120,17 +120,29 @@ export async function networkPagesFromIndex(query: string, indexKey: string | un
  * our own index (`fromIndex`, best first), one per site, never one already on the
  * page. Returns a new object, so a cached result is never changed.
  */
-export function featureNetwork(result: SearchResult, network: Pick<W3bsNetwork, 'has'>, fromIndex: Hit[] = []): SearchResult {
+export function featureNetwork(result: SearchResult, network: Pick<W3bsNetwork, 'has'>, fromIndex: Hit[] = [], preferred?: RingSite): SearchResult {
   const top: Hit[] = []
   const rest: Hit[] = []
-  for (const hit of result.hits) {
+  // A ring site whose own keywords match the query (featured.ts) leads: its best page
+  // from the engines, else from our index, else its home page. Index relevance alone
+  // put built.indie's page about seo.rank ahead of seo.rank for "seo audit tool".
+  let hits = result.hits
+  if (preferred) {
+    const home = siteHref(preferred, false)
+    const host = new URL(home).hostname
+    const fromEngines = hits.find((h) => h.host === host)
+    const lead: Hit = fromEngines ?? fromIndex.find((h) => h.host === host) ?? { url: home, title: preferred.name, description: preferred.about, host, sources: ['pit'] }
+    top.push({ ...lead, featured: true, ...(fromEngines ? {} : { sources: lead.sources ?? ['pit'] }) })
+    hits = hits.filter((h) => urlKey(h.url) !== urlKey(lead.url))
+  }
+  for (const hit of hits) {
     if (network.has(hit.host)) {
       const badged = { ...hit, featured: true }
       if (top.length < FEATURED_TOP) top.push(badged)
       else rest.push(badged)
     } else rest.push(hit)
   }
-  const onPage = new Set(result.hits.map((h) => urlKey(h.url)))
+  const onPage = new Set([...result.hits, ...top].map((h) => urlKey(h.url)))
   const sites = new Set(top.map((h) => h.host))
   for (const hit of fromIndex) {
     if (top.length >= FEATURED_TOP) break

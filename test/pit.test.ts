@@ -328,7 +328,8 @@ describe('the web app', () => {
   it('serves the JSON API, OpenSearch and suggestions', async () => {
     const { request } = app()
     const api = await (await request('/api/search?q=moshpit&n=5')).json()
-    expect(api).toMatchObject({ query: 'moshpit', provider: 'serper+linkup', results: [{ url: 'https://moshcode.sh/' }, { url: 'https://linkup.example/' }] })
+    // "moshpit" is one of pit.world's own ring keywords, so pit.world leads, featured.
+    expect(api).toMatchObject({ query: 'moshpit', provider: 'serper+linkup', results: [{ url: 'https://pit.world/', featured: true }, { url: 'https://moshcode.sh/' }, { url: 'https://linkup.example/' }] })
     expect(await (await request('/api/resolve?name=chovy.hacker')).json()).toMatchObject({ registered: true, target: 'dev.profullstack.com' })
     expect((await request('/api/resolve?name=not a name')).status).toBe(400)
     expect(await (await request('/opensearch.xml')).text()).toContain('https://pit.world/search?q={searchTerms}')
