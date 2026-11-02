@@ -32,9 +32,32 @@ function exactCompany(payload: unknown, domain: string): { topics: string[]; sou
   return null
 }
 
+/**
+ * The hostnames OutreachGraph (and so NicheDB) may file a pit.world listing under, best first.
+ * OutreachGraph's pit-world lead source keys a Moshpit-only name by its relay host
+ * `<name>.pit.world`, and every other site by its registrable domain, so a listing on a
+ * subdomain (trialstack.davidts.ai) is the company at davidts.ai. The listing's own hostname
+ * is always tried first; the parent is only a fallback, and never a bare public suffix.
+ */
+export function directoryKeys(domain: string, moshpitOnly = false): string[] {
+  const keys = [domain]
+  if (moshpitOnly && !domain.endsWith('.pit.world')) keys.push(`${domain}.pit.world`)
+  else if (!domain.endsWith('.pit.world')) {
+    const labels = domain.split('.')
+    if (labels.length >= 3) {
+      const parent = labels.slice(-2)
+      // co.uk, com.au, org.br ...: a two-letter TLD under a short second level is a suffix, not a company.
+      const suffixLike = parent[1]!.length === 2 && parent[0]!.length <= 3
+      const host = (suffixLike ? labels.slice(-3) : parent).join('.')
+      if (host !== domain) keys.push(host)
+    }
+  }
+  return keys
+}
+
 /** Query only the sites already in pit.world's directory and attach exact hostname matches. */
 export async function enrichNicheDb(
-  listings: Pick<Listings, 'directoryDomains' | 'enrichWebResearch' | 'needsWebResearchRefresh'>,
+  listings: Pick<Listings, 'directoryDomains' | 'enrichWebResearch' | 'needsWebResearchRefresh'> & Partial<Pick<Listings, 'toPublic'>>,
   fetchImpl: JsonFetch = fetch,
   concurrency = 4,
   force = false,
@@ -49,15 +72,19 @@ export async function enrichNicheDb(
       const index = cursor++
       const domain = domains[index]
       if (!domain) return
-      const url = new URL(SEARCH)
-      url.searchParams.set('q', domain)
-      url.searchParams.set('collection', 'directory')
-      url.searchParams.set('limit', '10')
       try {
-        // threatcrush-disable-next-line js-ssrf-outbound-request  fixed NicheDB host; q is a validated directory hostname
-        const response = await fetchImpl(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } })
-        if (!response.ok) throw new Error(`NicheDB returned ${response.status}`)
-        const record = exactCompany(await response.json(), domain)
+        let record: { topics: string[]; sourceUrl: string } | null = null
+        for (const key of directoryKeys(domain, Boolean(listings.toPublic?.(domain)?.moshpitOnly))) {
+          const url = new URL(SEARCH)
+          url.searchParams.set('q', key)
+          url.searchParams.set('collection', 'directory')
+          url.searchParams.set('limit', '10')
+          // threatcrush-disable-next-line js-ssrf-outbound-request  fixed NicheDB host; q is a validated directory hostname
+          const response = await fetchImpl(url, { signal: AbortSignal.timeout(12_000), headers: { accept: 'application/json' } })
+          if (!response.ok) throw new Error(`NicheDB returned ${response.status}`)
+          record = exactCompany(await response.json(), key)
+          if (record) break
+        }
         if (record && listings.enrichWebResearch(domain, { topics: record.topics, sourceUrl: record.sourceUrl })) matched++
         else unmatched++
       } catch {
