@@ -30,7 +30,8 @@ describe('our own index as one of the engines', () => {
   it('is on by default, last among the primaries, and can be turned off', () => {
     expect(PRIMARY.at(-1)).toBe('pit')
     expect(LABELS.pit).toBe('pit.world index')
-    expect(keysFromEnv({}).pit).toBe('https://nichedb.dev')
+    expect(keysFromEnv({}).pit).toBe('http://127.0.0.1:8807')
+    expect(keysFromEnv({ PIT_INDEX_URL: 'https://nichedb.dev' }).pit).toBe('https://nichedb.dev')
     expect(keysFromEnv({ PIT_INDEX_URL: 'http://127.0.0.1:3010', PIT_INDEX_KEY: 'k' }).pit).toBe('http://127.0.0.1:3010 k')
     expect(keysFromEnv({ PIT_INDEX_URL: 'off' }).pit).toBeUndefined()
   })

@@ -504,8 +504,13 @@ export function keysFromEnv(env: Record<string, string | undefined> = process.en
     exa: env.EXA_API_KEY,
     // Not a key: the base URL of a SearXNG instance on loopback, e.g. http://127.0.0.1:8888.
     searxng: env.SEARXNG_URL,
-    // Not a key either: our own index on nichedb, "<base URL>[ <api key>]". PIT_INDEX_URL=off turns it off.
-    pit: env.PIT_INDEX_URL === 'off' ? undefined : `${env.PIT_INDEX_URL ?? 'https://nichedb.dev'}${env.PIT_INDEX_KEY ? ` ${env.PIT_INDEX_KEY}` : ''}`,
+    // Not a key either: our own index, "<base URL>[ <api key>]". By default the crawler's local
+    // search mirror on loopback (milliseconds); PIT_INDEX_URL=https://nichedb.dev searches the
+    // published copy instead (slower); PIT_INDEX_URL=off turns it off.
+    pit:
+      env.PIT_INDEX_URL === 'off'
+        ? undefined
+        : `${env.PIT_INDEX_URL ?? env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807'}${env.PIT_INDEX_KEY ? ` ${env.PIT_INDEX_KEY}` : ''}`,
     perplexity: env.PERPLEXITY_API_KEY,
   }
 }

@@ -29,6 +29,8 @@ export type Deps = {
   resolver?: Resolver
   renderer?: { size: number; render(url: string): Promise<Rendered> } | null
   log?: (line: string) => void
+  /** The local search mirror; every published batch lands here first. */
+  index?: { add(entries: string[]): number } | null
 }
 
 export type PageOutcome = { delayMs?: number; outcome: string }
@@ -207,9 +209,14 @@ export function createCrawler(deps: Deps) {
     return { outcome: await accept(doc, { ...job, rendered: true }, robots) }
   }
 
-  /** Records to nichedb, 200 a call, until the outbox is empty or 20 calls are made. */
+  /**
+   * Records into the local search mirror, then to nichedb, 200 a call, until the
+   * outbox is empty or 20 calls are made. A failed call puts the batch back; the
+   * mirror is an upsert, so indexing it again is harmless. Without a nichedb key
+   * the records go to the mirror only.
+   */
   async function publish(): Promise<{ sent: number; added: number; rejected: number; waiting: boolean }> {
-    if (!config.nichedbKey) return { sent: 0, added: 0, rejected: 0, waiting: true }
+    if (!config.nichedbKey && !deps.index) return { sent: 0, added: 0, rejected: 0, waiting: true }
     const fetchImpl = deps.fetch ?? fetch
     let sent = 0
     let added = 0
@@ -217,6 +224,11 @@ export function createCrawler(deps: Deps) {
     for (let round = 0; round < 20; round++) {
       const raw = await frontier.take(BATCH)
       if (!raw.length) break
+      if (deps.index) {
+        const kept = deps.index.add(raw)
+        if (kept) await frontier.bump('indexed_local', kept)
+      }
+      if (!config.nichedbKey) continue
       let response: Response
       try {
         response = await fetchImpl(`${config.nichedbUrl}/api/v1/sites/records`, {
@@ -238,6 +250,7 @@ export function createCrawler(deps: Deps) {
       added += body.added ?? 0
       rejected += body.rejected?.length ?? 0
     }
+    if (!config.nichedbKey) return { sent: 0, added: 0, rejected: 0, waiting: false }
     if (sent) {
       await frontier.bump('published', sent)
       await frontier.bump('published_new', added)

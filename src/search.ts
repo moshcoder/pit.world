@@ -154,9 +154,9 @@ function stripTags(value: unknown): string {
 }
 
 /**
- * Our own index: pages pit.world's crawler (services/crawler) read and
- * published to nichedb.dev/c/sites, searched there. Title, summary (the page's
- * description or an excerpt of its text) and keyword tags are what match.
+ * Our own index: pages pit.world's crawler (services/crawler) read. They are
+ * published to nichedb.dev/c/sites, and the crawler keeps a local FTS5 mirror
+ * that answers the same /api/v1/search shape on loopback; either works here.
  */
 export function parsePitIndex(body: any): Hit[] {
   const items: any[] = Array.isArray(body?.items) ? body.items : []

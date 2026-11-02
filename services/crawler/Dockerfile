@@ -8,7 +8,8 @@ RUN bun install --frozen-lockfile --production
 COPY src ./src
 COPY services/crawler ./services/crawler
 # Dev boxes check out with umask 007; the runtime user must still read the code.
-RUN chmod -R a+rX /app
+RUN chmod -R a+rX /app && mkdir -p /data && chown bun /data
+ENV CRAWL_INDEX_PATH=/data/index.db
 ENV NODE_ENV=production CRAWL_HEALTH_PORT=8797
 USER bun
 # A blocked event loop or a dead Redis shows as unhealthy (watchdog-autoheal restarts it).

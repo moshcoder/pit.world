@@ -21,6 +21,7 @@ import { Redis } from 'ioredis'
 import type { Config, Role } from './config.ts'
 import { createCrawler, type Crawler, type PageJob, type SiteJob } from './crawler.ts'
 import { RedisFrontier } from './frontier.ts'
+import { IndexStore } from './index-store.ts'
 import { ObscuraPool } from './obscura.ts'
 import { urlId } from './url.ts'
 
@@ -48,6 +49,7 @@ export type Runtime = {
   queues: Record<keyof typeof QUEUES, Queue>
   frontier: RedisFrontier
   redis: Redis
+  index: IndexStore
   close(): Promise<void>
 }
 
@@ -63,10 +65,12 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
   }
   const frontier = new RedisFrontier(redis, config.maxPages, config.recrawlDays * 86_400_000)
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
+  const index = new IndexStore(config.indexPath)
   const crawler = createCrawler({
     config,
     frontier,
     renderer: pool,
+    index,
     log,
     enqueue: {
       async sites(jobs: SiteJob[]) {
@@ -87,9 +91,11 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     queues,
     frontier,
     redis,
+    index,
     async close() {
       await Promise.all(Object.values(queues).map((q) => q.close()))
       redis.disconnect()
+      index.close()
     },
   }
 }
@@ -196,7 +202,8 @@ export async function snapshot(runtime: Runtime) {
   ])
   const queues: Record<string, Record<string, number>> = {}
   Object.keys(runtime.queues).forEach((k, i) => (queues[k] = counts[i]!))
-  return { stats, queues }
+  const withIndex: Record<string, number> = { ...stats, index_pages: runtime.index.count() }
+  return { stats: withIndex, queues }
 }
 
 /** Everything /status shows: the snapshot, rates over the hour and the day, the log tail. */

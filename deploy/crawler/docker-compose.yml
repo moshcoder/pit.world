@@ -48,9 +48,12 @@ services:
       obscura-1: { condition: service_started }
       obscura-2: { condition: service_started }
     ports: ['127.0.0.1:8807:8797']
+    # The local search mirror pit.world reads (/api/v1/search on 8807).
+    volumes: ['index:/data']
     mem_limit: 1536m
     restart: unless-stopped
     stop_grace_period: 30s
 
 volumes:
   redis:
+  index:
