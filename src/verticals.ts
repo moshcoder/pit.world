@@ -37,7 +37,7 @@ export const VERTICALS: Array<{ id: Vertical; label: string }> = [
  * The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing.
  * Images, Videos and Live are not here: they fall back to open indexes (Wikimedia Commons, PeerTube, the Internet Archive).
  */
-const SERPER_ONLY: Vertical[] = ['music', 'shopping', 'places']
+const SERPER_ONLY: Vertical[] = ['shopping']
 
 type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs'>
 
@@ -69,7 +69,7 @@ export type Media = {
   extra?: string
 }
 
-export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive'
+export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive' | 'gdelt' | 'itunes' | 'osm'
 
 export type MediaResult = {
   query: string
@@ -91,6 +91,9 @@ export const MEDIA_SOURCES: Record<MediaProvider, string> = {
   commons: 'Wikimedia Commons',
   peertube: 'PeerTube (Sepia Search) and the Internet Archive',
   archive: 'the Internet Archive',
+  gdelt: 'the GDELT Project',
+  itunes: 'the iTunes Search API',
+  osm: 'OpenStreetMap (Nominatim; © OpenStreetMap contributors, ODbL)',
 }
 
 export const MUSIC_SITES = ['bandcamp.com', 'soundcloud.com', 'open.spotify.com', 'music.apple.com', 'music.youtube.com', 'audiomack.com', 'mixcloud.com']
@@ -112,6 +115,8 @@ const THUMB_HOSTS = [
   // Wikimedia Commons thumbnails (the Images tab without Google).
   /^upload\.wikimedia\.org$/,
   /^thumb\.wikimedia\.org$/,
+  // iTunes artwork (the Music tab without Google).
+  /^is\d-ssl\.mzstatic\.com$/,
 ]
 
 export function thumbAllowed(raw: string): URL | null {
@@ -504,6 +509,95 @@ function interleave(a: Media[], b: Media[]): Media[] {
   return out
 }
 
+/** GDELT DOC 2.0 artlist: news articles from around the world, newest first. */
+export function parseGdelt(body: any): Media[] {
+  const rows: any[] = Array.isArray(body?.articles) ? body.articles : []
+  return rows.flatMap((a) => {
+    const url = httpUrl(a?.url)
+    const title = str(a?.title)
+    if (!url || !title) return []
+    const seen = /^(\d{4})(\d{2})(\d{2})T/.exec(str(a?.seendate))
+    return [{ url, title, host: str(a?.domain) || host(url), date: seen ? `${seen[1]}-${seen[2]}-${seen[3]}` : undefined, channel: str(a?.domain) || undefined }]
+  })
+}
+
+/** iTunes Search (media=music): songs and albums, linked to Apple Music. */
+export function parseItunes(body: any): Media[] {
+  const rows: any[] = Array.isArray(body?.results) ? body.results : []
+  const seen = new Set<string>()
+  return rows.flatMap((r) => {
+    const url = httpUrl(r?.trackViewUrl) || httpUrl(r?.collectionViewUrl) || httpUrl(r?.artistViewUrl)
+    const name = str(r?.trackName) || str(r?.collectionName) || str(r?.artistName)
+    if (!url || !name || seen.has(url)) return []
+    seen.add(url)
+    const artist = str(r?.artistName)
+    const ms = num(r?.trackTimeMillis)
+    return [
+      {
+        url,
+        title: artist && artist !== name ? `${name} · ${artist}` : name,
+        host: host(url),
+        thumbnail: httpUrl(r?.artworkUrl100) || undefined,
+        description: [str(r?.collectionName) && str(r?.collectionName) !== name ? str(r?.collectionName) : '', str(r?.primaryGenreName)].filter(Boolean).join(' · ') || undefined,
+        channel: artist || undefined,
+        duration: ms ? clock(ms / 1000) : undefined,
+        date: day(r?.releaseDate),
+      },
+    ]
+  })
+}
+
+/** Nominatim search (jsonv2, extratags): a place links to its own site, else to OpenStreetMap at its pin. */
+export function parseNominatim(body: any): Media[] {
+  const rows: any[] = Array.isArray(body) ? body : []
+  return rows.flatMap((p) => {
+    const lat = Number(p?.lat)
+    const lon = Number(p?.lon)
+    const tags = p?.extratags && typeof p.extratags === 'object' ? p.extratags : {}
+    const site = httpUrl(tags.website) || httpUrl(tags['contact:website'])
+    const osmType = ({ node: 'node', way: 'way', relation: 'relation' } as Record<string, string>)[str(p?.osm_type)]
+    const osmId = num(p?.osm_id)
+    const osm = osmType && osmId ? `https://www.openstreetmap.org/${osmType}/${osmId}` : Number.isFinite(lat) && Number.isFinite(lon) ? `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=17/${lat}/${lon}` : ''
+    const url = site || osm
+    const address = str(p?.display_name)
+    const title = str(p?.name) || address.split(',')[0]?.trim() || ''
+    if (!url || !title) return []
+    const type = str(p?.type).replace(/_/g, ' ')
+    return [
+      {
+        url,
+        title,
+        host: site ? host(site) : 'openstreetmap.org',
+        address: address || undefined,
+        channel: type && type !== 'yes' ? type : undefined,
+        extra: str(tags.phone) || str(tags['contact:phone']) || str(tags.opening_hours) || undefined,
+      },
+    ]
+  })
+}
+
+/**
+ * At most one request per `gapMs` to a free API that asks for it (Nominatim: 1/s; GDELT: 1 per 5 s),
+ * across every visitor. A caller that would wait longer than `maxWaitMs` is told no instead of queued.
+ */
+export class Spacer {
+  private next = 0
+  constructor(
+    private readonly gapMs: number,
+    private readonly maxWaitMs: number,
+  ) {}
+  async take(): Promise<boolean> {
+    const now = Date.now()
+    const at = Math.max(now, this.next)
+    if (at - now > this.maxWaitMs) return false
+    this.next = at + this.gapMs
+    if (at > now) await new Promise((r) => setTimeout(r, at - now))
+    return true
+  }
+}
+const NOMINATIM = new Spacer(1_100, 6_000)
+const GDELT = new Spacer(5_200, 0)
+
 /** What Serper is asked for each tab. */
 export function serperRequest(vertical: SerperVertical, q: string, limit: number): { endpoint: string; body: Record<string, unknown> } {
   switch (vertical) {
@@ -593,15 +687,29 @@ async function askOpenVideo(fetchImpl: Fetch, q: string, limit: number, live: bo
   return interleave(peertube ?? [], ia ?? [])
 }
 
-async function askRssAmplifier(fetchImpl: Fetch, kind: 'blogs' | 'news', q: string): Promise<{ posts: Media[]; sites: Media[] }> {
-  return parseRssAmplifier(await fetchJson(fetchImpl, `https://rssamplifier.com/api/search?${new URLSearchParams({ q, kind })}`, { headers: OURS }))
+/** News without Google: our own newsrooms (rssamplifier.com), newest first, filled from GDELT. */
+async function askOpenNews(fetchImpl: Fetch, q: string, limit: number, spacer: Spacer): Promise<{ provider: MediaProvider; hits: Media[] }> {
+  const gdeltParams = new URLSearchParams({ query: /\s/.test(q) ? `"${q.replace(/"/g, '')}"` : q, mode: 'artlist', format: 'json', maxrecords: String(Math.min(50, limit)), sort: 'datedesc' })
+  const [ours, gdelt] = await Promise.all([
+    askRssAmplifier(fetchImpl, 'news', q, 12_000).then((r) => r.posts, () => null),
+    spacer.take().then((ok) => (ok ? fetchJson(fetchImpl, `https://api.gdeltproject.org/api/v2/doc/doc?${gdeltParams}`, { headers: OURS }).then(parseGdelt, () => null) : null)),
+  ])
+  if (!ours && !gdelt) throw new Error('no open news index answered')
+  const newest = [...(ours ?? [])].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''))
+  const seen = new Set(newest.map((m) => m.url))
+  const hits = [...newest, ...(gdelt ?? []).filter((m) => !seen.has(m.url))]
+  return { provider: newest.length ? 'rssamplifier' : 'gdelt', hits }
+}
+
+async function askRssAmplifier(fetchImpl: Fetch, kind: 'blogs' | 'news', q: string, timeoutMs = 8_000): Promise<{ posts: Media[]; sites: Media[] }> {
+  return parseRssAmplifier(await fetchJson(fetchImpl, `https://rssamplifier.com/api/search?${new URLSearchParams({ q, kind })}`, { headers: OURS }, timeoutMs))
 }
 
 export async function searchMedia(
   vertical: Exclude<Vertical, 'web'>,
   query: string,
   keys: Keys,
-  options: { limit?: number; cache?: Cache; fetch?: Fetch } = {},
+  options: { limit?: number; cache?: Cache; fetch?: Fetch; spacers?: { gdelt?: Spacer; nominatim?: Spacer } } = {},
 ): Promise<MediaResult> {
   const q = normalizeQuery(query)
   const bounds = LIMITS[vertical] ?? { max: 20, default: 10 }
@@ -656,9 +764,35 @@ export async function searchMedia(
         break
       }
       case 'news': {
-        // Google's news index first; our own directory of newsrooms when it is not configured or does not answer.
+        // Google's news index first; our own directory of newsrooms (newest first) plus GDELT when it is not configured or does not answer.
         const google = key ? await askSerper(fetchImpl, key, 'news', q, limit).catch(() => null) : null
-        result = google ? make('serper', google) : make('rssamplifier', (await askRssAmplifier(fetchImpl, 'news', q)).posts)
+        if (google?.length) result = make('serper', google)
+        else {
+          const open = await askOpenNews(fetchImpl, q, limit, options.spacers?.gdelt ?? GDELT)
+          result = make(open.provider, open.hits)
+        }
+        break
+      }
+      case 'music': {
+        // Google limited to music sites first; the iTunes catalogue (free, no key) when it does not answer.
+        const google = key ? await askSerper(fetchImpl, key, 'music', q, limit).catch(() => null) : null
+        if (google?.length) result = make('serper', google)
+        else {
+          const params = new URLSearchParams({ term: q, media: 'music', limit: String(Math.min(50, limit)) })
+          result = make('itunes', parseItunes(await fetchJson(fetchImpl, `https://itunes.apple.com/search?${params}`, { headers: OURS })))
+        }
+        break
+      }
+      case 'places': {
+        // Google Maps first; OpenStreetMap's Nominatim when it does not answer: one request a second at most
+        // across everyone, a real User-Agent, results cached (usage policy: operations.osmfoundation.org/policies/nominatim).
+        const google = key ? await askSerper(fetchImpl, key, 'places', q, limit).catch(() => null) : null
+        if (google?.length) result = make('serper', google)
+        else {
+          if (!(await (options.spacers?.nominatim ?? NOMINATIM).take())) throw new Error('nominatim is busy')
+          const params = new URLSearchParams({ q, format: 'jsonv2', limit: String(Math.min(40, limit)), extratags: '1' })
+          result = make('osm', parseNominatim(await fetchJson(fetchImpl, `https://nominatim.openstreetmap.org/search?${params}`, { headers: OURS })))
+        }
         break
       }
       case 'scholar': {
