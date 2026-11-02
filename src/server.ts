@@ -811,6 +811,8 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.C0MPUTE_API_KEY ? { apiKey: env.C0MPUTE_API_KEY } : {}),
     model: env.C0MPUTE_MODEL ?? 'qwen2.5:7b',
     ...(env.C0MPUTE_URL ? { baseUrl: env.C0MPUTE_URL } : {}),
+    // Pages are read through Infernet's page reader (the TronBrowser fetch_page relay); set it empty to fetch directly only.
+    ...(env.PIT_PAGE_RELAY_URL !== undefined ? { pageRelayUrl: env.PIT_PAGE_RELAY_URL } : {}),
     store: new SummaryStore(env.PIT_SUMMARIES_DB ?? `${dataDir}/summaries.db`),
   })
   const fpSecret = fingerprintSecret(dataDir)

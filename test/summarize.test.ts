@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'bun:test'
-import { c0mputeChat, cleanSummary, fetchPageText, htmlText, readStream, Summarizer, summaryKey } from '../src/summarize.ts'
+import { Database } from 'bun:sqlite'
+import { tmpdir } from 'node:os'
+import { c0mputeChat, cleanSummary, fetchPageText, htmlText, readPage, readStream, relayPageText, Summarizer, SummaryStore, summaryKey } from '../src/summarize.ts'
 import { createApp } from '../src/server.ts'
 import { Cache } from '../src/search.ts'
 
@@ -86,12 +88,85 @@ describe('summaries', () => {
     expect(sent).toHaveLength(1)
   })
 
-  it('reads the page itself when the engines gave too little text', async () => {
+  it('always summarizes the page itself, even when the snippet is long', async () => {
+    const sent: any[] = []
     let fetched = ''
-    const s = new Summarizer({ apiKey: 'k', fetch: infernet([]), pageText: async (u) => ((fetched = u), 'A long page about pricing plans and features. '.repeat(10)) })
-    s.remember([{ url: 'https://thin.example/', title: 'Thin', description: '', host: 'thin.example' }])
-    expect((await s.wait('https://thin.example/')).status).toBe('done')
-    expect(fetched).toBe('https://thin.example/')
+    const s = new Summarizer({ apiKey: 'k', fetch: infernet(sent), pageText: async (u) => ((fetched = u), 'The real page body talks about invoicing for plumbers. '.repeat(10)) })
+    s.remember([{ url: 'https://long.example/', title: 'Long', description: 'An engine snippet that says something else. '.repeat(30), host: 'long.example' }])
+    expect(await s.wait('https://long.example/')).toMatchObject({ status: 'done', source: 'page' })
+    expect(fetched).toBe('https://long.example/')
+    const user = sent[0].body.messages[1].content as string
+    expect(user).toContain('invoicing for plumbers')
+    expect(user).not.toContain('says something else')
+  })
+
+  it('falls back to a long snippet only when the page cannot be read, and fails on a short one', async () => {
+    const s = new Summarizer({ apiKey: 'k', fetch: infernet([]), pageText: async () => '' })
+    s.remember([{ url: 'https://walled.example/', title: 'Walled', description: 'Plenty of engine text about the page here. '.repeat(20), host: 'walled.example' }])
+    expect(await s.wait('https://walled.example/')).toMatchObject({ status: 'done', source: 'snippet' })
+    s.remember([{ url: 'https://thin.example/', title: 'Thin', description: 'Short.', host: 'thin.example' }])
+    expect(await s.wait('https://thin.example/')).toMatchObject({ status: 'failed', error: 'Could not read that page to summarize it.' })
+  })
+
+  it('rewrites summaries cached before pages were always read', async () => {
+    const sent: any[] = []
+    const store = new SummaryStore()
+    store.set('old.example', 'from the snippet', 'qwen2.5:7b')
+    ;(store as any).db.exec('UPDATE summaries SET source = NULL')
+    const s = new Summarizer({ apiKey: 'k', store, fetch: infernet(sent), pageText: async () => 'The page body, read for real this time around. '.repeat(5) })
+    s.remember([{ url: 'https://old.example/', title: 'Old', description: '', host: 'old.example' }])
+    expect(s.status('https://old.example/').status).toBe('unknown')
+    expect(await s.wait('https://old.example/')).toMatchObject({ status: 'done', source: 'page' })
+    expect(sent).toHaveLength(1)
+  })
+
+  it('adds the source column to a summaries database from before it', () => {
+    const path = `${tmpdir()}/pit-summaries-${process.pid}-${Date.now()}.db`
+    const old = new Database(path)
+    old.exec('CREATE TABLE summaries (url TEXT PRIMARY KEY, summary TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL)')
+    old.query('INSERT INTO summaries VALUES (?, ?, ?, ?)').run('a.example', 'old', 'm', 1)
+    old.close()
+    const store = new SummaryStore(path)
+    expect(store.get('a.example')).toMatchObject({ summary: 'old', source: null })
+    store.set('b.example', 'new', 'm')
+    expect(store.get('b.example')?.source).toBe('page')
+  })
+
+  it('reads pages through the fetch_page relay, and fetches directly when the relay fails', async () => {
+    const calls: string[] = []
+    const relay = (ok: boolean) =>
+      (async (input: string | URL | Request, init?: RequestInit) => {
+        const url = String(input)
+        calls.push(url)
+        if (url === 'https://relay.example/mcp') {
+          if (!ok) return new Response('down', { status: 502 })
+          const body = JSON.parse(String(init?.body))
+          expect(body.params).toMatchObject({ name: 'fetch_page', arguments: { url: 'https://acme.example/', format: 'markdown' } })
+          const markdown = '[Home](/) [Docs](/docs)\n# Acme invoices for plumbers\n![logo](x.png)\n## Acme sends invoices and chases late payments for small plumbing firms.\nIt costs nine dollars a month, needs no setup at all, and works from [your phone](/app) on site.\nTeams of up to forty plumbers use it to get paid in days rather than in months.\n{"engine":"obscura","url":"https://acme.example/"}'
+          return Response.json({ jsonrpc: '2.0', id: 1, result: { content: [{ type: 'text', text: markdown }] } })
+        }
+        return new Response(`<title>Acme</title><p>${'Direct page text about invoices for plumbers. '.repeat(10)}</p>`, { headers: { 'content-type': 'text/html' } })
+      }) as unknown as typeof fetch
+    const resolve = async () => ['93.184.216.34']
+    const viaRelay = await readPage('https://acme.example/', { relayUrl: 'https://relay.example/mcp', fetch: relay(true), resolve })
+    // Menus, images, short headings, link targets and the relay's status line are gone.
+    expect(viaRelay).toBe(
+      'Acme sends invoices and chases late payments for small plumbing firms.\nIt costs nine dollars a month, needs no setup at all, and works from your phone on site.\nTeams of up to forty plumbers use it to get paid in days rather than in months.',
+    )
+    expect(calls).toEqual(['https://relay.example/mcp'])
+    calls.length = 0
+    const direct = await readPage('https://acme.example/', { relayUrl: 'https://relay.example/mcp', fetch: relay(false), resolve })
+    expect(direct).toContain('Direct page text about invoices')
+    expect(calls).toEqual(['https://relay.example/mcp', 'https://acme.example/'])
+  })
+
+  it('drops a bot check, and never sends a private address to the relay', async () => {
+    let asked = false
+    const wall = (async () => ((asked = true), Response.json({ result: { content: [{ type: 'text', text: 'Just a moment... checking that your browser is a real one, please wait.' }] } }))) as unknown as typeof fetch
+    expect(await relayPageText('https://walled.example/', { relayUrl: 'https://relay.example/mcp', fetch: wall, resolve: async () => ['93.184.216.34'] })).toBe('')
+    asked = false
+    expect(await relayPageText('http://internal.example/', { relayUrl: 'https://relay.example/mcp', fetch: wall, resolve: async () => ['10.0.0.5'] })).toBe('')
+    expect(asked).toBe(false)
   })
 
   it('reports a failure (not a hang) when c0mpute is down', async () => {

@@ -6,10 +6,17 @@
  * instant answer, and "Summarize" under a result asks for 2-3 plain sentences
  * that land in the card when a node has written them, seconds to minutes later.
  *
- * Privacy: c0mpute is sent the page's text and nothing else: not the query,
- * not who asked. Only pages pit.world itself just returned in a result can be
- * summarized (so this is not a fetch-anything proxy), and a summary is kept by
- * URL so the second request for it is instant and costs nobody anything.
+ * The page itself is read every time, never just the engines' snippet: through
+ * the TronBrowser `fetch_page` relay (the same page reader Infernet's /chat web
+ * search uses: Obscura first, Chromium for JS-heavy pages and bot walls), then
+ * pit.world's own direct fetch if the relay is down. The snippet only stands in
+ * when no page can be read and it is long enough to say something.
+ *
+ * Privacy: the relay is sent the page address only; c0mpute is sent the page's
+ * text and address and nothing else: not the query, not who asked. Only pages
+ * pit.world itself just returned in a result can be summarized (so this is not a
+ * fetch-anything proxy), and a summary is kept by URL so the second request for
+ * it is instant and costs nobody anything.
  */
 import { Database } from 'bun:sqlite'
 import { lookup } from 'node:dns/promises'
@@ -23,8 +30,15 @@ export const DEFAULT_C0MPUTE_URL = 'https://infernetprotocol.com'
 export const SUMMARY_TIMEOUT_MS = 90_000
 /** How much page text a node is given: a small model on a CPU reads ~4k characters in reasonable time. */
 const MAX_INPUT = 4_000
-/** Below this, the engines' text is too thin to summarize; read the page itself. */
+/** An engine snippet shorter than this is not worth summarizing on its own when the page cannot be read. */
 const THIN_TEXT = 600
+/** The page reader Infernet's /chat web search uses (keyless MCP, tools/call fetch_page). */
+export const DEFAULT_PAGE_RELAY_URL = 'https://tronbrowser.dev/mcp/tron'
+/** Obscura gets this long before Chromium takes over; the whole read is cut at PAGE_RELAY_TIMEOUT_MS. */
+const PAGE_RELAY_ENGINE_S = 15
+const PAGE_RELAY_TIMEOUT_MS = 40_000
+/** Rows without one of these were cached before pages were always read, and are rewritten on the next request. */
+const SOURCES = new Set(['page', 'snippet'])
 
 export class C0mputeError extends Error {
   constructor(
@@ -164,14 +178,79 @@ export function htmlText(html: string): string {
     .trim()
 }
 
+type Resolve = (host: string) => Promise<string[]>
+
+/** http(s) on the default ports, no credentials, and every address the host resolves to is public. */
+export async function isPublicPageUrl(url: URL, resolve: Resolve = defaultResolve): Promise<boolean> {
+  if (!/^https?:$/.test(url.protocol) || url.username || url.password) return false
+  if (url.port && !['80', '443'].includes(url.port)) return false
+  const addresses = await resolve(url.hostname).catch(() => [])
+  return addresses.length > 0 && addresses.every(isPublicAddress)
+}
+
+/**
+ * Keep the words of a markdown page: no images, link targets, or the short lines
+ * that are menus, buttons and footers rather than content.
+ */
+export function markdownText(markdown: string): string {
+  return markdown
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, ' ')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^#+\s*/gm, '')
+    .replace(/[*_`>|]+/g, ' ')
+    .split('\n')
+    .map((line) => line.replace(/\s+/g, ' ').trim())
+    // The relay appends a JSON status line: {"engine":"chromium","url":...}
+    .filter((line) => line.length >= 40 && !/^\{"engine":/.test(line))
+    .join('\n')
+}
+
+/** A bot check served instead of the page ("Just a moment", "verify you are human"): its text would only mislead the model. */
+const INTERSTITIAL = /(not a (ro)?bot|verify(ing)? you are human|just a moment|enable javascript and cookies|attention required)/i
+
+/**
+ * A public page's text through the TronBrowser relay (MCP tools/call fetch_page), which renders
+ * JavaScript and gets past most bot walls. "" when the address is not public, the relay fails, or
+ * all it got was a bot check.
+ */
+export async function relayPageText(raw: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<string> {
+  const url = new URL(raw)
+  if (!(await isPublicPageUrl(url, options.resolve))) return ''
+  const response = await (options.fetch ?? fetch)(options.relayUrl || DEFAULT_PAGE_RELAY_URL, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'tools/call',
+      params: { name: 'fetch_page', arguments: { url: url.href, format: 'markdown', max_chars: 60_000, timeout_s: PAGE_RELAY_ENGINE_S } },
+    }),
+    signal: AbortSignal.timeout(PAGE_RELAY_TIMEOUT_MS),
+  })
+  if (!response.ok) return ''
+  const body = (await response.json().catch(() => null)) as { error?: unknown; result?: { isError?: boolean; content?: Array<{ type?: string; text?: string }> } } | null
+  if (!body || body.error || body.result?.isError) return ''
+  const markdown = (body.result?.content ?? [])
+    .filter((c) => c?.type === 'text' && typeof c.text === 'string')
+    .map((c) => c.text)
+    .join('\n')
+  const text = markdownText(markdown)
+  return INTERSTITIAL.test(text.slice(0, 600)) ? '' : text
+}
+
+/** The page's text: the relay first, pit.world's own direct fetch when the relay is off, down or got little. */
+export async function readPage(url: string, options: { relayUrl?: string; fetch?: Fetch; resolve?: Resolve } = {}): Promise<string> {
+  const viaRelay = options.relayUrl === '' ? '' : await relayPageText(url, options).catch(() => '')
+  if (viaRelay.length >= 200) return viaRelay
+  const direct = await fetchPageText(url, options.fetch, options.resolve).catch(() => '')
+  return direct.length > viaRelay.length ? direct : viaRelay
+}
+
 /** A public web page's text: http(s) only, every address public (re-checked on each redirect), 6 s, 512 KB. */
-export async function fetchPageText(raw: string, fetchImpl: Fetch = fetch, resolve: (host: string) => Promise<string[]> = defaultResolve): Promise<string> {
+export async function fetchPageText(raw: string, fetchImpl: Fetch = fetch, resolve: Resolve = defaultResolve): Promise<string> {
   let url = new URL(raw)
   for (let hop = 0; hop < 4; hop++) {
-    if (!/^https?:$/.test(url.protocol) || url.username || url.password) return ''
-    if (url.port && !['80', '443'].includes(url.port)) return ''
-    const addresses = await resolve(url.hostname).catch(() => [])
-    if (!addresses.length || !addresses.every(isPublicAddress)) return ''
+    if (!(await isPublicPageUrl(url, resolve))) return ''
     // threatcrush-disable-next-line js-ssrf-outbound-request  only a URL pit.world returned as a search result, every hop resolved and checked public above
     const response = await fetchImpl(url.href, {
       redirect: 'manual',
@@ -194,7 +273,8 @@ export async function fetchPageText(raw: string, fetchImpl: Fetch = fetch, resol
       html += decoder.decode(value, { stream: true })
     }
     reader.cancel().catch(() => {})
-    return htmlText(html)
+    const text = htmlText(html)
+    return INTERSTITIAL.test(text.slice(0, 600)) ? '' : text
   }
   return ''
 }
@@ -210,18 +290,22 @@ export class SummaryStore {
     this.db = new Database(path, { create: true })
     this.db.exec('PRAGMA journal_mode = WAL')
     this.db.exec('CREATE TABLE IF NOT EXISTS summaries (url TEXT PRIMARY KEY, summary TEXT NOT NULL, model TEXT NOT NULL, created_at INTEGER NOT NULL)')
+    // What a summary was written from: 'page' or 'snippet'. Rows from before this column (NULL) were mostly
+    // written from the engines' snippet alone, so they are rewritten from the page on the next request.
+    const columns = this.db.query('PRAGMA table_info(summaries)').all() as Array<{ name: string }>
+    if (!columns.some((c) => c.name === 'source')) this.db.exec('ALTER TABLE summaries ADD COLUMN source TEXT')
   }
-  get(url: string): { summary: string; model: string; createdAt: number } | null {
-    const row = this.db.query('SELECT summary, model, created_at FROM summaries WHERE url = ?').get(url) as { summary: string; model: string; created_at: number } | null
-    return row ? { summary: row.summary, model: row.model, createdAt: row.created_at } : null
+  get(url: string): { summary: string; model: string; createdAt: number; source: string | null } | null {
+    const row = this.db.query('SELECT summary, model, created_at, source FROM summaries WHERE url = ?').get(url) as { summary: string; model: string; created_at: number; source: string | null } | null
+    return row ? { summary: row.summary, model: row.model, createdAt: row.created_at, source: row.source } : null
   }
-  set(url: string, summary: string, model: string): void {
-    this.db.query('INSERT OR REPLACE INTO summaries (url, summary, model, created_at) VALUES (?, ?, ?, ?)').run(url, summary, model, Date.now())
+  set(url: string, summary: string, model: string, source: 'page' | 'snippet' = 'page'): void {
+    this.db.query('INSERT OR REPLACE INTO summaries (url, summary, model, created_at, source) VALUES (?, ?, ?, ?, ?)').run(url, summary, model, Date.now(), source)
   }
 }
 
 export type SummaryState =
-  | { status: 'done'; url: string; summary: string; model: string; cached: boolean }
+  | { status: 'done'; url: string; summary: string; model: string; cached: boolean; source: 'page' | 'snippet' }
   | { status: 'pending'; url: string }
   | { status: 'failed'; url: string; error: string }
   | { status: 'unknown'; url: string }
@@ -239,8 +323,10 @@ export function summaryKey(url: string): string {
 
 export type SummarizerOptions = C0mputeOptions & {
   store?: SummaryStore
-  /** Page fetcher for results whose engine text is thin; injectable for tests. */
+  /** Reads the page every summary is written from (default readPage); injectable for tests. */
   pageText?: (url: string) => Promise<string>
+  /** The fetch_page relay (default DEFAULT_PAGE_RELAY_URL); '' reads pages directly only. */
+  pageRelayUrl?: string
   /** How long a result stays summarizable after pit.world showed it. */
   textTtlMs?: number
 }
@@ -280,7 +366,8 @@ export class Summarizer {
   status(url: string): SummaryState {
     const key = summaryKey(url)
     const done = this.store.get(key)
-    if (done) return { status: 'done', url, summary: done.summary, model: done.model, cached: true }
+    if (done?.source && SOURCES.has(done.source))
+      return { status: 'done', url, summary: done.summary, model: done.model, cached: true, source: done.source as 'page' | 'snippet' }
     if (this.jobs.has(key)) return { status: 'pending', url }
     const failed = this.failures.get(key)
     if (failed && Date.now() - failed.at < 10 * 60_000) return { status: 'failed', url, error: failed.error }
@@ -295,7 +382,13 @@ export class Summarizer {
     this.failures.delete(key)
     const job = this.run(key, url)
       .catch((error) => {
-        this.failures.set(key, { error: error instanceof C0mputeError ? 'The summarizer did not answer. Try again in a minute.' : 'No summary this time. Try again in a minute.', at: Date.now() })
+        const message =
+          error instanceof C0mputeError
+            ? 'The summarizer did not answer. Try again in a minute.'
+            : error instanceof Error && error.message === 'could not read the page'
+              ? 'Could not read that page to summarize it.'
+              : 'No summary this time. Try again in a minute.'
+        this.failures.set(key, { error: message, at: Date.now() })
         // No URL or query in the log.
         console.warn(`summarize: ${error instanceof Error ? error.message : String(error)}`)
       })
@@ -312,15 +405,28 @@ export class Summarizer {
   }
 
   private async run(key: string, url: string): Promise<void> {
-    let text = this.texts.get(key)?.text ?? ''
-    if (text.length < THIN_TEXT) {
-      const page = await (this.options.pageText ?? ((u: string) => fetchPageText(u, this.options.fetch)))(url).catch(() => '')
-      if (page.length > text.length) text = page
-    }
-    if (text.replace(/\s+/g, ' ').trim().length < 80) throw new Error('page text too thin to summarize')
+    const snippet = (this.texts.get(key)?.text ?? '').replace(/\s+/g, ' ').trim()
+    const read =
+      this.options.pageText ??
+      ((u: string) =>
+        readPage(u, {
+          ...(this.options.pageRelayUrl !== undefined ? { relayUrl: this.options.pageRelayUrl } : {}),
+          ...(this.options.fetch ? { fetch: this.options.fetch } : {}),
+        }))
+    const page = (await read(url).catch(() => '')).trim()
+    // The page is what gets summarized. The snippet stands in only when no page could be read.
+    let text: string
+    let source: 'page' | 'snippet'
+    if (page.replace(/\s+/g, ' ').length >= 80) {
+      text = page
+      source = 'page'
+    } else if (snippet.length >= THIN_TEXT) {
+      text = snippet
+      source = 'snippet'
+    } else throw new Error('could not read the page')
     const answer = await c0mputeChat(SUMMARY_SYSTEM, `Page: ${url}\n\nText:\n${text.slice(0, MAX_INPUT)}`, this.options)
     const summary = cleanSummary(answer.text)
     if (!summary) throw new Error('the model found nothing to summarize')
-    this.store.set(key, summary, answer.model)
+    this.store.set(key, summary, answer.model, source)
   }
 }
