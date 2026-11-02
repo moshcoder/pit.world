@@ -344,3 +344,11 @@ form .btn { border: 0; cursor: pointer; }
 .submit-list .kind { display: inline-block; min-width: 4.5em; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font: 12px var(--mono); text-align: center; }
 .submit-list .kind-site { color: var(--accent); border-color: var(--accent); }
 .submit .rejected code { overflow-wrap: anywhere; }
+
+/* Summarize (src/summarize.ts): a quiet button under a result, the summary below it. */
+.hits .summary-row { margin-top: 4px; }
+.hits .summarize { padding: 0; border: 0; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; text-decoration: underline dotted; }
+.hits .summarize:hover, .hits .summarize:focus-visible { color: var(--accent); }
+.hits .summarize[disabled] { cursor: progress; text-decoration: none; }
+.hits .summary { margin: 6px 0 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); font-size: 14px; }
+.hits .summary.wait, .hits .summary.err { border-left-color: var(--line); background: none; color: var(--muted); }

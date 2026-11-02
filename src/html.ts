@@ -412,16 +412,22 @@ ${tabs(query, vertical)}
 /** Web results before the one ad line: in the content, never at the top, never by the footer. */
 const AD_AFTER = 3
 
-function hitItem(h: SearchResult['hits'][number]): string {
+function hitItem(h: SearchResult['hits'][number], summaries = false): string {
+  // Summarize: hidden until app.js shows it (it needs script), and only when the server has c0mpute.
+  const summarize = summaries
+    ? `<div class="summary-row"><button type="button" class="summarize" data-url="${esc(h.url)}" hidden>Summarize</button><p class="summary" hidden aria-live="polite"></p></div>`
+    : ''
   return `<li${h.featured ? ' class="featured-hit"' : ''}>
       <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
       <div class="url">${esc(h.host)}${h.featured ? '<span class="src featured" title="A W3BS network site, featured on pit.world. Not an ad.">Featured</span>' : ''}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
       ${h.description ? `<p>${esc(h.description)}</p>` : ''}
+      ${summarize}
     </li>`
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite }): string {
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean }): string {
   const { query, result, resolution, error } = options
+  const item = (h: SearchResult['hits'][number]) => hitItem(h, options.summaries)
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
   const body = `<header class="bar">
@@ -437,10 +443,10 @@ ${tabs(query, 'web')}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   ${hits.length ? sponsoredTop() : ''}
   <ol class="hits">
-    ${hits.slice(0, AD_AFTER).map(hitItem).join('')}
+    ${hits.slice(0, AD_AFTER).map(item).join('')}
   </ol>
   ${hits.length ? adUnit() : ''}
-  ${hits.length > AD_AFTER ? `<ol class="hits" start="${AD_AFTER + 1}">${hits.slice(AD_AFTER).map(hitItem).join('')}</ol>` : ''}
+  ${hits.length > AD_AFTER ? `<ol class="hits" start="${AD_AFTER + 1}">${hits.slice(AD_AFTER).map(item).join('')}</ol>` : ''}
   ${featuredBox(options.backfill ? [options.backfill] : undefined)}
   ${!error && hits.length === 0 ? '<p class="notice">Nothing found. Try other words, or a bang like <code>!ddg</code>.</p>' : ''}
   <p class="elsewhere">Try this search on <a href="/search?q=${encodeURIComponent(`${query} !ddg`)}">DuckDuckGo</a>, <a href="/search?q=${encodeURIComponent(`${query} !b`)}">Brave</a> or <a href="/search?q=${encodeURIComponent(`${query} !g`)}">Google</a>, without a referrer.</p>
@@ -472,9 +478,10 @@ export function privacyPage(): string {
 <ol>
 <li>Your browser sends the words to pit.world over HTTPS.</li>
 <li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo, and <a href="/bot">our own index</a>, kept at nichedb.dev), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
-<li>The tabs above the results work the same way. Images, Videos, Live, Shopping, News, Places and Scholar ask Google through Serper, and Scholar asks <a href="https://openalex.org/">OpenAlex</a> when Google does not answer; Books asks <a href="https://openlibrary.org/">Open Library</a>; Podcasts asks our own <a href="https://p0dcasters.com/">p0dcasters.com</a>; Blogs asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a>, which also answers News when Google does not. Pictures and book covers are fetched by pit.world and handed to you, so none of them sees your IP address either.</li>
+<li>The tabs above the results work the same way. Images, Videos, Live, Shopping, News, Places and Scholar ask Google through Serper. When Google does not answer, Images asks <a href="https://commons.wikimedia.org/">Wikimedia Commons</a>, Videos and Live ask PeerTube's <a href="https://sepiasearch.org/">Sepia Search</a> (Videos also the <a href="https://archive.org/">Internet Archive</a>), and Scholar asks <a href="https://openalex.org/">OpenAlex</a>; Books asks <a href="https://openlibrary.org/">Open Library</a>; Podcasts asks our own <a href="https://p0dcasters.com/">p0dcasters.com</a>; Blogs asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a>, which also answers News when Google does not. Pictures and book covers are fetched by pit.world and handed to you, so none of them sees your IP address either.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
+<li><b>Summarize</b> under a result asks <a href="https://c0mpute.com/">c0mpute</a>, a peer network of inference nodes, for two or three sentences about that page. The node is sent the page's text and address only: never your search words, your IP address or your account. Summaries are kept by page address so the next person gets the same one instantly. Without an account you get a few an hour; signed in, more.</li>
 </ol>
 <h2>Moshpit names</h2>
 <p>When a search looks like a name (<code>chovy.hacker</code>), pit.world also asks the public Moshpit registry whether it exists. That lookup is the name only, from our server.</p>

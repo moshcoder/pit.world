@@ -3,6 +3,7 @@
  *
  *   pit                         the TUI
  *   pit search WORDS [--json] [-n N]
+ *   pit summarize URL [--json]   a c0mpute summary of a result (search for it first)
  *   pit resolve NAME [--json]   a Moshpit name
  *   pit network [--json]        live Moshpit numbers
  *   pit subscribe EMAIL         newsletter signup (confirm by email)
@@ -22,6 +23,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
 
   pit                          interactive search (TUI)
   pit search WORDS [-n N]      search the web privately
+  pit summarize URL            2-3 sentence c0mpute summary of a result (search first)
   pit resolve NAME             look up a Moshpit name (chovy.hacker)
   pit network                  live numbers for the Moshpit network
   pit submit URL... [--file F] put sites, pages, feeds, sitemaps or OPML into pit.world's index (up to 1,000)
@@ -98,6 +100,15 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         })
         if (!result.results.length) out.log('No results.')
         return 0
+      }
+      case 'summarize': {
+        const url = words.join(' ').trim()
+        if (!url) return usage(out, 'pit summarize URL')
+        const saved = (await import('./login.js')).savedToken()
+        const r = await client.summarize(url, saved && saved.base === client.base ? { token: saved.token } : {})
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else out.log(r.status === 'done' ? (r.summary ?? '') : r.status === 'pending' ? 'Still being written; run it again in a minute.' : (r.error ?? `No summary (${r.status}).`))
+        return r.status === 'done' || r.status === 'pending' ? 0 : 1
       }
       case 'submit': {
         const fileAt = words.indexOf('--file')
