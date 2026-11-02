@@ -17,8 +17,17 @@ import { dirname } from 'node:path'
 
 export type IndexedRecord = {
   record: { url: string; canonical: string; title: string; description: string | null; kind: string; language: string | null; fetched_at: string; site?: { name?: string } }
-  enrichment: { keywords?: string[]; excerpt?: string; language?: string | null }
+  enrichment: {
+    keywords?: string[]
+    excerpt?: string
+    text?: string
+    language?: string | null
+    images?: Array<{ url: string; alt?: string; width?: number | null; height?: number | null }>
+    videos?: Array<{ url: string; title?: string; thumbnail?: string | null; provider?: string | null }>
+  }
 }
+
+export type MediaHit = { kind: 'image' | 'video'; url: string; text: string; thumbnail: string | null; width: number | null; height: number | null; provider: string | null; page: string; page_title: string; site: string; score: number }
 
 export type IndexHit = { url: string; title: string; summary: string; site: string; kind: string; fetched_at: string; score: number }
 
@@ -67,6 +76,21 @@ export class IndexStore {
       CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
         INSERT INTO pages_fts(pages_fts, rowid, title, description, keywords, body, site) VALUES ('delete', old.id, old.title, old.description, old.keywords, old.body, old.site);
       END;
+      -- Images and videos a page shows: references only, never the files.
+      CREATE TABLE IF NOT EXISTS media (
+        id INTEGER PRIMARY KEY,
+        page_url TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        url TEXT NOT NULL,
+        text TEXT NOT NULL DEFAULT '',
+        thumbnail TEXT,
+        width INTEGER,
+        height INTEGER,
+        provider TEXT,
+        UNIQUE (page_url, url)
+      );
+      CREATE INDEX IF NOT EXISTS media_page ON media (page_url);
+      CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5(text, page_title, tokenize='unicode61 remove_diacritics 2');
       CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
         INSERT INTO pages_fts(pages_fts, rowid, title, description, keywords, body, site) VALUES ('delete', old.id, old.title, old.description, old.keywords, old.body, old.site);
         INSERT INTO pages_fts(rowid, title, description, keywords, body, site) VALUES (new.id, new.title, new.description, new.keywords, new.body, new.site);
@@ -83,6 +107,12 @@ export class IndexStore {
         description = excluded.description, keywords = excluded.keywords, body = excluded.body,
         language = excluded.language, fetched_at = excluded.fetched_at
     `)
+    const addMedia = this.db.prepare(
+      'INSERT OR IGNORE INTO media (page_url, kind, url, text, thumbnail, width, height, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
+    )
+    const addFts = this.db.prepare('INSERT INTO media_fts (rowid, text, page_title) VALUES (?, ?, ?)')
+    const dropFts = this.db.prepare('DELETE FROM media_fts WHERE rowid IN (SELECT id FROM media WHERE page_url = ?)')
+    const clearMedia = this.db.prepare('DELETE FROM media WHERE page_url = ?')
     let kept = 0
     this.db.transaction(() => {
       for (const raw of entries) {
@@ -107,14 +137,47 @@ export class IndexStore {
           $title: r.title ?? site,
           $description: r.description ?? '',
           $keywords: (entry.enrichment?.keywords ?? []).join(' '),
-          $body: entry.enrichment?.excerpt ?? '',
+          $body: entry.enrichment?.text || entry.enrichment?.excerpt || '',
           $language: entry.enrichment?.language ?? r.language ?? null,
           $fetched: r.fetched_at ?? new Date().toISOString(),
         })
+        // A re-crawl replaces the page's media wholesale.
+        dropFts.run(r.canonical)
+        clearMedia.run(r.canonical)
+        const pageTitle = r.title ?? site
+        const add = (kind: 'image' | 'video', url: string, text: string, thumbnail: string | null, width: number | null, height: number | null, provider: string | null) => {
+          const row = addMedia.get(r.canonical, kind, url, text, thumbnail, width, height, provider) as { id: number } | null
+          if (row) addFts.run(row.id, text, pageTitle)
+        }
+        for (const img of entry.enrichment?.images ?? []) if (img?.url) add('image', img.url, img.alt ?? '', null, img.width ?? null, img.height ?? null, null)
+        for (const vid of entry.enrichment?.videos ?? []) if (vid?.url) add('video', vid.url, vid.title ?? '', vid.thumbnail ?? null, null, null, vid.provider ?? null)
         kept++
       }
     })()
     return kept
+  }
+
+  /** Images or videos whose own words (alt text, title) or page title match. */
+  searchMedia(query: string, kind: 'image' | 'video', limit = 20): MediaHit[] {
+    const terms = toFtsTerms(query)
+    if (!terms.length) return []
+    const run = (match: string) =>
+      this.db
+        .query(
+          `SELECT m.kind, m.url, m.text, m.thumbnail, m.width, m.height, m.provider, m.page_url AS page,
+                  p.title AS page_title, p.site, bm25(media_fts, 5.0, 1.0) AS score
+           FROM media_fts JOIN media m ON m.id = media_fts.rowid JOIN pages p ON p.url = m.page_url
+           WHERE media_fts MATCH ? AND m.kind = ?
+           ORDER BY score LIMIT ?`,
+        )
+        .all(match, kind, Math.min(Math.max(1, limit), 50)) as MediaHit[]
+    const all = run(terms.join(' AND '))
+    return all.length || terms.length === 1 ? all : run(terms.join(' OR '))
+  }
+
+  mediaCount(): { images: number; videos: number } {
+    const rows = this.db.query('SELECT kind, count(*) AS n FROM media GROUP BY kind').all() as Array<{ kind: string; n: number }>
+    return { images: rows.find((r) => r.kind === 'image')?.n ?? 0, videos: rows.find((r) => r.kind === 'video')?.n ?? 0 }
   }
 
   /** Best matches: every word if any page has them all, else any word. Title weighs most. */

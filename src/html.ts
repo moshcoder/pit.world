@@ -491,6 +491,8 @@ ${stat('Pages read', fmt(st.totals.pagesIndexed), `${fmt(st.totals.pagesRendered
 ${stat('Read (1h)', fmt(st.lastHour.pages), `${fmt(st.lastHour.rendered)} rendered`)}
 ${stat('Read (24h)', fmt(st.lastDay.pages), `${fmt(st.lastDay.sitesStarted)} sites started`)}
 ${stat('Searchable', fmt(st.totals.searchable), 'pages in the index pit.world searches')}
+${stat('Images', fmt(st.totals.images), 'found on those pages, by reference')}
+${stat('Videos', fmt(st.totals.videos), 'embedded or linked, by reference')}
 ${stat('Published', fmt(st.totals.published), `${fmt(st.lastHour.published)} in the last hour`)}
 ${stat('Waiting to publish', fmt(st.totals.outbox), set?.publishing ? 'records for nichedb' : 'publishing is off')}
 ${stat('Failed (24h)', fmt(st.lastDay.failed), `${fmt(st.totals.failed)} all time`)}

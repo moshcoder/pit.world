@@ -40,7 +40,7 @@ export type CrawlStatus = {
   health: Health
   summary: string
   reachable: boolean
-  totals: { sites: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number }
+  totals: { sites: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number; images: number; videos: number }
   lastHour: { pages: number; rendered: number; failed: number; published: number; sitesStarted: number }
   lastDay: { pages: number; rendered: number; failed: number; published: number; sitesStarted: number }
   jobs: Job[]
@@ -75,7 +75,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       health: 'offline',
       summary: 'The crawler did not answer. Searches still work; the index just is not growing right now.',
       reachable: false,
-      totals: { sites: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0 },
+      totals: { sites: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0, images: 0, videos: 0 },
       lastHour: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
       lastDay: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
       jobs: [],
@@ -138,6 +138,8 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       outbox: n(stats, 'outbox'),
       failed: n(stats, 'pages_failed', 'pages_errored', 'renders_errored'),
       searchable: n(stats, 'index_pages'),
+      images: n(stats, 'index_images'),
+      videos: n(stats, 'index_videos'),
     },
     lastHour,
     lastDay,
