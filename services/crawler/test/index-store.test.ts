@@ -51,3 +51,27 @@ describe('the local search mirror', () => {
     expect(frontier.counters.indexed_local).toBe(1)
   })
 })
+
+describe('content and media in the local index', () => {
+  const page = (title: string, text: string, images: Array<{ url: string; alt: string }>, videos: Array<{ url: string; title: string }>) => ({
+    record: { url: 'https://ovens.example/v', canonical: 'https://ovens.example/v', title, description: 'Short.', kind: 'page', language: 'en', fetched_at: '2026-11-02T00:00:00.000Z' },
+    enrichment: { excerpt: text.slice(0, 50), text, images: images.map((i) => ({ ...i, width: null, height: null })), videos: videos.map((v) => ({ ...v, thumbnail: null, provider: null })) },
+  })
+  test('search reaches the whole text, not just the excerpt', () => {
+    const store = new IndexStore(':memory:')
+    store.add([page('Ovens', 'intro '.repeat(100) + 'zebracorn', [], [])])
+    expect(store.search('zebracorn')).toHaveLength(1)
+  })
+  test('images and videos are searchable by their words and the page title; a re-crawl replaces them', () => {
+    const store = new IndexStore(':memory:')
+    store.add([page('Wood-fired ovens', 'x', [{ url: 'https://ovens.example/dome.jpg', alt: 'Brick dome at night' }], [{ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Firing it up' }])])
+    expect(store.searchMedia('brick dome', 'image').map((m) => m.url)).toEqual(['https://ovens.example/dome.jpg'])
+    expect(store.searchMedia('wood-fired', 'video')[0]).toMatchObject({ page: 'https://ovens.example/v', page_title: 'Wood-fired ovens', site: 'ovens.example' })
+    expect(store.mediaCount()).toEqual({ images: 1, videos: 1 })
+    store.add([page('Wood-fired ovens', 'x', [{ url: 'https://ovens.example/new.jpg', alt: 'New door' }], [])])
+    expect(store.mediaCount()).toEqual({ images: 1, videos: 0 })
+    expect(store.searchMedia('brick', 'image')).toEqual([])
+    expect(store.searchMedia('door', 'image')).toHaveLength(1)
+    for (const q of ['C#', 'catch-all', 'foo(bar']) expect(() => store.searchMedia(q, 'image')).not.toThrow()
+  })
+})

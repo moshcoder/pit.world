@@ -60,6 +60,13 @@ async function worker() {
             const items = q ? runtime.index.search(q, limit) : []
             return Response.json({ q, count: items.length, items })
           }
+          if (path === '/api/v1/media') {
+            const q = (url.searchParams.get('q') ?? '').slice(0, 512)
+            const kind = url.searchParams.get('kind') === 'video' ? 'video' : 'image'
+            const limit = Number(url.searchParams.get('limit')) || 20
+            const items = q ? runtime.index.searchMedia(q, kind, limit) : []
+            return Response.json({ q, kind, count: items.length, items })
+          }
           if (path !== '/healthz' && path !== '/stats') return new Response('not found', { status: 404 })
           try {
             // /healthz is the cheap one (Docker asks every 30 s); /stats is what pit.world/status reads.

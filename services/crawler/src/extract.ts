@@ -33,10 +33,19 @@ export type OpenSiteRecord = {
   jsonld: unknown[]
 }
 
+/** An image a page shows: where it is and what it says, never the file itself. */
+export type ImageRef = { url: string; alt: string; width: number | null; height: number | null }
+/** A video a page plays or embeds: its address (a watch page when known), title and thumbnail. */
+export type VideoRef = { url: string; title: string; thumbnail: string | null; provider: string | null }
+
 export type Enrichment = {
   language: string | null
   keywords: string[]
   excerpt: string
+  /** The page's main text, up to TEXT_MAX characters: what the local index searches. */
+  text: string
+  images: ImageRef[]
+  videos: VideoRef[]
   words: number
   links: number
   hash: string
@@ -115,6 +124,10 @@ const STOP = new Set(
   ),
 )
 
+export const TEXT_MAX = 10_000
+const IMAGES_MAX = 20
+const VIDEOS_MAX = 10
+
 const clip = (value: string | null | undefined, max: number): string => {
   const text = (value ?? '').replace(/\s+/g, ' ').trim()
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
@@ -187,6 +200,78 @@ function languageOf(root: HTMLElement, metas: ReturnType<typeof metaMap>): strin
     root.querySelector('html')?.getAttribute('lang') ?? metas.name['content-language'] ?? metas.og['og:locale'] ?? ''
   const tag = declared.trim().toLowerCase().replace('_', '-')
   return /^[a-z]{2,3}(-[a-z0-9]{2,8})?$/.test(tag) ? tag : null
+}
+
+const intOrNull = (v: string | undefined | null): number | null => {
+  const n = Number.parseInt(String(v ?? ''), 10)
+  return Number.isFinite(n) && n > 0 ? n : null
+}
+
+/** YouTube and Vimeo players as their watch pages; anything else as it is. */
+export function videoRefOf(raw: string, base: string): { url: string; provider: string | null; thumbnail: string | null } | null {
+  const url = normalizeUrl(raw, base)
+  if (!url) return null
+  const u = new URL(url)
+  const host = u.hostname.replace(/^www\./, '').replace(/^m\./, '')
+  let id: string | null = null
+  if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    id = u.pathname.match(/^\/(?:embed|shorts|live|v)\/([\w-]{11})/)?.[1] ?? (u.pathname === '/watch' ? u.searchParams.get('v') : null)
+  } else if (host === 'youtu.be') id = u.pathname.slice(1, 12) || null
+  if (id && /^[\w-]{11}$/.test(id)) return { url: `https://www.youtube.com/watch?v=${id}`, provider: 'youtube', thumbnail: `https://i.ytimg.com/vi/${id}/hqdefault.jpg` }
+  if (host === 'player.vimeo.com' || host === 'vimeo.com') {
+    const vid = u.pathname.match(/(?:\/video)?\/(\d{5,})/)?.[1]
+    if (vid) return { url: `https://vimeo.com/${vid}`, provider: 'vimeo', thumbnail: null }
+  }
+  if (/\.(mp4|webm|m3u8|mov|ogv)($|\?)/i.test(u.pathname + u.search)) return { url, provider: null, thumbnail: null }
+  if (host.endsWith('dailymotion.com') || host.endsWith('twitch.tv') || host.endsWith('loom.com') || host.endsWith('wistia.com') || host.endsWith('rumble.com')) return { url, provider: host.split('.').slice(-2, -1)[0] ?? null, thumbnail: null }
+  return null
+}
+
+/** Images and videos a page shows, as references. Read before the text pass, which drops iframes. */
+export function mediaOf(root: HTMLElement, url: string, metas: { og: Record<string, string>; twitter: Record<string, string> }, jsonld: Array<Record<string, unknown>>): { images: ImageRef[]; videos: VideoRef[] } {
+  const images = new Map<string, ImageRef>()
+  const addImage = (raw: string | undefined | null, alt: string, width: number | null, height: number | null) => {
+    if (!raw || images.size >= IMAGES_MAX || /^data:/i.test(raw.trim())) return
+    const src = normalizeUrl(raw.trim().split(/\s+/)[0] ?? '', url)
+    if (!src || images.has(src)) return
+    // Pixels, spacers and icons are not content.
+    if ((width !== null && width < 64) || (height !== null && height < 64)) return
+    if (/(?:pixel|spacer|blank|tracking|1x1|favicon|sprite)[^/]*$/i.test(new URL(src).pathname)) return
+    images.set(src, { url: src, alt: clip(alt, 300), width, height })
+  }
+  const og = metas.og['og:image'] ?? metas.og['og:image:url'] ?? metas.twitter['twitter:image']
+  if (og) addImage(og, metas.og['og:image:alt'] ?? '', intOrNull(metas.og['og:image:width']), intOrNull(metas.og['og:image:height']))
+  for (const img of root.querySelectorAll('img')) {
+    const raw = img.getAttribute('src') ?? img.getAttribute('data-src') ?? img.getAttribute('data-lazy-src') ?? img.getAttribute('srcset') ?? img.getAttribute('data-srcset')
+    addImage(raw, img.getAttribute('alt') ?? img.getAttribute('title') ?? '', intOrNull(img.getAttribute('width')), intOrNull(img.getAttribute('height')))
+  }
+
+  const videos = new Map<string, VideoRef>()
+  const addVideo = (raw: string | undefined | null, title: string, thumb: string | null = null) => {
+    if (!raw || videos.size >= VIDEOS_MAX) return
+    const ref = videoRefOf(raw.trim(), url)
+    if (!ref || videos.has(ref.url)) return
+    const thumbnail = ref.thumbnail ?? (thumb ? normalizeUrl(thumb, url) : null)
+    videos.set(ref.url, { url: ref.url, title: clip(title, 300), thumbnail, provider: ref.provider })
+  }
+  for (const e of jsonld) {
+    if (!typesOf(e).includes('videoobject')) continue
+    const thumb = ([] as unknown[]).concat(e.thumbnailUrl ?? []).map(String)[0] ?? null
+    addVideo(str(e.contentUrl) ?? str(e.embedUrl), str(e.name) ?? '', thumb)
+  }
+  addVideo(metas.og['og:video:secure_url'] ?? metas.og['og:video:url'] ?? metas.og['og:video'] ?? metas.twitter['twitter:player'], metas.og['og:title'] ?? '', og ?? null)
+  const pageTitle = root.querySelector('title')?.textContent ?? ''
+  for (const f of root.querySelectorAll('iframe')) addVideo(f.getAttribute('src') ?? f.getAttribute('data-src'), f.getAttribute('title') ?? pageTitle)
+  for (const v of root.querySelectorAll('video')) {
+    const src = v.getAttribute('src') ?? v.querySelector('source')?.getAttribute('src')
+    addVideo(src, v.getAttribute('title') ?? v.getAttribute('aria-label') ?? pageTitle, v.getAttribute('poster'))
+  }
+  for (const a of root.querySelectorAll('a[href]')) {
+    if (videos.size >= VIDEOS_MAX) break
+    const href = a.getAttribute('href') ?? ''
+    if (/youtu\.?be|vimeo\.com\/\d/.test(href)) addVideo(href, a.textContent ?? '')
+  }
+  return { images: [...images.values()], videos: [...videos.values()] }
 }
 
 function visibleText(root: HTMLElement): { all: string; main: string } {
@@ -278,6 +363,7 @@ export function extract(
   }
 
   const language = languageOf(root, metas)
+  const media = mediaOf(root, url, metas, jsonld)
   const { all, main } = visibleText(root)
   const words = main ? main.split(/\s+/).length : 0
   const keywords = keywordsOf(title, main)
@@ -311,6 +397,9 @@ export function extract(
       language,
       keywords,
       excerpt: clip(main, 1000),
+      text: main.length > TEXT_MAX ? main.slice(0, TEXT_MAX) : main,
+      images: media.images,
+      videos: media.videos,
       words,
       links: linkCount,
       hash: createHash('sha1').update(`${title}\n${description ?? ''}\n${main}`).digest('hex'),

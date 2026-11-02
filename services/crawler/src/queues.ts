@@ -213,7 +213,8 @@ export async function snapshot(runtime: Runtime) {
   ])
   const queues: Record<string, Record<string, number>> = {}
   Object.keys(runtime.queues).forEach((k, i) => (queues[k] = counts[i]!))
-  const withIndex: Record<string, number> = { ...stats, index_pages: runtime.index.count() }
+  const media = runtime.index.mediaCount()
+  const withIndex: Record<string, number> = { ...stats, index_pages: runtime.index.count(), index_images: media.images, index_videos: media.videos }
   return { stats: withIndex, queues }
 }
 

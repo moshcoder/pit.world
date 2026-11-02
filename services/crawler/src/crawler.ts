@@ -165,6 +165,8 @@ export function createCrawler(deps: Deps) {
     if (!doc.noindex) {
       await frontier.push([{ record: doc.record, enrichment: doc.enrichment }], config.outboxMax)
       await frontier.bump(rendered ? 'pages_rendered' : 'pages_indexed')
+      if (doc.enrichment.images.length) await frontier.bump('images_found', doc.enrichment.images.length)
+      if (doc.enrichment.videos.length) await frontier.bump('videos_found', doc.enrichment.videos.length)
     } else await frontier.bump('pages_noindex')
     let followed = 0
     if (job.depth < config.maxDepth && doc.internal.length) {
@@ -256,12 +258,22 @@ export function createCrawler(deps: Deps) {
         if (kept) await frontier.bump('indexed_local', kept)
       }
       if (!config.nichedbKey) continue
+      // The full text stays in the local index; nichedb keeps the record, excerpt and media.
+      const outgoing = raw.map((line) => {
+        try {
+          const entry = JSON.parse(line)
+          if (entry?.enrichment) delete entry.enrichment.text
+          return JSON.stringify(entry)
+        } catch {
+          return line
+        }
+      })
       let response: Response
       try {
         response = await fetchImpl(`${config.nichedbUrl}/api/v1/sites/records`, {
           method: 'POST',
           headers: { 'content-type': 'application/json', authorization: `Bearer ${config.nichedbKey}`, 'user-agent': config.userAgent },
-          body: `{"records":[${raw.join(',')}]}`,
+          body: `{"records":[${outgoing.join(',')}]}`,
           signal: AbortSignal.timeout(60_000),
         })
       } catch (error) {

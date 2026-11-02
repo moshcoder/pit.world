@@ -178,3 +178,58 @@ test('OPML: the site behind each feed, htmlUrl first, once each, never a private
 </body></opml>`
   expect(sitesFromOpml(xml)).toEqual(['show-one.example', 'blog.example', 'e.example'])
 })
+
+import { videoRefOf } from '../src/extract.ts'
+
+describe('content and media references', () => {
+  const long = 'Lorem ipsum dolor sit amet. '.repeat(60) + 'The word zebracorn appears only deep in the text.'
+  const page = `<html><head><title>Ovens on video</title>
+<meta property="og:image" content="/og.jpg"><meta property="og:image:alt" content="An oven">
+<meta property="og:video" content="https://player.vimeo.com/video/123456789">
+<script type="application/ld+json">{"@type":"VideoObject","name":"Firing the oven","contentUrl":"https://cdn.example/fire.mp4","thumbnailUrl":"https://cdn.example/fire.jpg"}</script>
+</head><body><main>
+<p>${long}</p>
+<img src="/a.jpg" alt="Brick dome" width="800" height="600">
+<img src="/pixel.gif" width="1" height="1"><img src="data:image/png;base64,xx" alt="inline">
+<img data-src="/lazy.webp" alt="Lazy loaded">
+<img srcset="/s-480.jpg 480w, /s-960.jpg 960w" alt="Srcset">
+<iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0" title="Our build"></iframe>
+<video poster="/poster.jpg"><source src="/clips/door.webm"></video>
+<iframe src="https://ads.example/frame"></iframe>
+</main></body></html>`
+  const doc = extract(page, 'https://ovens.example/video')
+
+  test('the full main text is kept for the index, the excerpt stays short', () => {
+    expect(doc.enrichment.text).toContain('zebracorn')
+    expect(doc.enrichment.excerpt).not.toContain('zebracorn')
+    expect(doc.enrichment.excerpt.length).toBeLessThanOrEqual(1000)
+  })
+
+  test('images by reference: og first, real images, never pixels or inline data', () => {
+    expect(doc.enrichment.images.map((i) => [i.url, i.alt])).toEqual([
+      ['https://ovens.example/og.jpg', 'An oven'],
+      ['https://ovens.example/a.jpg', 'Brick dome'],
+      ['https://ovens.example/lazy.webp', 'Lazy loaded'],
+      ['https://ovens.example/s-480.jpg', 'Srcset'],
+    ])
+    expect(doc.enrichment.images[1]).toMatchObject({ width: 800, height: 600 })
+  })
+
+  test('videos by reference: JSON-LD, og:video, embeds as watch pages, <video>; never an ad frame', () => {
+    expect(doc.enrichment.videos.map((v) => [v.url, v.provider])).toEqual([
+      ['https://cdn.example/fire.mp4', null],
+      ['https://vimeo.com/123456789', 'vimeo'],
+      ['https://www.youtube.com/watch?v=dQw4w9WgXcQ', 'youtube'],
+      ['https://ovens.example/clips/door.webm', null],
+    ])
+    expect(doc.enrichment.videos[0]!.thumbnail).toBe('https://cdn.example/fire.jpg')
+    expect(doc.enrichment.videos[2]).toMatchObject({ title: 'Our build', thumbnail: 'https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg' })
+    expect(doc.enrichment.videos[3]!.thumbnail).toBe('https://ovens.example/poster.jpg')
+  })
+
+  test('YouTube in all its spellings is one watch page', () => {
+    for (const u of ['https://youtu.be/dQw4w9WgXcQ', 'https://m.youtube.com/watch?v=dQw4w9WgXcQ&t=3', 'https://www.youtube.com/shorts/dQw4w9WgXcQ'])
+      expect(videoRefOf(u, 'https://x.example/')?.url).toBe('https://www.youtube.com/watch?v=dQw4w9WgXcQ')
+    expect(videoRefOf('https://example.com/page', 'https://x.example/')).toBeNull()
+  })
+})

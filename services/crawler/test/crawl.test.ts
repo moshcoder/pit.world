@@ -185,6 +185,9 @@ describe('publishing to nichedb', () => {
     expect(last.url).toBe('https://nichedb.test/api/v1/sites/records')
     expect(last.auth).toBe('Bearer k1')
     expect(last.body.records.map((r: any) => r.record.title)).toEqual(['Shop home', 'Page A'])
+    // The full text stays local; nichedb gets the record, excerpt and media.
+    expect(last.body.records[0].enrichment.text).toBeUndefined()
+    expect(last.body.records[0].enrichment.excerpt).toContain('Welcome')
     expect(frontier.outbox).toEqual([])
     expect(frontier.counters.published).toBe(2)
   })
