@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="pit_bg">#050505</color>
+    <color name="pit_fg">#f2f5ee</color>
+    <color name="pit_accent">#a6ff1a</color>
+
+    <style name="PitTheme" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
+        <item name="android:windowBackground">@color/pit_bg</item>
+        <item name="android:colorAccent">@color/pit_accent</item>
+        <item name="android:colorPrimary">@color/pit_bg</item>
+        <item name="android:colorPrimaryDark">@color/pit_bg</item>
+        <item name="android:textColor">@color/pit_fg</item>
+    </style>
+
+    <style name="PitDialog" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:colorAccent">@color/pit_accent</item>
+        <item name="android:background">@color/pit_bg</item>
+        <item name="android:textColor">@color/pit_fg</item>
+    </style>
+</resources>
