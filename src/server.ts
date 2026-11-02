@@ -10,7 +10,7 @@ import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, whyPage, botPage, statusPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
@@ -29,6 +29,7 @@ import { mountListings } from './listings-routes.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
+import { Shares } from './shares.js'
 import { CATEGORY_RULES_VERSION, categoryFor, importNicheDb } from './nichedb-import.js'
 import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
@@ -184,6 +185,8 @@ export function createApp(deps: Deps) {
   const readerHealth = deps.readerHealth ?? votes.health ?? new ReaderHealth(votes.db)
   votes.health = readerHealth
   const voteRewards = deps.voteRewards ?? new VoteRewards(votes.db)
+  // Shared results (src/shares.ts): written only when someone clicks Share, in the votes database.
+  const shares = new Shares(votes.db, fpSecret)
   // Summarize and Listen both read pages through the summarizer: every read it makes is a reader-health sample.
   deps.summarizer?.observeReads((url, state) => readerHealth.record(url, state))
   deps.listings?.setVoteMoves((domains) => votes.listingMoves(domains))
@@ -337,6 +340,21 @@ export function createApp(deps: Deps) {
   app.get('/privacy', (c) => c.html(privacyPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/why', (c) => c.html(whyPage()))
+  // Share: check the signed result, keep it, and send the reader to its own page.
+  app.get('/share', (c) => {
+    const slug = shares.save({ u: c.req.query('u'), t: c.req.query('t'), d: c.req.query('d'), i: c.req.query('i'), s: c.req.query('s') })
+    if (!slug) return c.html(shareMissingPage('That share link does not check out', 'It is broken or was changed. Search again and use Share under the result.'), 400)
+    return c.redirect(`/result/${slug}`, 303)
+  })
+  app.get('/result/*', (c) => {
+    const slug = decodeURIComponent(c.req.path.slice('/result/'.length))
+    const shared = slug ? shares.get(slug) : null
+    if (!shared) return c.html(shareMissingPage('Not shared yet', 'Nobody has shared that result. Search for it, then use Share under it.'), 404)
+    const back = `/result/${shared.slug}`
+    const view = voteView([['result', shared.url]], back, '')
+    const listing = deps.listings?.toPublic(shared.host) ? shared.host : null
+    return c.html(sharedResultPage(shared, view, listing))
+  })
   app.get('/bot', (c) => c.html(botPage()))
   // Sites, pages, feeds, sitemaps and OPML into our own index (src/submit-routes.ts).
   mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', limited, writeLimited: (c, body) => writeLimited(c, 'submit', body), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
@@ -520,7 +538,7 @@ export function createApp(deps: Deps) {
       back,
       query,
     )
-    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed, view) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed, view) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
   })
 
   // --- votes -------------------------------------------------------------------

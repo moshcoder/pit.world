@@ -27,6 +27,8 @@ export const PRIOR = 5
 export const QUERY_WEIGHT = 6
 /** Places a result can move on its domain's votes across all searches, at most. */
 export const DOMAIN_WEIGHT = 2
+/** Places a result can move on votes cast on its own shared page (/result/<url>), on every search, at most. */
+export const SHARED_WEIGHT = 3
 /** Whatever the votes, a result never moves more than this many places. */
 export const MAX_MOVE = 3
 
@@ -218,15 +220,29 @@ export class Votes {
     return out
   }
 
+  /** Result tallies from votes cast on the result's shared page, which carry no search (qkey ''). */
+  sharedTallies(items: string[]): Map<string, Tally> {
+    const unique = [...new Set(items)].slice(0, 200)
+    const out = new Map<string, Tally>()
+    if (!unique.length) return out
+    const rows = this.db
+      // threatcrush-disable-next-line sql-template-interpolation  only "?" placeholders are interpolated; every value is bound
+      .query(`SELECT item, SUM(value > 0) AS up, SUM(value < 0) AS down FROM votes WHERE kind = 'result' AND qkey = '' AND item IN (${unique.map(() => '?').join(',')}) GROUP BY item`)
+      .all(...unique) as Array<{ item: string; up: number; down: number }>
+    for (const r of rows) out.set(r.item, { up: r.up, down: r.down, score: score(r.up, r.down) })
+    return out
+  }
+
   /**
    * How many places each result moves: QUERY_WEIGHT x its score on this search
-   * plus DOMAIN_WEIGHT x its domain's score, capped at MAX_MOVE either way.
+   * plus DOMAIN_WEIGHT x its domain's score plus SHARED_WEIGHT x its shared page's score, capped at MAX_MOVE either way.
    */
   nudges(urls: string[], query: string): Map<string, number> {
     const items = urls.map((u) => resultItem(u))
     const byItem = this.tallies(items.filter((i): i is string => Boolean(i)), { query })
     const domains = items.map((i) => (i ? i.slice('result:'.length).split(/[/?]/)[0]! : ''))
     const byDomain = this.domainTallies(domains)
+    const byShared = this.sharedTallies(items.filter((i): i is string => Boolean(i)))
     // Sites that turn the page reader away (src/reader-health.ts): a separate signal, never a vote.
     const byHealth = this.health?.moves(domains) ?? new Map<string, number>()
     const out = new Map<string, number>()
@@ -235,8 +251,9 @@ export class Votes {
       if (!item) return
       const q = byItem.get(item)?.score ?? 0
       const d = byDomain.get(domains[i]!)?.score ?? 0
+      const s = byShared.get(item)?.score ?? 0
       const h = byHealth.get(domains[i]!) ?? 0
-      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * q + DOMAIN_WEIGHT * d + h))
+      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * q + DOMAIN_WEIGHT * d + SHARED_WEIGHT * s + h))
       if (move) out.set(url, move)
     })
     return out

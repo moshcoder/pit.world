@@ -361,6 +361,16 @@ form .btn { border: 0; cursor: pointer; }
 .vote .n { min-width: 2ch; text-align: center; padding: 0 3px; }
 .vote .vote-note { margin-left: 6px; }
 .hits .vote, .videos .vote, .books .vote { display: flex; }
+.hit-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.hit-actions .vote { margin: 6px 0 0; }
+.hit-actions .share { margin-top: 6px; font: 12px var(--mono); color: var(--muted); text-decoration: none; }
+.hit-actions .share:hover, .hit-actions .share:focus-visible { color: var(--accent); text-decoration: underline; }
+.shared-result .url { font: 13px var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+.shared-vote { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.shared-vote p { margin: 0; }
+.share-copy { display: flex; gap: 8px; max-width: 640px; }
+.share-copy input { flex: 1; min-width: 0; font: 13px var(--mono); padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--text); }
+.share-copy button { font: 13px var(--mono); padding: 8px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent); color: var(--accent-ink, #000); cursor: pointer; }
 .promo li { display: flex; flex-direction: column; }
 .promo li > a { flex: 1; }
 .promo .vote { margin-top: 4px; }
