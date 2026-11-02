@@ -122,10 +122,11 @@ export class Votes {
 
   /** One item's tally: on one search when `query` is given (results), else across everything. */
   tally(item: string, query?: string | null): Tally {
-    const qkey = query ? this.qkey(query) : null
-    const row = this.db
-      .query(`SELECT COALESCE(SUM(value > 0), 0) AS up, COALESCE(SUM(value < 0), 0) AS down FROM votes WHERE item = ?${qkey !== null ? ' AND qkey = ?' : ''}`)
-      .get(...(qkey !== null ? [item, qkey] : [item])) as { up: number; down: number }
+    const row = (
+      query
+        ? this.db.query('SELECT COALESCE(SUM(value > 0), 0) AS up, COALESCE(SUM(value < 0), 0) AS down FROM votes WHERE item = ? AND qkey = ?').get(item, this.qkey(query))
+        : this.db.query('SELECT COALESCE(SUM(value > 0), 0) AS up, COALESCE(SUM(value < 0), 0) AS down FROM votes WHERE item = ?').get(item)
+    ) as { up: number; down: number }
     return { up: row.up, down: row.down, score: score(row.up, row.down) }
   }
 
@@ -146,6 +147,7 @@ export class Votes {
     const mine = new Map<string, number>()
     if (options.visitor) {
       for (const r of this.db
+        // threatcrush-disable-next-line sql-template-interpolation  only "?" placeholders are interpolated; every value is bound
         .query(`SELECT item, value FROM votes WHERE visitor = ? AND item IN (${marks}) AND (kind <> 'result' OR qkey = ?)`)
         .all(options.visitor, ...unique, qkey) as Array<{ item: string; value: number }>)
         mine.set(r.item, r.value)
