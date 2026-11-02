@@ -772,3 +772,20 @@ describe('the Moshpit name card leads with a link that opens anywhere', () => {
     expect(unclaimed).toContain('>Claim it</a>')
   })
 })
+
+describe('the Profullstack footer', () => {
+  it('links its own template CSS, which hides the spam trap, and repeats no label', async () => {
+    const { request } = app()
+    const html = await (await request('/')).text()
+    const href = html.match(/<link rel="stylesheet" href="(\/pfs-footer\.css\?v=[0-9a-f]{10})">/)?.[1]
+    expect(href).toBeTruthy()
+    const css = await request(href!)
+    expect(css.headers.get('content-type')).toContain('text/css')
+    const body = await css.text()
+    expect(body).toContain('.pfs-footer__hp{')
+    expect(body).toContain('.pfs-footer__badge--site img')
+    const footer = html.slice(html.indexOf('<footer class="pfs-footer"'))
+    const labels = [...footer.matchAll(/<a [^>]*>([^<]+)<\/a>/g)].map((m) => m[1])
+    expect(labels.filter((l, i) => labels.indexOf(l) !== i)).toEqual([])
+  })
+})

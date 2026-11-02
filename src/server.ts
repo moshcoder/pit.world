@@ -4,7 +4,7 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
-import { FOOTER_SCRIPT_SRC, startRingFooterRefresh } from './ring-footer.js'
+import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
 import { aboutPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
@@ -405,6 +405,10 @@ export function createApp(deps: Deps) {
   })
 
   // --- static -------------------------------------------------------------------
+  // The @profullstack/footer stylesheet, from the same template as the footer markup.
+  app.get('/pfs-footer.css', (c) =>
+    c.body(ringFooterCss(), 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' }),
+  )
   const dir = deps.publicDir ?? new URL('../public/', import.meta.url).pathname
   const TYPES: Record<string, string> = { css: 'text/css; charset=utf-8', js: 'text/javascript; charset=utf-8', svg: 'image/svg+xml', png: 'image/png', webmanifest: 'application/manifest+json' }
   app.get('/:file{[a-z0-9-]+\\.(css|js|svg|png|webmanifest)}', async (c) => {

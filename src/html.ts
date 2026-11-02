@@ -8,7 +8,7 @@ import { readFileSync } from 'node:fs'
 import { BANGS } from './bangs.js'
 import { LINKS, MOSHPIT_ROOT_SHA256, type NetworkStats, type Resolution } from './moshpit.js'
 import type { Promo } from './promoted.js'
-import { ringFooter, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
+import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import { thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
@@ -25,15 +25,16 @@ const asset = (name: string) => {
   return `/${name}?v=${createHash('sha256').update(body).digest('hex').slice(0, 10)}`
 }
 // The footer's own links; the ring nav and copyright come from @profullstack/footer.
+// Its house links already carry "Find a pro" (pit.world/pro) and Profullstack's
+// "Privacy", so ours must not repeat those labels.
 setRingFooterOptions(
   ringFooterOptions([
     { label: 'Account', href: '/account' },
-    { label: 'Privacy', href: '/privacy' },
+    { label: 'Search privacy', href: '/privacy' },
     { label: 'Connect to Moshpit', href: '/connect' },
     { label: 'Start building', href: '/start' },
     { label: 'Build an app', href: '/build' },
     { label: 'Promoter program', href: '/promote' },
-    { label: 'Find a pro', href: '/pros' },
     { label: 'Claim your listing', href: '/b' },
     { label: 'How it works', href: '/about' },
     { label: 'API · CLI · MCP', href: '/about#api' },
@@ -101,7 +102,8 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <meta name="apple-mobile-web-app-title" content="pit.world">
 <link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
 <link rel="alternate" type="application/atom+xml" title="New on pit.world" href="/b/feed.xml">
-${options.head ?? ''}<link rel="stylesheet" href="${STYLE_URL}">
+${options.head ?? ''}<link rel="stylesheet" href="${ringFooterCssUrl()}">
+<link rel="stylesheet" href="${STYLE_URL}">
 <script src="${APP_URL}" defer></script>
 ${options.track === false ? '' : `<script data-site="${TRACKER_SITE}" src="https://crawlproof.com/stats.js" async></script>`}
 </head>

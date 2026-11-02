@@ -181,19 +181,9 @@ pre code { background: none; padding: 0; }
 .ring-list h3 { margin: 12px 0 4px; font-family: var(--mono); }
 .ring-list .muted { color: var(--muted); font-size: 14px; }
 
-/* @profullstack/footer (src/ring-footer.ts renders it with css:false: our CSP has no inline styles).
-   Two rows: the links, then the ring nav beside the copyright. */
-.pfs-footer { border-top: 1px solid var(--line); color: var(--muted); font-size: 14px; line-height: 1.5; }
-.pfs-footer__inner { max-width: 72rem; margin: 0 auto; padding: 22px 16px 30px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px 18px; text-align: center; }
-.pfs-footer a { color: var(--muted); text-decoration: none; }
-.pfs-footer a:hover, .pfs-footer a:focus-visible { color: var(--text); text-decoration: underline; }
-.pfs-footer__links { flex-basis: 100%; display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; }
-.pfs-footer__ring { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .6rem; }
-.pfs-footer__badges { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: .6rem; }
-.pfs-footer a.pfs-footer__badge { display: inline-block; line-height: 0; }
-.pfs-footer__badge img { display: block; width: 200px; height: 44px; max-width: 100%; }
-.pfs-footer__copy { margin: 0; }
-.pfs-footer__copy a { color: inherit; }
+/* @profullstack/footer styles itself from /pfs-footer.css (the template's own CSS, see
+   src/ring-footer.ts); only the border follows our palette. */
+.pfs-footer { border-top-color: var(--line); }
 .ad-unit { max-width: 960px; margin: 10px auto; }
 .ad-unit iframe { border: 0; display: block; background: transparent; width: 100%; height: 40px; }
 
