@@ -117,6 +117,7 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="pit.world">
+<meta name="pwamart-verification" content="19278327af99806655813c4a">
 <link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
 <link rel="alternate" type="application/atom+xml" title="New on pit.world" href="/b/feed.xml">
 ${options.head ?? ''}<link rel="stylesheet" href="${ringFooterCssUrl()}">

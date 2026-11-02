@@ -316,6 +316,8 @@ export function createApp(deps: Deps) {
   })
   app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
+  // pwamart.com store listing: ownership proof for https://pit.world
+  app.get('/.well-known/pwamart.txt', (c) => c.body('19278327af99806655813c4a\n', 200, { 'content-type': 'text/plain; charset=utf-8' }))
   app.get('/robots.txt', (c) =>
     c.body('User-agent: *\nDisallow: /search\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
   )
