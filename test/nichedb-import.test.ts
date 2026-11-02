@@ -30,6 +30,10 @@ describe('nichedb import: candidates', () => {
     expect(categoryFor('e-commerce')).toBe('retail')
     expect(categoryFor('petroleum industry')).toBe('industrial')
     expect(categoryFor('wordpress')).toBe('')
+    expect(categoryFor('google analytics')).toBe('')
+    expect(categoryFor('google tag manager')).toBe('')
+    expect(categoryFor('shopify')).toBe('retail')
+    expect(categoryFor('software')).toBe('software')
   })
 
   it('takes companies with a domain and a NicheDB record; refuses people, sites, pit.world names and adult businesses', () => {
@@ -143,5 +147,18 @@ describe('nichedb import: directory, pages and sitemap', () => {
     expect(owned.toPublic('mine.example')).toMatchObject({ claimed: true, imported: false, source: 'pit' })
     expect(owned.directory({ source: 'nichedb' }).total).toBe(0)
     expect(listings.sourceCounts().imported).toBe(30)
+  })
+
+  it('re-categorises imported listings once when the rules change, never curated ones', () => {
+    const listings = store()
+    listings.importListings([
+      { domain: 'church.example', name: 'Church', category: 'software', topics: ['google analytics'], sourceUrl: 'https://nichedb.dev/i/1' },
+      { domain: 'store.example', name: 'Store', category: '', topics: ['shopify'], sourceUrl: 'https://nichedb.dev/i/2' },
+    ])
+    expect(listings.recategorizeImported(categoryFor, '2')).toBe(2)
+    expect(listings.toPublic('church.example')!.category).toBe('')
+    expect(listings.toPublic('store.example')!.category).toBe('retail')
+    expect(listings.toPublic('acme-builders.com')!.category).toBe('construction')
+    expect(listings.recategorizeImported(categoryFor, '2')).toBe(0)
   })
 })
