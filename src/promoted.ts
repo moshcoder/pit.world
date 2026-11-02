@@ -110,7 +110,7 @@ export function matches(promo: Promo, query: string): boolean {
  * Music is nixamp only.
  */
 export function pick(all: Promo[], query: string, vertical: Vertical): Promo[] {
-  if (vertical === 'web' || vertical === 'images') return []
+  if (vertical !== 'videos' && vertical !== 'music' && vertical !== 'live') return []
   const score = (p: Promo) => (matches(p, query) ? 4 : 0) + (p.live ? 2 : 0)
   const seen = new Set<string>()
   const best = (source: Promo['source'], keep: (p: Promo) => boolean, max: number) =>
@@ -164,7 +164,7 @@ export class Promoted {
   }
 
   async for(query: string, vertical: Vertical): Promise<Promo[]> {
-    if (vertical === 'web' || vertical === 'images') return []
+    if (vertical !== 'videos' && vertical !== 'music' && vertical !== 'live') return []
     return pick(await this.all(), query, vertical)
   }
 }

@@ -48,6 +48,24 @@ function upstream(options: { serperFails?: boolean; serperBroke?: boolean } = {}
         return json({
           videos: [{ title: 'Cat video', link: 'https://www.youtube.com/watch?v=x', source: 'YouTube', channel: 'Cats', duration: '3:01', imageUrl: 'https://i.ytimg.com/vi/x/hq.jpg' }],
         })
+      if (url.endsWith('/shopping'))
+        return json({
+          shopping: [
+            { title: 'Cat bed', source: 'Pet Shop', link: 'https://shop.example/cat-bed', price: '$29.99', rating: 4.6, ratingCount: 1234, imageUrl: 'https://encrypted-tbn1.gstatic.com/shopping?q=tbn:bed' },
+            { title: 'Pixel', source: 'Tracker', link: 'https://x.example/', price: '$1', imageUrl: 'https://tracker.example/pixel.gif' },
+          ],
+        })
+      if (url.endsWith('/news'))
+        return json({ news: [{ title: 'Cats win', link: 'https://news.example/cats', snippet: 'A big day for cats', date: '2 hours ago', source: 'Cat Times', imageUrl: 'https://encrypted-tbn2.gstatic.com/images?q=tbn:news' }] })
+      if (url.endsWith('/places'))
+        return json({
+          places: [
+            { title: 'Cat Cafe', address: '1 Main St, Springfield', latitude: 40.1, longitude: -75.2, rating: 4.8, ratingCount: 210, category: 'Cafe' },
+            { title: 'Cat Club', address: '2 Main St', website: 'https://catclub.example/', category: 'Night club' },
+          ],
+        })
+      if (url.endsWith('/scholar'))
+        return json({ organic: [{ title: 'On cats', link: 'https://journal.example/cats', publicationInfo: 'A Smith - Journal of Cats, 2019', snippet: 'We study cats.', year: 2019, citedBy: 120 }] })
       return json({
         organic: [
           { title: 'Moshpit <b>network</b>', link: 'https://moshcode.sh/', snippet: 'An internet beside the internet' },
@@ -75,6 +93,47 @@ function upstream(options: { serperFails?: boolean; serperBroke?: boolean } = {}
       return json({ data: [{ handle: 'chovy', name: 'Chovy TV', is_live: false, subscriber_count: 12, description: 'Cats and code' }] })
     if (url.startsWith('https://nixamp.com/api/directory'))
       return json({ streams: [{ name: 'server1', url: 'https://server1.chovy.nixamp.com:4321/view/k', playing: true, nowPlaying: 'Cat radio', tracks: 5719, channels: ['CNN'] }] })
+    if (url.startsWith('https://openlibrary.org/search.json'))
+      return json({
+        docs: [
+          { key: '/works/OL50563W', title: 'Jazz', author_name: ['Toni Morrison'], first_publish_year: 1992, cover_i: 9317239, edition_count: 35 },
+          { key: 'javascript:alert(1)', title: 'Evil' },
+        ],
+      })
+    if (url.startsWith('https://p0dcasters.com/api/search'))
+      return json({
+        query: 'cats',
+        shows: [
+          {
+            title: 'Cat Talk',
+            host: 'podigee.io',
+            author: 'Chovy',
+            description: 'A show about cats',
+            image: 'https://images.podigee-cdn.net/cat.jpg',
+            category: 'pets',
+            episodes: 41,
+            cadence: 'weekly',
+            newestAt: '2026-10-25T18:30:00.000Z',
+            page: 'https://p0dcasters.com/podcast/cat-talk',
+          },
+        ],
+      })
+    if (url.startsWith('https://rssamplifier.com/api/search')) {
+      const kind = new URL(url).searchParams.get('kind')
+      const post = { title: kind === 'news' ? 'Cat news from a newsroom' : 'Cats &amp; me', url: `https://blog.example/${kind}/cats`, summary: 'Cats &#39;n&#39; more', publishedAt: '2026-08-16T23:17:51.366Z', blog: 'Cat Blog' }
+      return json({
+        query: 'cats',
+        kind,
+        blogs: [{ slug: 'cat-blog', title: 'Cat Blog &amp; Friends', description: 'All cats', page: 'https://rssamplifier.com/cat-blog' }],
+        // The same post twice: a feed listed under two slugs.
+        posts: [post, { ...post }],
+      })
+    }
+    if (url.startsWith('https://covers.openlibrary.org/')) return new Response(null, { status: 302, headers: { location: 'https://archive.org/download/m_covers_0009/x.zip/0009317239-M.jpg' } })
+    if (url.startsWith('https://archive.org/download/m_covers_0009/'))
+      return new Response(null, { status: 302, headers: { location: 'https://ia803200.us.archive.org/view_archive.php?archive=/x.zip&file=0009317239-M.jpg' } })
+    if (url.startsWith('https://archive.org/download/evil')) return new Response(null, { status: 302, headers: { location: 'http://169.254.169.254/latest/meta-data' } })
+    if (url.startsWith('https://ia803200.us.archive.org/')) return new Response(new Uint8Array([0xff, 0xd8, 0xff]), { headers: { 'content-type': 'image/jpeg' } })
     if (url.startsWith('https://i.ytimg.com/')) return new Response(new Uint8Array([0xff, 0xd8, 0xff]), { headers: { 'content-type': 'image/jpeg' } })
     if (url.includes('/api/moshpit/market')) return json({ tlds: [{ tld: 'stations', price_usd: 2, for_sale: true }] })
     return json({}, 404)
@@ -481,6 +540,151 @@ describe('categories: images, videos, music, live', () => {
     const { request } = app()
     const html = await (await request('/search?q=cats&t=evil')).text()
     expect(html).toContain('aria-current="page">All</a>')
+  })
+})
+
+describe('categories: shopping, news, books, podcasts, blogs, places, scholar', () => {
+  /** Nothing on the page loads from another origin but the footer icons and the one sandboxed ad frame. */
+  const noCrossOrigin = (html: string) =>
+    expect(html).not.toMatch(/src="https:\/\/(?!built\.indie\.pit\.world\/|pwamart\.com\/|logicsrc\.com\/openicon\/|profullstack\.com\/assets\/logo\.svg|crawlproof\.com\/api\/ads\/frame\?)/)
+  /** Which outside hosts a search reached, and that none of them heard about the visitor. */
+  const outside = (calls: Array<{ url: string; headers: Record<string, string> }>) => {
+    for (const call of calls) {
+      expect(call.headers['x-forwarded-for']).toBeUndefined()
+      expect(JSON.stringify(call.headers)).not.toContain('203.0.113.7')
+    }
+    return calls.map((c) => new URL(c.url).hostname)
+  }
+
+  it('lists every tab, in order, after the old ones', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=cats')).text()
+    const nav = html.match(/<nav class="tabs"[\s\S]*?<\/nav>/)![0]
+    const labels = [...nav.matchAll(/>([A-Za-z]+)<\/a>/g)].map((m) => m[1])
+    expect(labels).toEqual(['All', 'Images', 'Videos', 'Music', 'Live', 'Shopping', 'News', 'Books', 'Podcasts', 'Blogs', 'Places', 'Scholar'])
+    for (const t of ['shopping', 'news', 'books', 'podcasts', 'blogs', 'places', 'scholar']) expect(nav).toContain(`href="/search?q=cats&t=${t}"`)
+  })
+
+  it('shows products from Google Shopping with prices, pictures through /img only', async () => {
+    const { request, calls } = app()
+    const res = await request('/search?q=cats&t=shopping')
+    const html = await res.text()
+    expect(res.status).toBe(200)
+    expect(calls.find((c) => c.url === 'https://google.serper.dev/shopping')?.body).toContain('"q":"cats"')
+    expect(html).toContain('<a href="/search?q=cats&t=shopping" aria-current="page">Shopping</a>')
+    expect(html).toContain('$29.99')
+    expect(html).toContain('★ 4.6 (1,234)')
+    expect(html).toContain('src="/img?u=https%3A%2F%2Fencrypted-tbn1.gstatic.com%2Fshopping%3Fq%3Dtbn%3Abed"')
+    expect(html).not.toContain('tracker.example/pixel')
+    noCrossOrigin(html)
+  })
+
+  it('shows news from Google, and from rssamplifier newsrooms when Google fails', async () => {
+    const google = app()
+    const html = await (await google.request('/search?q=cats&t=news')).text()
+    expect(html).toContain('https://news.example/cats')
+    expect(html).toContain('Cat Times')
+    expect(html).toContain('News from the Google index')
+    noCrossOrigin(html)
+    const fallback = app({ serperFails: true })
+    const res = await fallback.request('/search?q=cats&t=news')
+    const backup = await res.text()
+    expect(res.status).toBe(200)
+    expect(fallback.calls.some((c) => c.url.startsWith('https://rssamplifier.com/api/search?') && c.url.includes('kind=news'))).toBe(true)
+    expect(backup).toContain('Cat news from a newsroom')
+    expect(backup).toContain('News from the RSS Amplifier directory')
+    // No Google key at all: News still works, from our own directory.
+    const nokey = app({ keys: { linkup: 'LINKUP-KEY' } })
+    expect(await (await nokey.request('/search?q=cats&t=news')).text()).toContain('Cat news from a newsroom')
+  })
+
+  it('shows books from Open Library, with covers through /img', async () => {
+    const { request, calls } = app()
+    const html = await (await request('/search?q=cats&t=books')).text()
+    expect(outside(calls).filter((h) => h === 'openlibrary.org')).toHaveLength(1)
+    expect(html).toContain('href="https://openlibrary.org/works/OL50563W"')
+    expect(html).toContain('Toni Morrison · 1992 · 35 editions')
+    expect(html).toContain('src="/img?u=https%3A%2F%2Fcovers.openlibrary.org%2Fb%2Fid%2F9317239-M.jpg"')
+    expect(html).not.toContain('javascript:')
+    expect(html).toContain('Covers are loaded through pit.world too')
+    noCrossOrigin(html)
+  })
+
+  it('follows a cover through its redirects, every hop on the allowlist, and refuses a hop off it', async () => {
+    const { request } = app()
+    const ok = await request(`/img?u=${encodeURIComponent('https://covers.openlibrary.org/b/id/9317239-M.jpg')}`)
+    expect(ok.status).toBe(200)
+    expect(ok.headers.get('content-type')).toBe('image/jpeg')
+    const evil = await request(`/img?u=${encodeURIComponent('https://archive.org/download/evil')}`)
+    expect(evil.status).toBe(502)
+  })
+
+  it('shows podcasts from p0dcasters, with no picture from a host we do not proxy', async () => {
+    const { request, calls } = app()
+    const html = await (await request('/search?q=cats&t=podcasts')).text()
+    expect(outside(calls)).toContain('p0dcasters.com')
+    expect(html).toContain('href="https://p0dcasters.com/podcast/cat-talk"')
+    expect(html).toContain('41 episodes · weekly')
+    expect(html).not.toContain('podigee-cdn')
+    expect(html).toContain('Podcasts from the p0dcasters.com directory')
+    noCrossOrigin(html)
+  })
+
+  it('shows blog posts from rssamplifier, once each, entities decoded once', async () => {
+    const { request, calls } = app()
+    const html = await (await request('/search?q=cats&t=blogs')).text()
+    expect(calls.some((c) => c.url.startsWith('https://rssamplifier.com/api/search?') && c.url.includes('kind=blogs'))).toBe(true)
+    expect(html.match(/href="https:\/\/blog\.example\/blogs\/cats"/g)).toHaveLength(1)
+    expect(html).toContain('Cats &amp; me')
+    expect(html).not.toContain('&amp;amp;')
+    expect(html).toContain('Cats &#39;n&#39; more')
+    expect(html).toContain('Blogs on RSS Amplifier')
+    expect(html).toContain('href="https://rssamplifier.com/cat-blog"')
+    noCrossOrigin(html)
+  })
+
+  it('shows places linked to their site or to OpenStreetMap, never Google Maps', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=cats&t=places')).text()
+    expect(html).toContain('https://www.openstreetmap.org/?mlat=40.1&amp;mlon=-75.2#map=17/40.1/-75.2')
+    expect(html).toContain('href="https://catclub.example/"')
+    expect(html).toContain('1 Main St, Springfield')
+    expect(html).not.toContain('google.com/maps')
+  })
+
+  it('shows scholar results with where and when they were published', async () => {
+    const { request } = app()
+    const html = await (await request('/search?q=cats&t=scholar')).text()
+    expect(html).toContain('href="https://journal.example/cats"')
+    expect(html).toContain('A Smith - Journal of Cats, 2019 · 2019 · Cited by 120')
+  })
+
+  it('serves every new tab through the API too', async () => {
+    const { request } = app()
+    for (const t of ['shopping', 'news', 'books', 'podcasts', 'blogs', 'places', 'scholar']) {
+      const res = await request(`/api/search?q=cats&t=${t}`)
+      const json: any = await res.json()
+      expect(res.status).toBe(200)
+      expect(json.type).toBe(t)
+      expect(json.results.length).toBeGreaterThan(0)
+    }
+  })
+
+  it('says Google-only tabs are unavailable without a Google key, and keeps the free ones working', async () => {
+    const { request } = app({ keys: { linkup: 'LINKUP-KEY' } })
+    for (const t of ['shopping', 'places', 'scholar']) {
+      const res = await request(`/search?q=cats&t=${t}`)
+      expect(res.status).toBe(503)
+      expect(await res.text()).toContain('unavailable for a moment')
+    }
+    for (const t of ['books', 'podcasts', 'blogs']) expect((await request(`/search?q=cats&t=${t}`)).status).toBe(200)
+  })
+
+  it('offers no PairUX or nixamp strip outside Videos, Music and Live', async () => {
+    const { request } = app()
+    for (const t of ['shopping', 'news', 'books', 'podcasts', 'blogs', 'places', 'scholar']) {
+      expect(await (await request(`/search?q=cats&t=${t}`)).text()).not.toContain('nixamp.com')
+    }
   })
 })
 

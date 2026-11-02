@@ -417,14 +417,27 @@ export function createApp(deps: Deps) {
 
   app.get('/api/bangs', (c) => c.json(BANGS.map((b) => ({ name: b.name, bangs: b.aliases, url: b.url }))))
 
-  // Thumbnails for the Images/Videos/Live tabs, fetched by us so the visitor's
-  // browser never talks to Google or YouTube. Only the hosts in thumbAllowed().
+  // Thumbnails for the Images/Videos/Live/Shopping/News tabs and Open Library's book covers, fetched by us so
+  // the visitor's browser never talks to Google, YouTube or Open Library. Only the hosts in thumbAllowed():
+  // a redirect is followed by hand (covers.openlibrary.org -> archive.org -> ia<N>.us.archive.org), and every
+  // hop must pass the same allowlist, so a redirect can never lead the proxy anywhere else.
   app.get('/img', async (c) => {
-    const url = thumbAllowed(c.req.query('u') ?? '')
+    let url = thumbAllowed(c.req.query('u') ?? '')
     if (!url) return c.body(null, 400)
     try {
-      // threatcrush-disable-next-line js-ssrf-outbound-request  fixed allowlist of public thumbnail hosts (thumbAllowed), https only
-      const upstream = await (deps.fetch ?? fetch)(url.href, { redirect: 'error', signal: AbortSignal.timeout(6_000) })
+      let upstream: Response | null = null
+      for (let hop = 0; hop < 4; hop++) {
+        // threatcrush-disable-next-line js-ssrf-outbound-request  fixed allowlist of public thumbnail hosts (thumbAllowed), https only, every redirect hop re-checked
+        const response: Response = await (deps.fetch ?? fetch)(url.href, { redirect: 'manual', signal: AbortSignal.timeout(6_000) })
+        if (response.status < 300 || response.status >= 400) {
+          upstream = response
+          break
+        }
+        const next: URL | null = thumbAllowed(new URL(response.headers.get('location') ?? '', url).href)
+        if (!next) return c.body(null, 502)
+        url = next
+      }
+      if (!upstream) return c.body(null, 502)
       const type = upstream.headers.get('content-type') ?? ''
       if (!upstream.ok || !/^image\/(jpeg|png|gif|webp|avif)/.test(type)) return c.body(null, 502)
       const body = await upstream.arrayBuffer()

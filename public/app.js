@@ -30,6 +30,12 @@
       focus(index - 1)
     }
   })
+  // On a phone the tab row scrolls sideways: start it with the current tab in view, not off the edge.
+  const tabs = document.querySelector('.tabs')
+  const current = tabs?.querySelector('[aria-current="page"]')
+  if (tabs && current && tabs.scrollWidth > tabs.clientWidth) {
+    tabs.scrollLeft = Math.max(0, current.offsetLeft - tabs.offsetLeft - (tabs.clientWidth - current.offsetWidth) / 2)
+  }
   // Installable app + offline page. The worker caches the static shell only, never a search.
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {})
 })()
