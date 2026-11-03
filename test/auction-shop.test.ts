@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { AuctionHouse, createAuctionApp } from '../src/auctions.js'
 import { AuctionShop, retailUsd, type ShopItem } from '../src/auction-shop.js'
+import { createHmac } from 'node:crypto'
 import { SHOP_CATALOG } from '../src/shop-catalog.js'
 
 const item: ShopItem = {
@@ -130,6 +131,66 @@ describe('Art Auctions flower shop', () => {
     const shop = new AuctionShop(house.db, [item], { payAgentUrl: 'https://pay.agent.test', key: 'pa_test', fetch: locked })
     await expect(shop.start(item.slug, { ...good })).rejects.toThrow('Checkout is paused')
     expect(house.db.query("SELECT status FROM shop_orders").get()).toEqual({ status: 'cancelled' })
+    house.db.close()
+  })
+
+  it('checks out with a CoinPay session, settles only on the CoinPay paid record, and verifies webhooks', async () => {
+    const house = new AuctionHouse()
+    const sessions = new Map<string, any>()
+    const fetch = (async (url: string, init?: RequestInit) => {
+      const u = new URL(url)
+      expect(u.origin + u.pathname.slice(0, 4)).toBe('https://coinpay.test/api')
+      if (init?.method === 'POST' && u.pathname === '/api/checkout/sessions') {
+        const body = JSON.parse(String(init.body))
+        const id = `cs_${sessions.size + 1}`
+        sessions.set(id, { id, status: 'open', amount: body.amount, description: body.description, url: `https://coinpay.test/checkout/${id}`, metadata: body.metadata })
+        return Response.json({ success: true, ...sessions.get(id) })
+      }
+      const m = /^\/api\/checkout\/sessions\/(.+)$/.exec(u.pathname)
+      return m ? Response.json({ success: true, session: sessions.get(m[1]!) }) : new Response('no', { status: 404 })
+    }) as unknown as typeof globalThis.fetch
+    const mail: { subject: string }[] = []
+    const shop = new AuctionShop(house.db, [item], { coinpay: { apiUrl: 'https://coinpay.test/api', apiKey: 'cp_test', webhookSecret: 'whsec_test' }, fetch, notifyTo: 'owner@example.com', mailer: async (m) => { mail.push(m) } })
+    const app = createAuctionApp(house, { shop })
+    const res = await app.fetch(order(good), { ip: '20' })
+    expect(res.status).toBe(303)
+    expect(res.headers.get('location')).toBe('https://coinpay.test/checkout/cs_1')
+    const saved = shop.list()[0]!
+    expect(saved.provider).toBe('coinpay')
+    expect(sessions.get('cs_1').metadata.order_id).toBe(saved.id)
+
+    // A forged webhook does nothing; a session paid for the wrong amount does nothing.
+    const body = JSON.stringify({ type: 'payment.confirmed', data: { status: 'confirmed', metadata: { checkout_session_id: 'cs_1' } } })
+    const sign = (raw: string, secret = 'whsec_test') => { const t = Math.floor(Date.now() / 1000); return `t=${t},v1=${createHmac('sha256', secret).update(`${t}.${raw}`).digest('hex')}` }
+    sessions.get('cs_1').status = 'paid'
+    sessions.get('cs_1').amount = 1
+    expect((await app.fetch(new Request('https://auctions.pit.world/shop/webhooks/coinpay', { method: 'POST', body, headers: { 'x-coinpay-signature': sign(body, 'wrong') } }))).status).toBe(401)
+    expect((await app.fetch(new Request('https://auctions.pit.world/shop/webhooks/coinpay', { method: 'POST', body, headers: { 'x-coinpay-signature': sign(body) } }))).status).toBe(200)
+    expect(shop.get(saved.id)!.status).toBe('open')
+
+    sessions.get('cs_1').amount = 99
+    expect((await app.fetch(new Request('https://auctions.pit.world/shop/webhooks/coinpay', { method: 'POST', body, headers: { 'x-coinpay-signature': sign(body) } }))).status).toBe(200)
+    expect(shop.get(saved.id)!.status).toBe('paid')
+    expect(mail.filter((m) => m.subject.startsWith('PLACE ORDER'))).toHaveLength(1)
+    await shop.tick()
+    expect(mail.filter((m) => m.subject.startsWith('PLACE ORDER'))).toHaveLength(1)
+    house.db.close()
+  })
+
+  it('serves each catalog photo with its credit, and nothing else from the folder', async () => {
+    const house = new AuctionHouse()
+    const app = createAuctionApp(house, { shop: new AuctionShop(house.db, SHOP_CATALOG, null) })
+    for (const i of SHOP_CATALOG) {
+      expect(i.photo).toBeTruthy()
+      const res = await app.fetch(new Request(`https://auctions.pit.world/shop/photo/${i.slug}.jpg`))
+      expect(res.status).toBe(200)
+      expect(res.headers.get('content-type')).toBe('image/jpeg')
+    }
+    const page = await (await app.fetch(new Request('https://auctions.pit.world/shop/gertrude-jekyll-rose'))).text()
+    expect(page).toContain('/shop/photo/gertrude-jekyll-rose.jpg')
+    expect(page).toContain('via Wikimedia Commons')
+    expect((await app.fetch(new Request('https://auctions.pit.world/shop/photo/..%2Fpackage.jpg'))).status).toBe(404)
+    expect((await app.fetch(new Request('https://auctions.pit.world/shop/photo/nope.jpg'))).status).toBe(404)
     house.db.close()
   })
 })

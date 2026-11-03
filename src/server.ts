@@ -1177,8 +1177,17 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
     : undefined
   const featuredBusinesses = buildInvoicing ? new FeaturedBusinesses(listings, buildInvoicing) : undefined
-  const auctionShop = new AuctionShop(auctions.db, SHOP_CATALOG, buildInvoicing ? { payAgentUrl: buildInvoicing.payAgentUrl, key: buildInvoicing.key, mailer: buildInvoicing.mailer ?? null, notifyTo: env.PIT_SHOP_NOTIFY ?? buildInvoicing.notifyTo ?? 'ettinger@gmail.com' } : null)
-  if (buildInvoicing) {
+  // The shop takes CoinPay checkout on its own business (auctions.pit.world) and falls back to pay.agent invoices.
+  const shopCoinPay = env.SHOP_COINPAY_API_URL && env.SHOP_COINPAY_API_KEY
+    ? { apiUrl: env.SHOP_COINPAY_API_URL, apiKey: env.SHOP_COINPAY_API_KEY, ...(env.SHOP_COINPAY_WEBHOOK_SECRET ? { webhookSecret: env.SHOP_COINPAY_WEBHOOK_SECRET } : {}) }
+    : null
+  const auctionShop = new AuctionShop(auctions.db, SHOP_CATALOG, shopCoinPay || buildInvoicing ? {
+    coinpay: shopCoinPay,
+    ...(buildInvoicing ? { payAgentUrl: buildInvoicing.payAgentUrl, key: buildInvoicing.key } : {}),
+    mailer: buildInvoicing?.mailer ?? mailer ?? null,
+    notifyTo: env.PIT_SHOP_NOTIFY ?? buildInvoicing?.notifyTo ?? 'ettinger@gmail.com',
+  } : null)
+  if (shopCoinPay || buildInvoicing) {
     const tick = () => void auctionShop.tick().catch(() => console.error('Shop billing sync failed'))
     setTimeout(tick, 7_000).unref()
     setInterval(tick, 60_000).unref()

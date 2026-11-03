@@ -9,7 +9,7 @@
  * buys it from the supplier, then marks the order placed and shipped in /shop/admin (the buyer is
  * emailed the tracking number). Returning from checkout proves nothing; only pay.agent does.
  */
-import { randomBytes, randomUUID, timingSafeEqual, createHash } from 'node:crypto'
+import { createHmac, randomBytes, randomUUID, timingSafeEqual, createHash } from 'node:crypto'
 import type { Database } from 'bun:sqlite'
 import type { Hono, Context } from 'hono'
 import type { Mailer } from './newsletter.js'
@@ -29,6 +29,8 @@ export type ShopItem = {
   /** Shown to buyers: when it ships, and where it cannot. */
   season?: string
   restrictions?: string
+  /** A freely licensed photo in assets/shop/<slug>.jpg, credited on the page. */
+  photo?: { author: string; license: string; licenseUrl: string; source: string; caption: string }
   /** States the grower will not ship to; checkout refuses them. */
   excludeStates?: string[]
   /** The supplier shows shipping only at checkout; shippingUsd is our estimate. */
@@ -43,9 +45,19 @@ export function retailUsd(costUsd: number, shippingUsd: number): number {
   return raw % 10 === 0 ? Math.max(9, raw - 1) : Math.ceil((raw - 9) / 10) * 10 + 9
 }
 
+export type ShopCoinPay = {
+  /** COINPAY_API_URL, e.g. https://coinpayportal.com/api */
+  apiUrl: string
+  apiKey: string
+  webhookSecret?: string
+}
+
 export type ShopInvoicing = {
-  payAgentUrl: string
-  key: string
+  /** CoinPay checkout sessions on our own business. Preferred when set. */
+  coinpay?: ShopCoinPay | null
+  /** pay.agent invoices (fallback). */
+  payAgentUrl?: string
+  key?: string
   mailer?: Mailer | null
   /** Who places the supplier orders. */
   notifyTo?: string
@@ -66,6 +78,7 @@ export type ShopOrder = {
   zip: string
   note: string
   status: OrderStatus
+  provider: string
   provider_id: string | null
   url: string | null
   description: string
@@ -101,10 +114,16 @@ export class AuctionShop {
       supplier_ref TEXT NOT NULL DEFAULT '', tracking TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL, paid_at INTEGER, placed_at INTEGER, shipped_at INTEGER, checked_at INTEGER NOT NULL DEFAULT 0
     ); CREATE INDEX IF NOT EXISTS shop_orders_status ON shop_orders(status, checked_at);`)
+    const columns = db.query<{ name: string }, []>('PRAGMA table_info(shop_orders)').all().map((c) => c.name)
+    if (!columns.includes('provider')) db.exec("ALTER TABLE shop_orders ADD COLUMN provider TEXT NOT NULL DEFAULT 'payagent'")
+  }
+
+  private get payAgent(): boolean {
+    return Boolean(this.cfg?.payAgentUrl && this.cfg.key)
   }
 
   get open(): boolean {
-    return Boolean(this.cfg)
+    return Boolean(this.cfg?.coinpay || this.payAgent)
   }
 
   item(slug: string): ShopItem | undefined {
@@ -133,7 +152,7 @@ export class AuctionShop {
 
   /** Validate the form, reserve the order, then create its invoice. Returns the order and where to pay. */
   async start(slug: string, form: Record<string, unknown>): Promise<{ order: ShopOrder; payUrl: string }> {
-    if (!this.cfg) throw new OrderError('Checkout is not open yet. Please check back soon.')
+    if (!this.cfg || !this.open) throw new OrderError('Checkout is not open yet. Please check back soon.')
     const item = this.item(slug)
     if (!item) throw new OrderError('That item is not in the shop.')
     const email = clean(form.email, 254).toLowerCase()
@@ -155,13 +174,14 @@ export class AuctionShop {
     const viewKey = randomBytes(18).toString('base64url')
     this.db.query(`INSERT INTO shop_orders (id,item_slug,amount_usd,email,name,address1,address2,city,state,zip,note,status,description,view_key,created_at)
       VALUES (?,?,?,?,?,?,?,?,?,?,?,'creating',?,?,?)`).run(id, item.slug, item.priceUsd, email, name, address1, address2, city, state, zip, note, description, viewKey, this.now())
+    if (this.cfg.coinpay) return this.startCoinPay(id, item, email, viewKey)
     try {
       const data = await this.call('/api/v1/invoices', {
         method: 'POST',
         body: JSON.stringify({ to_email: email, amount_usd: item.priceUsd, description, due_date: new Date(this.now()).toISOString().slice(0, 10) }),
       })
       const url = new URL(data.url)
-      if (url.protocol !== 'https:' || url.origin !== new URL(this.cfg.payAgentUrl).origin || typeof data.id !== 'string' || !data.id || data.amount_usd !== item.priceUsd)
+      if (url.protocol !== 'https:' || url.origin !== new URL(this.cfg.payAgentUrl!).origin || typeof data.id !== 'string' || !data.id || data.amount_usd !== item.priceUsd)
         throw new Error('Invalid invoice response')
       this.db.query("UPDATE shop_orders SET provider_id=?, url=?, status='open' WHERE id=?").run(data.id, url.href, id)
       const order = this.get(id)!
@@ -179,9 +199,93 @@ export class AuctionShop {
     }
   }
 
+  private async startCoinPay(id: string, item: ShopItem, email: string, viewKey: string): Promise<{ order: ShopOrder; payUrl: string }> {
+    const cp = this.cfg!.coinpay!
+    const description = this.get(id)!.description
+    try {
+      const data = await this.coinpay('/checkout/sessions', {
+        method: 'POST',
+        body: JSON.stringify({
+          amount: item.priceUsd, currency: 'USD', description, customer_email: email, account_id: email, property: 'auctions.pit.world',
+          metadata: { order_id: id },
+          success_url: `https://auctions.pit.world/shop/order/${id}?k=${viewKey}`,
+          cancel_url: `https://auctions.pit.world/shop/${encodeURIComponent(item.slug)}`,
+          expires_in_minutes: 60,
+        }),
+      })
+      const session = data?.session ?? data
+      if (typeof session?.id !== 'string' || !session.id.startsWith('cs_')) throw new Error('No checkout session')
+      // Only ever send a buyer to CoinPay's own origin.
+      const origin = new URL(cp.apiUrl).origin
+      let url = `${origin}/checkout/${encodeURIComponent(session.id)}`
+      try {
+        const given = new URL(String(session.url ?? data.url), origin)
+        if (given.origin === origin && given.protocol === 'https:') url = given.href
+      } catch { /* keep ours */ }
+      this.db.query("UPDATE shop_orders SET provider='coinpay', provider_id=?, url=?, status='open' WHERE id=?").run(session.id, url, id)
+      await this.mail(email, `Your order: ${item.name}`, `Thanks for your order of ${item.name} ($${item.priceUsd}, shipping included).\n\nPay with crypto on CoinPay: ${url}\nOrder status: https://auctions.pit.world/shop/order/${id}?k=${viewKey}\n\nWe place your order with the grower as soon as the payment confirms, and email you the tracking number when it ships.`)
+      return { order: this.get(id)!, payUrl: url }
+    } catch (error) {
+      if (error instanceof ProviderRefused) {
+        this.db.query("UPDATE shop_orders SET provider='coinpay', status='cancelled' WHERE id=?").run(id)
+        console.error(`Shop checkout refused by CoinPay (${error.status})`)
+        throw new OrderError('Checkout is paused for a moment. You have not been charged; please try again later.')
+      }
+      this.db.query("UPDATE shop_orders SET provider='coinpay', status='unknown' WHERE id=?").run(id)
+      throw new OrderError('Checkout could not be confirmed. Please email hello@pit.world before trying again; you have not been charged.')
+    }
+  }
+
+  private async coinpay(path: string, init: RequestInit = {}): Promise<any> {
+    const cp = this.cfg!.coinpay!
+    const response = await (this.cfg!.fetch ?? fetch)(`${cp.apiUrl.replace(/\/+$/, '')}${path}`, {
+      ...init,
+      redirect: 'error',
+      headers: { authorization: `Bearer ${cp.apiKey}`, accept: 'application/json', 'content-type': 'application/json' },
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (response.status >= 400 && response.status < 500) throw new ProviderRefused(response.status)
+    if (!response.ok) throw new Error('CoinPay unavailable')
+    return response.json()
+  }
+
+  /** Check one CoinPay order against CoinPay's own record of the session; never trust a webhook body. */
+  private async checkCoinPay(order: ShopOrder) {
+    this.db.query('UPDATE shop_orders SET checked_at=? WHERE id=?').run(this.now(), order.id)
+    try {
+      const data = await this.coinpay(`/checkout/sessions/${encodeURIComponent(order.provider_id!)}`)
+      const session = data?.session ?? data
+      if (session?.id !== order.provider_id || Number(session.amount) !== order.amount_usd || session.description !== order.description) return
+      if (session.status === 'paid') await this.paid(order)
+      else if (session.status === 'expired') this.db.query("UPDATE shop_orders SET status='cancelled' WHERE id=? AND status='open'").run(order.id)
+    } catch { /* an outage never marks anything paid */ }
+  }
+
+  /** CoinPay webhook: "t=<unix>,v1=<hex hmac-sha256 of `${t}.${body}`>", within five minutes. */
+  verifyWebhook(rawBody: string, header: string | undefined): boolean {
+    const secret = this.cfg?.coinpay?.webhookSecret
+    if (!secret || !header) return false
+    const parts = Object.fromEntries(header.split(',').map((kv) => kv.split('=').map((x) => x.trim())))
+    const t = Number(parts.t)
+    if (!Number.isFinite(t) || !/^[0-9a-f]{64}$/i.test(parts.v1 ?? '') || Math.abs(this.now() / 1000 - t) > 300) return false
+    const expected = createHmac('sha256', secret).update(`${parts.t}.${rawBody}`).digest()
+    return timingSafeEqual(expected, Buffer.from(parts.v1!, 'hex'))
+  }
+
+  /** A verified webhook only prompts a re-check of the named session (or our order id in its metadata). */
+  async onWebhook(payload: any) {
+    const data = payload?.data ?? payload
+    const meta = data?.metadata ?? payload?.metadata ?? {}
+    const sessionId = String(meta.checkout_session_id ?? data?.checkout_session_id ?? (String(data?.id ?? '').startsWith('cs_') ? data.id : ''))
+    const orderId = String(meta.order_id ?? '')
+    const order = (sessionId && this.db.query<ShopOrder, [string]>("SELECT * FROM shop_orders WHERE provider='coinpay' AND provider_id=? AND status='open'").get(sessionId))
+      || (orderId && this.db.query<ShopOrder, [string]>("SELECT * FROM shop_orders WHERE provider='coinpay' AND id=? AND status='open'").get(orderId))
+    if (order) await this.checkCoinPay(order)
+  }
+
   private async call(path: string, init: RequestInit = {}): Promise<any> {
     const cfg = this.cfg!
-    const response = await (cfg.fetch ?? fetch)(`${cfg.payAgentUrl.replace(/\/+$/, '')}${path}`, {
+    const response = await (cfg.fetch ?? fetch)(`${cfg.payAgentUrl!.replace(/\/+$/, '')}${path}`, {
       ...init,
       redirect: 'error',
       headers: { authorization: `Bearer ${cfg.key}`, accept: 'application/json', 'content-type': 'application/json' },
@@ -211,11 +315,11 @@ export class AuctionShop {
   }
 
   async tick() {
-    if (this.running || !this.cfg) return
+    if (this.running || !this.cfg || !this.open) return
     this.running = true
     try {
       // A lost create response: recover only an exact invoice match, never issue a second one.
-      const uncertain = this.db.query<ShopOrder, [number]>("SELECT * FROM shop_orders WHERE status='unknown' OR (status='creating' AND created_at<?) ORDER BY checked_at, created_at LIMIT 25").all(this.now() - 60_000)
+      const uncertain = this.payAgent ? this.db.query<ShopOrder, [number]>("SELECT * FROM shop_orders WHERE provider='payagent' AND (status='unknown' OR (status='creating' AND created_at<?)) ORDER BY checked_at, created_at LIMIT 25").all(this.now() - 60_000) : []
       if (uncertain.length) {
         try {
           const found = await this.call('/api/v1/invoices')
@@ -224,13 +328,18 @@ export class AuctionShop {
             const match = (Array.isArray(found.invoices) ? found.invoices : []).find((i: any) => i.description === local.description && i.amount_usd === local.amount_usd)
             if (!match || typeof match.id !== 'string' || typeof match.url !== 'string') continue
             const url = new URL(match.url)
-            if (url.protocol !== 'https:' || url.origin !== new URL(this.cfg.payAgentUrl).origin) continue
+            if (url.protocol !== 'https:' || url.origin !== new URL(this.cfg.payAgentUrl!).origin) continue
             this.db.query("UPDATE shop_orders SET provider_id=?, url=?, status='open' WHERE id=? AND status IN ('unknown','creating')").run(match.id, url.href, local.id)
           }
         } catch { /* next tick */ }
       }
       const pending = this.db.query<ShopOrder, []>("SELECT * FROM shop_orders WHERE status='open' ORDER BY checked_at, created_at LIMIT 25").all()
       for (const order of pending) {
+        if (order.provider === 'coinpay') {
+          if (this.cfg.coinpay) await this.checkCoinPay(order)
+          continue
+        }
+        if (!this.payAgent) continue
         this.db.query('UPDATE shop_orders SET checked_at=? WHERE id=?').run(this.now(), order.id)
         try {
           const verified = await this.call(`/api/v1/invoices/${encodeURIComponent(order.provider_id!)}`)
