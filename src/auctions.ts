@@ -183,6 +183,35 @@ export class AuctionHouse {
     const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(auction_artworks)').all().map((c) => c.name)
     if (!columns.includes('topic')) this.db.exec("ALTER TABLE auction_artworks ADD COLUMN topic TEXT NOT NULL DEFAULT ''")
     this.db.exec('CREATE INDEX IF NOT EXISTS auction_artworks_topic ON auction_artworks(topic, created_at DESC)')
+
+    // Archive Anthony's test post privately, then remove it from every public artwork route.
+    const cleanupId = '0RZW_lLDiS_z_1lM'
+    const migrationName = 'remove-test-artwork-' + cleanupId
+    this.db.exec(
+      'CREATE TABLE IF NOT EXISTS auction_migrations (name TEXT PRIMARY KEY, applied_at INTEGER NOT NULL); ' +
+      "CREATE TABLE IF NOT EXISTS auction_artwork_archive (" +
+      "id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, medium TEXT NOT NULL DEFAULT '', " +
+      "description TEXT NOT NULL DEFAULT '', image_type TEXT NOT NULL, image BLOB NOT NULL, topic TEXT NOT NULL DEFAULT '', " +
+      'created_at INTEGER NOT NULL, removed_at INTEGER NOT NULL, reason TEXT NOT NULL)',
+    )
+    if (!this.db.query<{ name: string }, [string]>('SELECT name FROM auction_migrations WHERE name = ?').get(migrationName)) {
+      this.db.exec('BEGIN IMMEDIATE')
+      try {
+        const removedAt = Date.now()
+        this.db.query(
+          'INSERT OR IGNORE INTO auction_artwork_archive ' +
+          '(id, title, artist, medium, description, image_type, image, topic, created_at, removed_at, reason) ' +
+          'SELECT id, title, artist, medium, description, image_type, image, topic, created_at, ?, ? ' +
+          'FROM auction_artworks WHERE id = ?',
+        ).run(removedAt, 'Anthony requested removal of this test post', cleanupId)
+        this.db.query('DELETE FROM auction_artworks WHERE id = ?').run(cleanupId)
+        this.db.query('INSERT INTO auction_migrations (name, applied_at) VALUES (?, ?)').run(migrationName, removedAt)
+        this.db.exec('COMMIT')
+      } catch (error) {
+        this.db.exec('ROLLBACK')
+        throw error
+      }
+    }
   }
 
   list(limit = 48, topic?: AuctionTopic): Artwork[] {

@@ -222,4 +222,39 @@ describe('Art Auctions House', () => {
     house.db.close()
     require('node:fs').rmSync(path, { force: true }); require('node:fs').rmSync(`${path}-wal`, { force: true }); require('node:fs').rmSync(`${path}-shm`, { force: true })
   })
+
+
+  it('archives and removes the requested test post once', async () => {
+    const { Database } = require('bun:sqlite')
+    const fs = require('node:fs')
+    const path = require('node:os').tmpdir() + '/auctions-remove-test-post-' + process.pid + '.db'
+    const id = '0RZW_lLDiS_z_1lM'
+    const originalImage = Uint8Array.from([1, 2, 3, 4])
+    const old = new Database(path, { create: true })
+    old.exec("CREATE TABLE auction_artworks (id TEXT PRIMARY KEY, title TEXT NOT NULL, artist TEXT NOT NULL, medium TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '', image_type TEXT NOT NULL, image BLOB NOT NULL, topic TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL)")
+    old.query('INSERT INTO auction_artworks VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').run(id, 'Test post', 'Anthony', 'PNG', 'test artwork', 'image/png', originalImage, '', 1)
+    old.close()
+
+    const house = new AuctionHouse(path)
+    expect(house.get(id)).toBeNull()
+    expect(house.image(id)).toBeNull()
+    const archived = house.db.query<{ title: string; artist: string; image: Uint8Array; reason: string }, [string]>(
+      'SELECT title, artist, image, reason FROM auction_artwork_archive WHERE id = ?',
+    ).get(id)!
+    expect(archived).toMatchObject({ title: 'Test post', artist: 'Anthony', reason: 'Anthony requested removal of this test post' })
+    expect(new Uint8Array(archived.image)).toEqual(originalImage)
+
+    const app = createAuctionApp(house)
+    const home = await (await app.fetch(new Request('https://auctions.pit.world/'))).text()
+    expect(home).not.toContain('Test post')
+    expect((await app.fetch(new Request('https://auctions.pit.world/art/' + id))).status).toBe(404)
+    expect((await app.fetch(new Request('https://auctions.pit.world/image/' + id))).status).toBe(404)
+    house.db.close()
+
+    const reopened = new AuctionHouse(path)
+    expect(reopened.get(id)).toBeNull()
+    expect(reopened.db.query<{ count: number }, [string]>('SELECT COUNT(*) AS count FROM auction_artwork_archive WHERE id = ?').get(id)?.count).toBe(1)
+    reopened.db.close()
+    fs.rmSync(path, { force: true }); fs.rmSync(path + '-wal', { force: true }); fs.rmSync(path + '-shm', { force: true })
+  })
 })
