@@ -71,4 +71,33 @@ describe('Art Auctions House', () => {
     expect(house.list()).toHaveLength(0)
     house.db.close()
   })
+
+  it('defaults to the blue theme and lets a visitor switch to the warm theme', async () => {
+    const house = new AuctionHouse()
+    const app = createAuctionApp(house)
+    const landing = await (await app.fetch(new Request('https://auctions.pit.world/'))).text()
+    expect(landing).toContain('data-theme="blue"')
+    expect(landing).toContain('href="/theme/warm?back=%2F"')
+
+    const pick = await app.fetch(new Request('https://auctions.pit.world/theme/warm?back=%2Fnew'))
+    expect(pick.status).toBe(303)
+    expect(pick.headers.get('location')).toBe('/new')
+    const cookie = pick.headers.get('set-cookie')!
+    expect(cookie).toContain('aa_theme=warm')
+
+    const warm = await (await app.fetch(new Request('https://auctions.pit.world/new', { headers: { cookie: 'aa_theme=warm' } }))).text()
+    expect(warm).toContain('data-theme="warm"')
+    expect(warm).toContain('content="#f3eee5"')
+
+    const css = await (await app.fetch(new Request('https://auctions.pit.world/style.css'))).text()
+    expect(css).toContain('[data-theme=warm]')
+
+    for (const back of ['https://evil.example/', '//evil.example/', '/\\evil.example']) {
+      const res = await app.fetch(new Request(`https://auctions.pit.world/theme/blue?back=${encodeURIComponent(back)}`))
+      expect(res.headers.get('location')).toBe('/')
+    }
+    const bogus = await app.fetch(new Request('https://auctions.pit.world/theme/neon'))
+    expect(bogus.headers.get('set-cookie')).toBeNull()
+    house.db.close()
+  })
 })
