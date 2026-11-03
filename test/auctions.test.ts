@@ -96,6 +96,8 @@ describe('Art Auctions House', () => {
     expect(styled.headers.get('cache-control')).toContain('immutable')
     const css = await styled.text()
     expect(css).toContain('[data-theme=blue]')
+    // :root (the warm default) and [data-theme=blue] tie on specificity, so blue must be declared after it.
+    expect(css.indexOf('html[data-theme=blue]{')).toBeGreaterThan(css.indexOf(':root,[data-theme=warm]{'))
 
     for (const back of ['https://evil.example/', '//evil.example/', '/\\evil.example']) {
       const res = await app.fetch(new Request(`https://auctions.pit.world/theme/warm?back=${encodeURIComponent(back)}`))
