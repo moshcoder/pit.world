@@ -1,7 +1,7 @@
 import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { Hono } from 'hono'
 import { RateLimiter } from './ratelimit.js'
 
@@ -62,9 +62,14 @@ function validImage(type: string, bytes: Uint8Array): boolean {
   return false
 }
 
+// The stylesheet URL carries a hash of its contents, so a browser never keeps an old copy
+// after a deploy (a cached pre-theme stylesheet left the Blue switch doing nothing).
+let cssVersion: string | undefined
+const cssHref = () => `/style.css?v=${(cssVersion ??= createHash('sha256').update(AUCTIONS_CSS).digest('hex').slice(0, 12))}`
+
 function page(theme: AuctionTheme, title: string, body: string, description = 'A home for art, artists and the stories behind every piece.', canonicalPath = '/') {
   return `<!doctype html>
-<html lang="en" data-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="${THEME_COLOR[theme]}"><meta name="description" content="${esc(description)}"><link rel="stylesheet" href="/style.css"><link rel="canonical" href="https://${AUCTION_HOST}${esc(canonicalPath)}"><title>${esc(title)} · Art Auctions</title></head>
+<html lang="en" data-theme="${theme}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="${THEME_COLOR[theme]}"><meta name="description" content="${esc(description)}"><link rel="stylesheet" href="${cssHref()}"><link rel="canonical" href="https://${AUCTION_HOST}${esc(canonicalPath)}"><title>${esc(title)} · Art Auctions</title></head>
 <body><header class="top"><a class="brand" href="/" aria-label="Art Auctions home"><span class="brand-mark">A</span><span>Art Auctions<small>THE HOUSE FOR ORIGINAL WORK</small></span></a><nav><a href="/#gallery">Browse art</a><a class="nav-cta" href="/new">Submit a piece <span aria-hidden="true">↗</span></a></nav></header>${body}<footer><a class="brand footer-brand" href="/"><span class="brand-mark">A</span><span>Art Auctions<small>ART, WITH A STORY.</small></span></a><p>A place for original work and the people who make it.</p>${themePicker(theme, canonicalPath)}</footer></body></html>`
 }
 
@@ -153,7 +158,7 @@ export function createAuctionApp(house: AuctionHouse) {
     c.header('set-cookie', `${THEME_COOKIE}=${name}; Path=/; Max-Age=31536000; SameSite=Lax; Secure`)
     return c.redirect(target, 303)
   })
-  app.get('/style.css', (c) => c.body(AUCTIONS_CSS, 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' }))
+  app.get('/style.css', (c) => c.body(AUCTIONS_CSS, 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': c.req.query('v') ? 'public, max-age=31536000, immutable' : 'no-cache' }))
   app.get('/image/:id', (c) => {
     const image = house.image(c.req.param('id'))
     if (!image) return c.text('Not found', 404)
