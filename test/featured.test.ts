@@ -24,6 +24,8 @@ describe('featured ring sites in search', () => {
     expect(names('group call')[0]).toBe('group.call.pit.world')
     expect(names('pics collage')[0]).toBe('pics.collage')
     expect(names('what is my ip')[0]).toBe('my.ip')
+    expect(names('auctions')[0]).toBe('auctions.pit.world')
+    expect(names('art auction')[0]).toBe('auctions.pit.world')
   })
   test('by what people search for', () => {
     expect(names('family tree maker')).toContain('family.ancestry')
