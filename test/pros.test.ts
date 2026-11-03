@@ -266,7 +266,7 @@ describe('the pit.world ring: claimed listings join it', () => {
     expect(names).not.toContain('acme-plumbing.com')
     expect((await h.listings.get('acme-plumbing.com'))!.ring).toBe(false)
     expect(await (await h.request('/b/acme-plumbing.com/edit')).text()).not.toContain('Leave the ring')
-    expect(names.slice(0, 17)).toEqual([
+    expect(names.slice(0, 18)).toEqual([
       'pit.world',
       'seo.rank',
       'family.ancestry',
@@ -283,10 +283,12 @@ describe('the pit.world ring: claimed listings join it', () => {
       'live.streaming',
       'pics.collage',
       'my.ip',
+      'auctions.pit.world',
       'mums.flower',
     ])
     expect(ring.sites.at(-1)).toMatchObject({ name: 'acme.pit.world', listing: true, moshpit: false, feed: 'https://acme.pit.world/rss.xml' })
-    expect((await h.request('/ring/next?from=https%3A%2F%2Fmy.ip%2F&direct=1')).headers.get('location')).toBe('https://mums.flower/')
+    expect((await h.request('/ring/next?from=https%3A%2F%2Fmy.ip%2F&direct=1')).headers.get('location')).toBe('https://auctions.pit.world/')
+    expect((await h.request('/ring/next?from=https%3A%2F%2Fauctions.pit.world%2F&direct=1')).headers.get('location')).toBe('https://mums.flower/')
     expect((await h.request('/ring/next?from=https%3A%2F%2Fmums.flower%2F&direct=1')).headers.get('location')).toBe('https://acme.pit.world/')
     expect((await h.request('/ring/next?from=acme.pit.world')).headers.get('location')).toBe('https://pit.world/')
     expect((await h.request('/ring/prev', { headers: { referer: 'https://www.acme.pit.world/about' } })).headers.get('location')).toBe('https://mums.flower.pit.world/')

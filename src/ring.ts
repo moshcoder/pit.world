@@ -60,6 +60,7 @@ export const RING: RingSite[] = [
   { name: 'live.streaming', about: 'Radio and TV stations, live now: AI-composed music, tracks shared by listeners, and more.', moshpit: true, keywords: ['radio', 'live tv', 'stations', 'stream'] },
   { name: 'pics.collage', about: 'Make photo collages on your phone: grids, freestyle, stickers, text and backgrounds. Free, no account, works offline.', moshpit: true, keywords: ['collage', 'photo grid', 'photo editor'] },
   { name: 'my.ip', about: 'Your public IPv4 and IPv6 in one answer, as text or JSON. curl -L my.ip.pit.world', moshpit: true, keywords: ['my ip', 'what is my ip', 'ip address', 'ipv6', 'ipv4'] },
+  { name: 'auctions.pit.world', about: 'Art Auctions House: a public gallery for art and artists. Add a photo of your piece and the story behind it.', moshpit: false, keywords: ['auction', 'auctions', 'art auction', 'art auctions', 'art gallery', 'sell art'] },
   { name: 'mums.flower', about: "Flowers for moms: remember her birthday and Mother's Day, learn what flowers mean, send her a bouquet card. API, MCP, CLI.", moshpit: true, keywords: ["mother's day", 'mothers day', 'mothering sunday', 'flowers for mom', 'flower meanings', 'bouquet'] },
 ]
 
