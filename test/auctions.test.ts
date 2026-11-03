@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { AuctionHouse, createAuctionApp, isAuctionHost } from '../src/auctions.js'
+import { createApp } from '../src/server.js'
 
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l0sAAAAASUVORK5CYII=', 'base64'))
 
@@ -98,6 +99,18 @@ describe('Art Auctions House', () => {
     }
     const bogus = await app.fetch(new Request('https://auctions.pit.world/theme/neon'))
     expect(bogus.headers.get('set-cookie')).toBeNull()
+    house.db.close()
+  })
+
+  it('lets the theme cookie through the pit.world app, and only on the auction theme route', async () => {
+    const house = new AuctionHouse()
+    const app = createApp({ keys: {}, auctions: house })
+    const pick = await app.fetch(new Request('https://auctions.pit.world/theme/blue?back=%2F', { headers: { host: 'auctions.pit.world' } }))
+    expect(pick.status).toBe(303)
+    expect(pick.headers.get('set-cookie')).toContain('aa_theme=blue')
+    const page = await app.fetch(new Request('https://auctions.pit.world/', { headers: { host: 'auctions.pit.world', cookie: 'aa_theme=blue' } }))
+    expect(page.headers.get('set-cookie')).toBeNull()
+    expect(await page.text()).toContain('data-theme="blue"')
     house.db.close()
   })
 })
