@@ -181,7 +181,9 @@ export function createApp(deps: Deps) {
     for (const [name, value] of Object.entries(SECURITY_HEADERS))
       c.header(name, name === 'content-security-policy' && frames.length ? value.replace('frame-src ', `frame-src ${frames.join(' ')} `) : value)
     // Belt and braces: only the sign-in and account routes set a cookie, and only after you press Sign in.
-    if (!deps.accounts || !COOKIE_PATHS.test(c.req.path)) c.res.headers.delete('set-cookie')
+    // The one exception is the auction house's color theme choice (aa_theme), set when a visitor picks it.
+    const auctionTheme = isAuctionHost(c.req.header('host')) && c.req.path.startsWith('/theme/')
+    if (!auctionTheme && (!deps.accounts || !COOKIE_PATHS.test(c.req.path))) c.res.headers.delete('set-cookie')
   })
 
   const auctionApp = deps.auctions ? createAuctionApp(deps.auctions) : null
