@@ -223,7 +223,7 @@ describe('Art Auctions House', () => {
     require('node:fs').rmSync(path, { force: true }); require('node:fs').rmSync(`${path}-wal`, { force: true }); require('node:fs').rmSync(`${path}-shm`, { force: true })
   })
 
-  
+
   it('archives and removes the requested test post once', async () => {
     const { Database } = require('bun:sqlite')
     const fs = require('node:fs')
