@@ -68,6 +68,7 @@ import { playerCss, playerJs } from './player-bundle.js'
 import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-routes.js'
 import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
+import { AuctionHouse, AUCTION_HOST, AUCTION_HOSTS, createAuctionApp, isAuctionHost } from './auctions.js'
 import { AD_SLOT, esc, featuredTarget, TOP_ADS, votePage } from './html.js'
 
 export type Deps = {
@@ -113,6 +114,8 @@ export type Deps = {
   summaryLimits?: { anon: number; signedIn: number; anonTotal: number }
   /** The $1/week summary pass (src/summary-pass.ts; needs accounts); unset means off. */
   summaryPasses?: SummaryPasses
+  /** Public art submissions for auctions.pit.world and art.auctions.pit.world. */
+  auctions?: AuctionHouse
   /** Keys every visitor hash and search hash (src/visitor.ts); a random one per process when unset (tests). */
   fingerprintSecret?: string
   /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
@@ -160,6 +163,10 @@ export function createApp(deps: Deps) {
   const crawlGate = deps.crawlGate
   if (crawlGate) {
     app.use('*', async (c, next) => {
+      if (isAuctionHost(c.req.header('host'))) {
+        await next()
+        return
+      }
       const sold = await crawlGate.handle(c.req.raw)
       if (sold) return sold
       await next()
@@ -176,6 +183,14 @@ export function createApp(deps: Deps) {
     // Belt and braces: only the sign-in and account routes set a cookie, and only after you press Sign in.
     if (!deps.accounts || !COOKIE_PATHS.test(c.req.path)) c.res.headers.delete('set-cookie')
   })
+
+  const auctionApp = deps.auctions ? createAuctionApp(deps.auctions) : null
+  if (auctionApp) {
+    app.use('*', async (c, next) => {
+      if (isAuctionHost(c.req.header('host'))) return auctionApp.fetch(c.req.raw, c.env)
+      await next()
+    })
+  }
 
   const limited = (c: Context<Env>) => !limiter.take(c.env?.ip || 'unknown')
 
@@ -1130,6 +1145,7 @@ export function keysFromEnv(env: Record<string, string | undefined> = process.en
 export function serve(options: { port?: number; hostname?: string } = {}) {
   const env = process.env
   const dataDir = env.PIT_DATA_DIR ?? `${env.HOME ?? '.'}/.local/share/pit-world`
+  const auctions = new AuctionHouse(env.PIT_AUCTIONS_DB ?? `${dataDir}/auctions.db`)
   const newsletter = new Newsletter(env.PIT_NEWSLETTER_DB ?? `${dataDir}/newsletter.db`, env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null)
   const registry = new Registry()
   const rootPem = readFileSync(new URL('../public/moshpit-root-ca.crt', import.meta.url), 'utf8')
@@ -1195,7 +1211,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
@@ -1258,6 +1274,9 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   // This is a pit.world-owned exact host, not a claimed Moshpit registry name.
   // Provision its dedicated multi-label certificate before HSTS browsers connect.
   if (import.meta.main && !certs.has(DAILY_STITCHER_HOST)) certs.issue(DAILY_STITCHER_HOST)
+  // These are pit.world-owned hosts with explicit app routes, including the
+  // one-label auctions.pit.world host that does not represent a Moshpit name.
+  if (import.meta.main) for (const host of AUCTION_HOSTS) if (!certs.has(host)) certs.issue(host)
   // Certificates for every reachable name before its first visit (HSTS browsers never make the http one).
   if (env.PIT_CERT_SWEEP !== 'off') {
     const sweep = registrySweep(proxyDeps.access, proxyDeps.certs, undefined, proxyDeps.targets)
@@ -1293,6 +1312,14 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       const forwarded = local ? request.headers.get('x-real-ip') : null
       const proto = (local && request.headers.get('x-forwarded-proto')) || 'http'
       const host = String(request.headers.get('host') ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '')
+      if (isAuctionHost(host)) {
+        const url = new URL(request.url)
+        url.protocol = 'https:'
+        url.host = AUCTION_HOST
+        if (proto !== 'https' || host !== AUCTION_HOST) return Response.redirect(url, 301)
+        // threatcrush-disable-next-line js-ssrf-outbound-request  not an outbound request: Hono's in-process dispatch of the incoming auction house request
+        return app.fetch(request, { ip: forwarded || peer })
+      }
       if (host === DAILY_STITCHER_HOST) {
         if (proto !== 'https') {
           const url = new URL(request.url)

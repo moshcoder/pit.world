@@ -211,6 +211,12 @@ The house rule: everything ships a TUI, a CLI, an MCP and an API.
 | MCP | `pit mcp`: tools `search`, `moshpit_resolve`, `moshpit_network`, `listing`, `pros`, `ring`, `edit_listing`, `vote_tallies`, `vote_top`. In the official MCP Registry as `world.pit/pit` (`server.json`) |
 | PWA | installable from any browser (`/manifest.webmanifest`, share target into `/search`); the worker in `public/sw.js` caches the static shell and an offline page, never a search |
 
+## Art Auctions House
+
+`auctions.pit.world` is the canonical Art Auctions House site. `art.auctions.pit.world` redirects there. Artists can submit a title, name, description and photo; submissions appear publicly in the gallery. Photos up to 8 MB are stored in the local `auctions.db` database, or the path in `PIT_AUCTIONS_DB`.
+
+The gallery and photo submissions are live; bidding and payment are not active. Those terms need to be decided before transactions are added.
+
 ### Newsletter (one list for every Profullstack property)
 
 `GET /subscribe` shows the form; `POST /subscribe` (form: `email`, optional `site`) and `POST /api/subscribe` (JSON, CORS `*`) start a double opt-in. The @profullstack/footer subscribe form posts here with `site=<its hostname>`, so every signup keeps the property it came from; pit.world, `*.pit.world` and Moshpit names get pit.world copy, every other site gets Profullstack copy and a link back. An address already on the list still gets an email (its click records the new property).

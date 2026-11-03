@@ -451,6 +451,81 @@ write_nginx() {
   fi
 }
 
+# pit.world's relay config is shipped with the app because first-visit TLS and
+# nested Moshpit host routing are part of the site's production path.
+write_pit_proxy() {
+  local source_conf="$SCRIPT_DIR/../deploy/pit-proxy.nginx.conf"
+  local source_cert="$SCRIPT_DIR/../deploy/pit-proxy-cert"
+  [ -f "$source_conf" ] && [ -f "$source_cert" ] || return 0
+  need_root "pit.world relay"
+  command -v nginx >/dev/null || apt_install nginx
+
+  local conf link cert_script backup_dir stamp conf_changed=0 link_changed=0 conf_existed=0 conf_backed_up=0
+  if [ -d /etc/nginx/sites-available ]; then
+    conf=/etc/nginx/sites-available/pit-proxy
+    link=/etc/nginx/sites-enabled/pit-proxy
+  else
+    conf=/etc/nginx/conf.d/pit-proxy.conf
+    link=""
+  fi
+  cert_script=/usr/local/bin/pit-proxy-cert
+  backup_dir=/var/backups/pit-world
+  stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+
+  # Accept files installed by older pit.world deploys, as well as ones carrying
+  # the installer marker. Refuse to overwrite unrelated server configuration.
+  if $SUDO test -f "$conf" && ! $SUDO grep -qF "$MARKER" "$conf"; then
+    $SUDO grep -qF "# <name>.pit.world: pit.world's relay" "$conf" || die "$conf exists and is not pit.world's relay config"
+  fi
+  if $SUDO test -f "$cert_script" && ! $SUDO grep -qF "$MARKER" "$cert_script"; then
+    $SUDO grep -qF "# Make (or keep) the Let's Encrypt certificate for one Moshpit name on pit.world." "$cert_script" || die "$cert_script exists and is not pit.world's certificate helper"
+  fi
+  if [ -n "$link" ] && $SUDO test -e "$link" && ! $SUDO test -L "$link"; then
+    die "$link exists and is not a symlink; move it aside before installing the relay config"
+  fi
+  if [ -n "$link" ] && $SUDO test -L "$link" && [ "$( $SUDO readlink "$link" )" != "$conf" ]; then
+    die "$link points somewhere else; move it aside before installing the relay config"
+  fi
+
+  $SUDO install -d -m 0700 "$backup_dir"
+  if $SUDO test -f "$conf"; then
+    conf_existed=1
+    if ! $SUDO cmp -s "$source_conf" "$conf"; then
+      $SUDO cp -a "$conf" "$backup_dir/pit-proxy.nginx.conf.$stamp"
+      conf_backed_up=1
+    fi
+  fi
+  if $SUDO test -f "$cert_script" && ! $SUDO cmp -s "$source_cert" "$cert_script"; then
+    $SUDO cp -a "$cert_script" "$backup_dir/pit-proxy-cert.$stamp"
+  fi
+
+  AS="$SUDO"
+  CHANGED=0
+  put_root_file "$conf" 0644 < "$source_conf"
+  conf_changed="$CHANGED"
+  if [ -n "$link" ] && ! $SUDO test -L "$link"; then
+    $SUDO ln -s "$conf" "$link"
+    link_changed=1
+  fi
+  CHANGED=0
+  put_root_file "$cert_script" 0755 < "$source_cert"
+
+  if [ "$conf_changed" = 1 ] || [ "$link_changed" = 1 ]; then
+    if ! $SUDO nginx -t >/dev/null 2>&1; then
+      if [ "$conf_backed_up" = 1 ]; then
+        $SUDO cp -a "$backup_dir/pit-proxy.nginx.conf.$stamp" "$conf"
+      elif [ "$conf_existed" = 0 ]; then
+        $SUDO rm -f "$conf"
+      fi
+      [ "$link_changed" = 0 ] || $SUDO rm -f "$link"
+      $SUDO nginx -t || true
+      die "nginx -t failed for the pit.world relay; restored its previous config"
+    fi
+    $SUDO systemctl reload nginx
+    log "nginx: pit.world relay config reloaded"
+  fi
+}
+
 health() {
   local deadline=$(( $(date +%s) + HEALTH_TIMEOUT )) url="http://127.0.0.1:$PORT$HEALTH_PATH"
   log "health: waiting for $url (up to ${HEALTH_TIMEOUT}s)"
@@ -474,6 +549,7 @@ phase_activate() {
     return 0
   fi
   systemd_mode
+  write_pit_proxy
   if [ "$SYSTEMD_MODE" = user ] && [ "$(loginctl show-user "$(id -un)" -p Linger --value 2>/dev/null)" != yes ]; then
     loginctl enable-linger "$(id -un)" 2>/dev/null \
       || warn "could not enable linger: $UNIT stops when $(id -un) logs out (run: sudo loginctl enable-linger $(id -un))"
