@@ -1,0 +1,9 @@
+# Art Auctions House: both public hostnames are served by the pit.world app.
+https://auctions.pit.world, https://art.auctions.pit.world {
+	import edge_tls
+	request_body {
+		max_size 30MiB
+	}
+	encode gzip
+	import edge_proxy 8787
+}
