@@ -1,13 +1,14 @@
 #!/bin/sh
+# managed by bin/install.sh
 # Make (or keep) the Let's Encrypt certificate for one Moshpit name on pit.world.
 # Installed as /usr/local/bin/pit-proxy-cert; pit.world runs it on a host's first
 # plain-http visit (src/proxy.ts, src/services.ts), and it is safe to run by hand:
 #   pit-proxy-cert family.ancestry.pit.world
 #   pit-proxy-cert bbs.family.ancestry.pit.world     (same certificate)
 #
-# One certificate per name covers all three of its hosts:
+# For a nested Moshpit name, one certificate covers all three of its hosts:
 #   <name>.pit.world  social.<name>.pit.world  bbs.<name>.pit.world
-# so a name costs one of Let's Encrypt's 50 certificates a week for pit.world, not three.
+# A one-label pit.world app host only needs a certificate for itself.
 set -eu
 
 # nginx workers (www-data) read these at handshake time; /etc/letsencrypt/live is root only.
@@ -21,14 +22,14 @@ install_for_nginx() {
 # As the certbot deploy hook: copy whatever was just renewed, under every host it covers.
 if [ "${1:-}" = "--renewed" ]; then
   for d in ${RENEWED_DOMAINS:-}; do
-    case "$d" in *.*.pit.world) install_for_nginx "${RENEWED_LINEAGE:-/etc/letsencrypt/live/$d}" "$d" ;; esac
+    case "$d" in *.pit.world) install_for_nginx "${RENEWED_LINEAGE:-/etc/letsencrypt/live/$d}" "$d" ;; esac
   done
   exit 0
 fi
 
 host="${1:-}"
 case "$host" in
-  *.*.pit.world) ;;
+  *.pit.world) ;;
   *) echo "usage: pit-proxy-cert <name>.pit.world" >&2; exit 2 ;;
 esac
 printf '%s' "$host" | grep -Eq '^[a-z0-9.-]+$' || { echo "bad host: $host" >&2; exit 2; }
@@ -40,15 +41,25 @@ case "$host" in
   bbs.*.*.pit.world) base="${host#bbs.}" ;;
 esac
 
+# A nested Moshpit name gets one certificate for its three site hosts. A one-label
+# pit.world app host (such as auctions.pit.world) needs only its own certificate.
 # This box's root umask is 007; nginx (www-data) must read the challenge files.
 umask 022
 mkdir -p /var/www/pit-acme/.well-known/acme-challenge
 chmod -R a+rX /var/www/pit-acme
 exec 9>/run/lock/pit-proxy-cert.lock
 flock 9
-certbot certonly --webroot -w /var/www/pit-acme -d "$base" -d "social.$base" -d "bbs.$base" --cert-name "$base" \
-  --non-interactive --agree-tos --keep-until-expiring --expand --quiet
-for h in "$base" "social.$base" "bbs.$base"; do
+case "$base" in
+  *.*.pit.world)
+    certbot certonly --webroot -w /var/www/pit-acme -d "$base" -d "social.$base" -d "bbs.$base" --cert-name "$base" \
+      --non-interactive --agree-tos --keep-until-expiring --expand --quiet
+    hosts="$base social.$base bbs.$base" ;;
+  *.pit.world)
+    certbot certonly --webroot -w /var/www/pit-acme -d "$base" --cert-name "$base" \
+      --non-interactive --agree-tos --keep-until-expiring --expand --quiet
+    hosts="$base" ;;
+esac
+for h in $hosts; do
   install_for_nginx "/etc/letsencrypt/live/$base" "$h"
 done
 nginx -t -q && systemctl reload nginx
