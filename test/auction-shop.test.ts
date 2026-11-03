@@ -123,4 +123,13 @@ describe('Art Auctions flower shop', () => {
     }
     house.db.close()
   })
+
+  it('cancels cleanly and says checkout is paused when pay.agent refuses (locked)', async () => {
+    const house = new AuctionHouse()
+    const locked = (async () => Response.json({ error: 'locked' }, { status: 423 })) as unknown as typeof fetch
+    const shop = new AuctionShop(house.db, [item], { payAgentUrl: 'https://pay.agent.test', key: 'pa_test', fetch: locked })
+    await expect(shop.start(item.slug, { ...good })).rejects.toThrow('Checkout is paused')
+    expect(house.db.query("SELECT status FROM shop_orders").get()).toEqual({ status: 'cancelled' })
+    house.db.close()
+  })
 })
