@@ -69,6 +69,8 @@ import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-
 import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
 import { AuctionHouse, AUCTION_HOST, AUCTION_HOSTS, createAuctionApp, isAuctionHost } from './auctions.js'
+import { AuctionShop } from './auction-shop.js'
+import { SHOP_CATALOG } from './shop-catalog.js'
 import { AD_SLOT, esc, featuredTarget, TOP_ADS, votePage } from './html.js'
 
 export type Deps = {
@@ -116,6 +118,8 @@ export type Deps = {
   summaryPasses?: SummaryPasses
   /** Public art submissions for auctions.pit.world and art.auctions.pit.world. */
   auctions?: AuctionHouse
+  /** The flower shop at auctions.pit.world/shop. */
+  auctionShop?: AuctionShop
   /** Keys every visitor hash and search hash (src/visitor.ts); a random one per process when unset (tests). */
   fingerprintSecret?: string
   /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
@@ -186,7 +190,7 @@ export function createApp(deps: Deps) {
     if (!auctionTheme && (!deps.accounts || !COOKIE_PATHS.test(c.req.path))) c.res.headers.delete('set-cookie')
   })
 
-  const auctionApp = deps.auctions ? createAuctionApp(deps.auctions) : null
+  const auctionApp = deps.auctions ? createAuctionApp(deps.auctions, { ...(deps.auctionShop ? { shop: deps.auctionShop } : {}), ...(deps.adminToken ? { adminToken: deps.adminToken } : {}) }) : null
   if (auctionApp) {
     app.use('*', async (c, next) => {
       if (isAuctionHost(c.req.header('host'))) return auctionApp.fetch(c.req.raw, c.env)
@@ -1173,6 +1177,12 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
     : undefined
   const featuredBusinesses = buildInvoicing ? new FeaturedBusinesses(listings, buildInvoicing) : undefined
+  const auctionShop = new AuctionShop(auctions.db, SHOP_CATALOG, buildInvoicing ? { payAgentUrl: buildInvoicing.payAgentUrl, key: buildInvoicing.key, mailer: buildInvoicing.mailer ?? null, notifyTo: env.PIT_SHOP_NOTIFY ?? buildInvoicing.notifyTo ?? 'ettinger@gmail.com' } : null)
+  if (buildInvoicing) {
+    const tick = () => void auctionShop.tick().catch(() => console.error('Shop billing sync failed'))
+    setTimeout(tick, 7_000).unref()
+    setInterval(tick, 60_000).unref()
+  }
   if (featuredBusinesses) {
     const tick = () => void featuredBusinesses.tick().catch(() => console.error('Featured billing sync failed'))
     setTimeout(tick, 5_000).unref()
@@ -1213,7 +1223,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
