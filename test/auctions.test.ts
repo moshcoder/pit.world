@@ -90,7 +90,11 @@ describe('Art Auctions House', () => {
     expect(warm).toContain('data-theme="blue"')
     expect(warm).toContain('content="#eef3fa"')
 
-    const css = await (await app.fetch(new Request('https://auctions.pit.world/style.css'))).text()
+    const href = /<link rel="stylesheet" href="([^"]+)"/.exec(landing)![1]
+    expect(href).toMatch(/^\/style\.css\?v=[0-9a-f]{12}$/)
+    const styled = await app.fetch(new Request(`https://auctions.pit.world${href}`))
+    expect(styled.headers.get('cache-control')).toContain('immutable')
+    const css = await styled.text()
     expect(css).toContain('[data-theme=blue]')
 
     for (const back of ['https://evil.example/', '//evil.example/', '/\\evil.example']) {
