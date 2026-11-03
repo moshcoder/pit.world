@@ -70,6 +70,8 @@ import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
 import { AuctionHouse, AUCTION_HOST, AUCTION_HOSTS, createAuctionApp, isAuctionHost } from './auctions.js'
 import { AuctionShop } from './auction-shop.js'
+import { bridgeSecret } from './accounts.js'
+import { createBridgeClient, type BridgeClient } from '@profullstack/bridges'
 import { SHOP_CATALOG } from './shop-catalog.js'
 import { AD_SLOT, esc, featuredTarget, TOP_ADS, votePage } from './html.js'
 
@@ -120,6 +122,8 @@ export type Deps = {
   auctions?: AuctionHouse
   /** The flower shop at auctions.pit.world/shop. */
   auctionShop?: AuctionShop
+  /** CoinPay sign-in for auctions.pit.world through the pit.world bridge. */
+  auctionAccounts?: { bridge: BridgeClient | null; sessionSecret: string; adminSubs: string[] }
   /** Keys every visitor hash and search hash (src/visitor.ts); a random one per process when unset (tests). */
   fingerprintSecret?: string
   /** Anonymous votes; defaults to a table in the listings database (or memory without one). */
@@ -186,11 +190,11 @@ export function createApp(deps: Deps) {
       c.header(name, name === 'content-security-policy' && frames.length ? value.replace('frame-src ', `frame-src ${frames.join(' ')} `) : value)
     // Belt and braces: only the sign-in and account routes set a cookie, and only after you press Sign in.
     // The one exception is the auction house's color theme choice (aa_theme), set when a visitor picks it.
-    const auctionTheme = isAuctionHost(c.req.header('host')) && c.req.path.startsWith('/theme/')
+    const auctionTheme = isAuctionHost(c.req.header('host')) && (c.req.path.startsWith('/theme/') || ['/signin', '/signout', '/auth/bridge/callback'].includes(c.req.path))
     if (!auctionTheme && (!deps.accounts || !COOKIE_PATHS.test(c.req.path))) c.res.headers.delete('set-cookie')
   })
 
-  const auctionApp = deps.auctions ? createAuctionApp(deps.auctions, { ...(deps.auctionShop ? { shop: deps.auctionShop } : {}), ...(deps.adminToken ? { adminToken: deps.adminToken } : {}) }) : null
+  const auctionApp = deps.auctions ? createAuctionApp(deps.auctions, { ...(deps.auctionShop ? { shop: deps.auctionShop } : {}), ...(deps.adminToken ? { adminToken: deps.adminToken } : {}), ...(deps.auctionAccounts ?? {}) }) : null
   if (auctionApp) {
     app.use('*', async (c, next) => {
       if (isAuctionHost(c.req.header('host'))) return auctionApp.fetch(c.req.raw, c.env)
@@ -1167,7 +1171,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     site,
     coinpay: env.PIT_COINPAY_CLIENT_ID && env.PIT_COINPAY_CLIENT_SECRET ? { clientId: env.PIT_COINPAY_CLIENT_ID, clientSecret: env.PIT_COINPAY_CLIENT_SECRET } : null,
     bridgeKey: env.PIT_BRIDGE_KEY ?? null,
-    extraClients: [...new Set([...((env.PIT_BRIDGE_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)), DAILY_STITCHER_HOST])],
+    extraClients: [...new Set([...((env.PIT_BRIDGE_CLIENTS ?? '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean)), DAILY_STITCHER_HOST, AUCTION_HOST])],
     admins: (env.PIT_ADMIN_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
   }
   const promotion = new Promotion(listings, site)
@@ -1187,6 +1191,34 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     mailer: buildInvoicing?.mailer ?? mailer ?? null,
     notifyTo: env.PIT_SHOP_NOTIFY ?? buildInvoicing?.notifyTo ?? 'ettinger@gmail.com',
   } : null)
+  // Accounts for auctions.pit.world: CoinPay sign-in through the pit.world bridge, like Daily Stitcher.
+  const auctionSecret = env.PIT_BRIDGE_KEY ? bridgeSecret(env.PIT_BRIDGE_KEY, AUCTION_HOST) : ''
+  const auctionAccounts = {
+    bridge: auctionSecret ? createBridgeClient({ authorizeUrl: 'https://pit.world/bridge/authorize', tokenUrl: 'https://pit.world/bridge/token', clientId: AUCTION_HOST, clientSecret: auctionSecret, redirectUri: `https://${AUCTION_HOST}/auth/bridge/callback` }) : null,
+    sessionSecret: auctionSecret,
+    adminSubs: (env.PIT_ADMIN_SUBS ?? '').split(',').map((s) => s.trim()).filter(Boolean),
+  }
+  // Close finished auctions every minute and tell the house, the winner and the artist.
+  const closeAuctions = () => {
+    try {
+      for (const piece of auctions.closeDue()) {
+        const high = auctions.ledger.high(piece.id)
+        const artist = piece.owner_sub ? auctions.ledger.account(piece.owner_sub) : null
+        const winner = high ? auctions.ledger.account(high.bidder_sub) : null
+        const link = `https://${AUCTION_HOST}/art/${encodeURIComponent(piece.id)}`
+        const summary = high ? `"${piece.title}" by ${piece.artist} sold for $${high.amount_usd} to ${high.bidder_name}.` : `"${piece.title}" by ${piece.artist} ended with no bids.`
+        const send = (to: string | undefined | null, subject: string, text: string) => {
+          if (!mailer || !to) return
+          void mailer({ to, subject, text, html: `<p>${text.replace(/[&<>]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[ch]!).replace(/\n/g, '<br>')}</p>` }).catch(() => console.error('Auction close email failed'))
+        }
+        send(env.PIT_SHOP_NOTIFY ?? env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com', `Auction ended: ${piece.title}`, `${summary}\n${link}\nWinner CoinPay sub: ${high?.bidder_sub ?? 'none'}\nArtist pay link: ${artist?.pay_link || 'not set'}`)
+        if (high) send(winner?.email, `You won "${piece.title}"`, `You won "${piece.title}" for $${high.amount_usd}.\n${artist?.pay_link ? `Pay the artist on CoinPay: ${artist.pay_link}` : 'The house will be in touch about payment and delivery.'}\n${link}`)
+        send(artist?.email, `Your auction ended: ${piece.title}`, `${summary}\n${link}`)
+      }
+    } catch { console.error('Auction close failed') }
+  }
+  setTimeout(closeAuctions, 9_000).unref()
+  setInterval(closeAuctions, 60_000).unref()
   if (shopCoinPay || buildInvoicing) {
     const tick = () => void auctionShop.tick().catch(() => console.error('Shop billing sync failed'))
     setTimeout(tick, 7_000).unref()
@@ -1232,7 +1264,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
