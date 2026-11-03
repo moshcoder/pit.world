@@ -80,6 +80,10 @@ export type ShopOrder = {
 }
 
 export class OrderError extends Error {}
+/** pay.agent answered and refused (4xx): the invoice was certainly not created. */
+class ProviderRefused extends Error {
+  constructor(readonly status: number) { super(`Invoice provider refused (${status})`) }
+}
 
 const US_STATES = 'AL AK AZ AR CA CO CT DE DC FL GA HI ID IL IN IA KS KY LA ME MD MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI SC SD TN TX UT VT VA WA WV WI WY'.split(' ')
 const clean = (value: unknown, length: number) => String(value ?? '').replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, length)
@@ -163,7 +167,13 @@ export class AuctionShop {
       const order = this.get(id)!
       await this.mail(email, `Your order: ${item.name}`, `Thanks for your order of ${item.name} ($${item.priceUsd}, shipping included).\n\nPay here: ${url.href}\nOrder status: https://auctions.pit.world/shop/order/${id}?k=${viewKey}\n\nWe place your order with the grower as soon as the payment confirms, and email you the tracking number when it ships.`)
       return { order, payUrl: url.href }
-    } catch {
+    } catch (error) {
+      if (error instanceof ProviderRefused) {
+        // A definite refusal (e.g. 423 while the merchant's pay.agent session is locked): nothing exists to reconcile.
+        this.db.query("UPDATE shop_orders SET status='cancelled' WHERE id=?").run(id)
+        console.error(`Shop checkout refused by pay.agent (${error.status})`)
+        throw new OrderError('Checkout is paused for a moment. You have not been charged; please try again later.')
+      }
       this.db.query("UPDATE shop_orders SET status='unknown' WHERE id=?").run(id)
       throw new OrderError('Checkout could not be confirmed. Please email hello@pit.world before trying again; you have not been charged.')
     }
@@ -177,6 +187,7 @@ export class AuctionShop {
       headers: { authorization: `Bearer ${cfg.key}`, accept: 'application/json', 'content-type': 'application/json' },
       signal: AbortSignal.timeout(15_000),
     })
+    if (response.status >= 400 && response.status < 500) throw new ProviderRefused(response.status)
     if (!response.ok) throw new Error('Invoice provider unavailable')
     return response.json()
   }
