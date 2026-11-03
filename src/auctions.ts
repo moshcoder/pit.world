@@ -183,7 +183,7 @@ export class AuctionHouse {
     const columns = this.db.query<{ name: string }, []>('PRAGMA table_info(auction_artworks)').all().map((c) => c.name)
     if (!columns.includes('topic')) this.db.exec("ALTER TABLE auction_artworks ADD COLUMN topic TEXT NOT NULL DEFAULT ''")
     this.db.exec('CREATE INDEX IF NOT EXISTS auction_artworks_topic ON auction_artworks(topic, created_at DESC)')
-    
+
     // Archive Anthony's test post privately, then remove it from every public artwork route.
     const cleanupId = '0RZW_lLDiS_z_1lM'
     const migrationName = 'remove-test-artwork-' + cleanupId
