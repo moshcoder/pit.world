@@ -119,4 +119,22 @@ describe('Art Auctions House', () => {
     expect(await page.text()).toContain('data-theme="blue"')
     house.db.close()
   })
+
+  it('accepts the Origin: null a browser sends under no-referrer, only for same-origin posts', async () => {
+    const house = new AuctionHouse()
+    const app = createAuctionApp(house)
+    const post = (headers: Record<string, string>, ip: string) => {
+      const form = new FormData()
+      form.set('title', 'Logo')
+      form.set('artist', 'Ada Artist')
+      form.set('permission', 'yes')
+      form.set('image', new File([png], 'logo.png', { type: 'image/png' }))
+      return app.fetch(new Request('https://auctions.pit.world/new', { method: 'POST', headers, body: form }), { ip })
+    }
+    expect((await post({ origin: 'null', 'sec-fetch-site': 'same-origin' }, '203.0.113.20')).status).toBe(303)
+    expect((await post({ origin: 'null', 'sec-fetch-site': 'cross-site' }, '203.0.113.21')).status).toBe(403)
+    expect((await post({ origin: 'null' }, '203.0.113.22')).status).toBe(403)
+    expect(house.list()).toHaveLength(1)
+    house.db.close()
+  })
 })

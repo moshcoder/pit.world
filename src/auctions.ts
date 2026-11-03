@@ -173,14 +173,18 @@ export function createAuctionApp(house: AuctionHouse) {
   app.post('/new', async (c) => {
     const host = String(c.req.header('host') ?? new URL(c.req.url).host).trim().toLowerCase().replace(/:\d+$/, '')
     const origin = c.req.header('origin')
-    if (origin) {
+    const fetchSite = c.req.header('sec-fetch-site')
+    // Under Referrer-Policy: no-referrer (which this site sends) Chrome posts forms with
+    // Origin: null. Accept that only when the browser also says the post is same-origin.
+    if (origin === 'null') {
+      if (fetchSite !== 'same-origin') return c.text('Forbidden', 403)
+    } else if (origin) {
       try {
         if (new URL(origin).host.toLowerCase() !== host) return c.text('Forbidden', 403)
       } catch {
         return c.text('Forbidden', 403)
       }
     }
-    const fetchSite = c.req.header('sec-fetch-site')
     if (fetchSite && fetchSite !== 'same-origin') return c.text('Forbidden', 403)
     const theme = themeOf(c)
     const ip = c.env?.ip ?? c.req.header('x-real-ip') ?? 'unknown'
