@@ -111,6 +111,7 @@ export class IndexStore {
   readonly maxBytes: number
   /** Whether freed pages can go back to the filesystem (auto_vacuum = INCREMENTAL). */
   readonly reclaims: boolean
+  private sizeCache: { at: number; value: number } | null = null
   /** When the publisher last added a batch (this process). */
   lastAddAt: string | null = null
 
@@ -285,11 +286,21 @@ export class IndexStore {
 
   // ---- the byte budget ---------------------------------------------------------------
 
-  /** What the file takes on disk right now (two pragmas, no scan). */
-  sizeBytes(): number {
+  /**
+   * What the file takes on disk, from two pragmas and no scan -- but cached for a few
+   * seconds, because /stats asks on every request and /status gives the crawler a 3 s
+   * leash. Two processes write this file (the publish role, and a nichedb backfill), and
+   * a read waiting on `busy_timeout` behind one of them was enough to make /status
+   * flash "Offline" on a crawler that was perfectly healthy (2026-11-05).
+   */
+  sizeBytes(maxAgeMs = 5_000): number {
+    const now = Date.now()
+    if (this.sizeCache && now - this.sizeCache.at < maxAgeMs) return this.sizeCache.value
     const pages = (this.db.query('PRAGMA page_count').get() as { page_count: number }).page_count
     const size = (this.db.query('PRAGMA page_size').get() as { page_size: number }).page_size
-    return pages * size
+    const value = pages * size
+    this.sizeCache = { at: now, value }
+    return value
   }
 
   /**
@@ -310,12 +321,14 @@ export class IndexStore {
     // throw away the index.
     const keepMin = Math.max(0, Math.trunc(options.keepMin ?? 1_000))
     const idle = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
-    const bytesBefore = this.sizeBytes()
+    // Fresh figures here: a sweep that trusted a cached size would loop against a number
+    // its own deletes had already changed.
+    const bytesBefore = this.sizeBytes(0)
     if (!this.maxBytes || bytesBefore <= this.maxBytes) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: this.reclaims }
     const pick = this.db.prepare('SELECT id FROM pages ORDER BY fetched_at, id LIMIT ?')
     let deleted = 0
     let rounds = 0
-    while (rounds++ < maxBatches && this.sizeBytes() > this.maxBytes) {
+    while (rounds++ < maxBatches && this.sizeBytes(0) > this.maxBytes) {
       const room = this.count() - keepMin
       if (room < 1) break
       const rows = pick.all(Math.min(batch, room)) as Array<{ id: number }>
@@ -339,7 +352,7 @@ export class IndexStore {
       await idle(0)
     }
     this.statsCache = null
-    const bytesAfter = this.sizeBytes()
+    const bytesAfter = this.sizeBytes(0)
     return { deleted, bytesBefore, bytesAfter, done: bytesAfter <= this.maxBytes, reclaims: this.reclaims }
   }
 

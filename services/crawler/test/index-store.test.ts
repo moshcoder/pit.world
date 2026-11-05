@@ -110,6 +110,21 @@ describe('content and the byte budget', () => {
     for (const suffix of ['-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
   })
 
+  test('the size is cached for the health path, and trim always sees it fresh', async () => {
+    const path = `${tmpdir()}/pit-index-cache-${Date.now()}.db`
+    const store = new IndexStore(path, 1024 ** 3)
+    store.add([entry('https://a.example/', 'First', 'words')])
+    const first = store.sizeBytes()
+    // /stats asks on every request behind a 3 s leash, so the figure is cached: growth
+    // in between is not visible until the cache ages out.
+    store.add(Array.from({ length: 400 }, (_, i) => entry(`https://b.example/${i}`, `Page ${i}`, 'lorem ipsum '.repeat(300))))
+    expect(store.sizeBytes()).toBe(first)
+    // Asking for it fresh sees the truth, and so does a sweep.
+    expect(store.sizeBytes(0)).toBeGreaterThan(first)
+    store.close()
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
+  })
+
   test('an index inside its budget is left alone, and no budget means no trimming', async () => {
     const store = new IndexStore(':memory:', 1024 ** 3)
     store.add([entry('https://a.example/', 'Small', 'words')])

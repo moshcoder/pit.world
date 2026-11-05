@@ -164,9 +164,20 @@ export function fmt(value: number): string {
   return Math.round(value).toLocaleString('en-US')
 }
 
-/** Ask the crawler. Loopback, a short leash, and a few seconds of memory so a busy page does not hammer it. */
-export function createCrawlStatus(url: string, fetchImpl: typeof fetch = fetch, ttlMs = 5_000) {
+/**
+ * Ask the crawler. Loopback, a short leash, and a few seconds of memory so a busy page
+ * does not hammer it.
+ *
+ * One missed answer is not an outage. The crawler shares a box with everything else and
+ * answers /stats off the same event loop that renews its job locks, so a single call can
+ * run past the leash while the crawler is perfectly healthy -- and "Offline" is the one
+ * thing this page should not say wrongly, having said it for fourteen hours when it was
+ * true. So a failure inside `graceMs` of a good answer reports that answer, with the
+ * timestamp it was taken; only a crawler that has been quiet for longer reads as offline.
+ */
+export function createCrawlStatus(url: string, fetchImpl: typeof fetch = fetch, ttlMs = 5_000, graceMs = 60_000) {
   let cached: { at: number; value: CrawlStatus } | null = null
+  let lastGood: { at: number; value: CrawlStatus } | null = null
   return async function status(): Promise<CrawlStatus> {
     if (cached && Date.now() - cached.at < ttlMs) return cached.value
     let report: CrawlerReport | null = null
@@ -177,8 +188,11 @@ export function createCrawlStatus(url: string, fetchImpl: typeof fetch = fetch, 
     } catch {
       report = null
     }
-    const value = describe(report)
-    cached = { at: Date.now(), value }
+    const now = Date.now()
+    let value = describe(report)
+    if (report) lastGood = { at: now, value }
+    else if (lastGood && now - lastGood.at < graceMs) value = lastGood.value
+    cached = { at: now, value }
     return value
   }
 }
