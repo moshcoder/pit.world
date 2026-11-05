@@ -123,7 +123,11 @@ export class IndexStore {
     // budget existed keeps auto_vacuum = NONE: deletes still bound the rows, but the
     // file keeps its high-water mark, and trim() says so once rather than every sweep.
     this.db.exec('PRAGMA auto_vacuum = INCREMENTAL;')
-    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
+    // 30 s, not 5. WAL lets readers run while one writer works, but writers serialise, and
+    // this file has had two of them since the nichedb backfill existed: a publish batch or a
+    // trim sweep can hold the write lock longer than five seconds, and the backfill died of
+    // exactly that ("database is locked", 1.8M pages in, 2026-11-05).
+    this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 30000;')
     this.reclaims = (this.db.query('PRAGMA auto_vacuum').get() as { auto_vacuum: number } | null)?.auto_vacuum === 2
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS pages (
@@ -191,6 +195,31 @@ export class IndexStore {
     }
   }
 
+  /**
+   * Runs a write, waiting out the other writer if it has to.
+   *
+   * `busy_timeout` covers a lock held when the statement starts; it does not cover
+   * SQLITE_BUSY raised mid-transaction, which is what a second writer actually sees.
+   * The index-store header says one writer for a reason -- the publish role -- and the
+   * nichedb backfill made that two. Rather than pretend otherwise, a busy write waits
+   * and tries again, because losing the batch means losing the work that produced it.
+   */
+  private write<T>(run: () => T, attempts = 6): T {
+    let waitMs = 250
+    for (let attempt = 1; ; attempt++) {
+      try {
+        return run()
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error)
+        if (attempt >= attempts || !/database is locked|SQLITE_BUSY|database table is locked/i.test(message)) throw error
+        // Synchronous on purpose: this is bun:sqlite, and the caller is inside a batch it
+        // has to finish. Backs off 0.25s, 0.5s, 1s, 2s, 4s -- about eight seconds in all.
+        Bun.sleepSync(waitMs)
+        waitMs *= 2
+      }
+    }
+  }
+
   private meta(key: string): string | null {
     return (this.db.query('SELECT value FROM corpus_meta WHERE key = ?').get(key) as { value: string } | null)?.value ?? null
   }
@@ -226,7 +255,8 @@ export class IndexStore {
     let kept = 0
     let hwm = Number(this.meta('pages_hwm') ?? 0)
     let live = Number(this.meta('pages_live') ?? 0)
-    this.db.transaction(() => {
+    this.write(() =>
+      this.db.transaction(() => {
       for (const raw of entries) {
         let entry: IndexedRecord
         try {
@@ -279,7 +309,8 @@ export class IndexStore {
         this.setMeta('pages_hwm', String(hwm))
         this.setMeta('pages_live', String(live))
       }
-    })()
+      })(),
+    )
     if (kept) this.lastAddAt = new Date().toISOString()
     return kept
   }
@@ -335,13 +366,15 @@ export class IndexStore {
       if (rows.length < 1) break
       // The ids are scattered now that they are picked by date, so they go as a list.
       const ids = rows.map((r) => r.id).join(',')
-      this.db.transaction(() => {
+      this.write(() =>
+        this.db.transaction(() => {
         // threatcrush-disable-next-line sql-template-interpolation  ids come from this table's own INTEGER PRIMARY KEY, never from a request
         this.db.run(`DELETE FROM page_policy WHERE id IN (${ids})`)
         // threatcrush-disable-next-line sql-template-interpolation  same ids, read out of the index a line above
         this.db.run(`DELETE FROM pages WHERE id IN (${ids})`)
         this.setMeta('pages_live', String(Math.max(0, Number(this.meta('pages_live') ?? 0) - rows.length)))
-      })()
+        })(),
+      )
       deleted += rows.length
       // Hand the freed pages back to the filesystem. Without INCREMENTAL they only
       // reach the freelist, so the file never shrinks and the loop would not end:

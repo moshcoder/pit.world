@@ -78,7 +78,7 @@ describe('the backfill', () => {
     const store = new IndexStore(path, 1024 ** 3)
     const { fake, seen } = serve([[item(30), item(29)], [item(28)]])
     const result = await importFromNichedb(store, { nichedbUrl: 'https://nichedb.test', key: 'k1', fetch: fake, pageSize: 2, pauseMs: 0 })
-    expect(result).toMatchObject({ read: 3, kept: 3, skipped: 0, cursor: null })
+    expect(result).toMatchObject({ read: 3, kept: 3, skipped: 0, locked: 0, cursor: null })
     expect(store.count()).toBe(3)
     // Searchable on what the record carried.
     expect(store.search('alpha')).toHaveLength(3)
@@ -134,6 +134,41 @@ describe('the backfill', () => {
     expect(store.count()).toBe(1)
     expect(store.search('old')).toHaveLength(0)
     expect(store.search('fresh')).toHaveLength(1)
+    store.close()
+    clean(path)
+  })
+})
+
+describe('the other writer', () => {
+  test('a locked batch is waited out and read again, not thrown away', async () => {
+    const path = temp('locked')
+    const store = new IndexStore(path, 1024 ** 3)
+    // The publish role holds the write lock: the first add() fails, the retry lands.
+    let attempts = 0
+    const realAdd = store.add.bind(store)
+    store.add = ((batch: Parameters<typeof realAdd>[0]) => {
+      if (++attempts === 1) throw new Error('database is locked')
+      return realAdd(batch)
+    }) as typeof store.add
+    const { fake } = serve([[item(80), item(79)], [item(80), item(79)], [item(78)]])
+    const result = await importFromNichedb(store, { nichedbUrl: 'https://nichedb.test', fetch: fake, pageSize: 2, pauseMs: 0 })
+    expect(result.locked).toBe(1)
+    // Both records of the locked page are in, and counted once.
+    expect(store.count()).toBe(3)
+    expect(result.read).toBe(3)
+    expect(store.search('body of 80')).toHaveLength(1)
+    store.close()
+    clean(path)
+  }, 20_000)
+
+  test('a failure that is not a lock still stops the run', async () => {
+    const path = temp('throw')
+    const store = new IndexStore(path, 1024 ** 3)
+    store.add = (() => {
+      throw new Error('disk I/O error')
+    }) as typeof store.add
+    const { fake } = serve([[item(90)]])
+    await expect(importFromNichedb(store, { nichedbUrl: 'https://nichedb.test', fetch: fake, pageSize: 2, pauseMs: 0 })).rejects.toThrow('disk I/O error')
     store.close()
     clean(path)
   })
