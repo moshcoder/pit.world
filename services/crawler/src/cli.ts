@@ -13,7 +13,7 @@
  *   pit-crawler read <url> [--render]        read one page now and print its record (no Redis)
  */
 import { readFileSync } from 'node:fs'
-import { configFromEnv, VERSION } from './config.ts'
+import { type Config, configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
@@ -92,13 +92,6 @@ async function worker() {
           if (path === '/api/v1/corpus/stats') {
             return Response.json(runtime.index.corpusStats())
           }
-          if (path === '/api/v1/media') {
-            const q = (url.searchParams.get('q') ?? '').slice(0, 512)
-            const kind = url.searchParams.get('kind') === 'video' ? 'video' : 'image'
-            const limit = Number(url.searchParams.get('limit')) || 20
-            const items = q ? runtime.index.searchMedia(q, kind, limit) : []
-            return Response.json({ q, kind, count: items.length, items })
-          }
           if (path !== '/healthz' && path !== '/stats') return new Response('not found', { status: 404 })
           try {
             // /healthz is the cheap one (Docker asks every 30 s); /stats is what pit.world/status reads.
@@ -115,16 +108,57 @@ async function worker() {
   // pages on its robots.txt and tdmrep.json (re-crawls add the page's own headers and meta).
   const backfill = config.roles.includes('publish') ? startPolicyBackfill(runtime, log, config.indexPath) : null
 
+  // The mirror inside its byte budget. The publish role is the only writer, so it is the
+  // only one that may delete; a page dropped here is still on nichedb, and comes back on
+  // its next recrawl.
+  const trimmer = config.roles.includes('publish') && config.indexMaxBytes ? startIndexTrim(runtime, log, config) : null
+
   const stop = async () => {
     log('stopping')
     clearInterval(watchdog)
     backfill?.stop()
+    trimmer?.stop()
     server?.stop()
     await Promise.race([running.close(), new Promise((resolve) => setTimeout(resolve, 20_000))])
     process.exit(0)
   }
   process.on('SIGTERM', stop)
   process.on('SIGINT', stop)
+}
+
+const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(1)} GB`
+
+function startIndexTrim(runtime: Runtime, log: (line: string) => void, config: Config) {
+  let stopped = false
+  let running = false
+  let warned = false
+  const sweep = async () => {
+    if (stopped || running) return
+    running = true
+    try {
+      const result = await runtime.index.trim()
+      if (!result.reclaims && result.bytesBefore > config.indexMaxBytes && !warned) {
+        warned = true
+        log(
+          `index trim: ${gb(result.bytesBefore)} is over the ${gb(config.indexMaxBytes)} budget, but this index was made with auto_vacuum = NONE, ` +
+            'so deleting rows cannot give the space back. Rebuild it (the records are on nichedb) or give it its own disk.',
+        )
+      }
+      if (result.deleted) log(`index trim: dropped ${result.deleted} pages, ${gb(result.bytesBefore)} -> ${gb(result.bytesAfter)} (budget ${gb(config.indexMaxBytes)})${result.done ? '' : ', more next sweep'}`)
+    } catch (error) {
+      log(`index trim: ${(error as Error).message}`)
+    } finally {
+      running = false
+    }
+  }
+  void sweep()
+  const timer = setInterval(sweep, config.indexTrimMs)
+  return {
+    stop() {
+      stopped = true
+      clearInterval(timer)
+    },
+  }
 }
 
 function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, indexPath: string) {

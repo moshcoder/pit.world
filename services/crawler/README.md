@@ -24,6 +24,27 @@ seed (nichedb sites, ring, file, names)
   description), word and link counts, whether it was rendered, link depth, and a hash of the
   text: an unchanged page is not written again.
 
+## The local mirror, and why it has a size
+
+Everything published also goes into a SQLite FTS5 file (`/data/index.db`) that answers
+`/api/v1/search` in milliseconds, because nichedb's own full-text search takes seconds and
+pit.world gives a slow engine 2.5 s. nichedb is the archive; this file is a cache.
+
+Unbounded, that cache reached **207 GB in 2.7 days** and filled dev2's root filesystem, which
+truncated the append-only file of every other Redis on the box (2026-11-04). So:
+
+- It keeps **no media**. Images and videos travel on the nichedb record, where they are read
+  from; the 135M rows, the UNIQUE index and the second FTS copy they used to cost here
+  (~75 GB of that 207 GB) had no reader at all.
+- It lives inside **`CRAWL_INDEX_MAX_BYTES`** (60 GB by default). Over it, the publish role
+  drops its oldest pages, 2,000 at a time between event-loop turns, and never below 1,000
+  pages. A dropped page is still on nichedb and comes back on its next recrawl.
+- It is created with `auto_vacuum = INCREMENTAL`, so freed pages go back to the filesystem.
+  An index made before this keeps `auto_vacuum = NONE`: deleting rows still bounds it, but
+  the file keeps its high-water mark, so rebuild it rather than expecting it to shrink.
+
+`/stats` reports `index_bytes` against `index_max_bytes`, so /status shows the headroom.
+
 ## Training opt-outs
 
 Every page gets a training verdict at crawl time (`trainingFor` in `src/crawler.ts`), kept in the
@@ -82,6 +103,8 @@ curl 127.0.0.1:8807/api/v1/corpus/stats
 | `OBSCURA_MCP_TOKEN` | none | Obscura's bearer token (32+ bytes) |
 | `NICHEDB_URL` / `NICHEDB_API_KEY` | nichedb.dev / none | an admin key; without one records wait in the outbox |
 | `CRAWL_HEALTH_PORT` | 8797 | `/healthz` with queue depths and counters |
+| `CRAWL_INDEX_MAX_BYTES` | 64424509440 (60 GB) | the mirror's byte budget; over it the oldest pages go. 0 turns it off, which only a box with its own disk for the index should do |
+| `CRAWL_INDEX_TRIM_MS` | 300000 | how often the publish role checks the budget |
 
 ## Deploy (dev2)
 

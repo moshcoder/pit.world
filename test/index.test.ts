@@ -87,6 +87,27 @@ describe('crawler status', () => {
     expect(json.health).toBe('healthy')
   })
 
+  it('shows the index against its budget, and says when it is making room', async () => {
+    const bounded = report({ stats: { sites: 3, outbox: 12, pages_indexed: 40, pages_rendered: 2, published: 30, index_pages: 40, index_bytes: 32 * 1024 ** 3, index_max_bytes: 60 * 1024 ** 3 } })
+    const st = describeCrawl(bounded)
+    expect(st.index).toEqual({ bytes: 32 * 1024 ** 3, maxBytes: 60 * 1024 ** 3 })
+    expect(st.summary).not.toContain('size budget')
+    const app = createApp({ keys: {}, crawlStatus: async () => st })
+    const page = await (await app.request('/status')).text()
+    expect(page).toContain('Index size')
+    expect(page).toContain('32 GB')
+    expect(page).toContain('of a 60 GB budget')
+
+    // At the budget it keeps working by dropping its oldest pages, and the page says so.
+    const full = describeCrawl(report({ stats: { ...bounded.stats, index_bytes: 59 * 1024 ** 3 } }))
+    expect(full.health).toBe('healthy')
+    expect(full.summary).toContain('at its size budget')
+
+    // A crawler with no budget set (its own disk) reports no tile rather than a wrong one.
+    expect(describeCrawl(report()).index).toBeNull()
+    expect(describeCrawl(null).index).toBeNull()
+  })
+
   it('a crawler that does not answer is shown as offline, not as an error page', async () => {
     const down = createCrawlStatus('http://127.0.0.1:9', (async () => {
       throw new Error('refused')

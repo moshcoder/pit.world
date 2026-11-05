@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 import { configFromEnv } from '../src/config.ts'
 import { createCrawler } from '../src/crawler.ts'
 import { MemoryFrontier } from '../src/frontier.ts'
+import { rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { IndexStore, toFtsTerms } from '../src/index-store.ts'
 
 const entry = (url: string, title: string, body: string, keywords: string[] = []) => ({
@@ -52,7 +54,7 @@ describe('the local search mirror', () => {
   })
 })
 
-describe('content and media in the local index', () => {
+describe('content and the byte budget', () => {
   const page = (title: string, text: string, images: Array<{ url: string; alt: string }>, videos: Array<{ url: string; title: string }>) => ({
     record: { url: 'https://ovens.example/v', canonical: 'https://ovens.example/v', title, description: 'Short.', kind: 'page', language: 'en', fetched_at: '2026-11-02T00:00:00.000Z' },
     enrichment: { excerpt: text.slice(0, 50), text, images: images.map((i) => ({ ...i, width: null, height: null })), videos: videos.map((v) => ({ ...v, thumbnail: null, provider: null })) },
@@ -62,16 +64,73 @@ describe('content and media in the local index', () => {
     store.add([page('Ovens', 'intro '.repeat(100) + 'zebracorn', [], [])])
     expect(store.search('zebracorn')).toHaveLength(1)
   })
-  test('images and videos are searchable by their words and the page title; a re-crawl replaces them', () => {
+
+  test('media on a record is published, never kept here: no table, no rows, no cost', () => {
     const store = new IndexStore(':memory:')
-    store.add([page('Wood-fired ovens', 'x', [{ url: 'https://ovens.example/dome.jpg', alt: 'Brick dome at night' }], [{ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', title: 'Firing it up' }])])
-    expect(store.searchMedia('brick dome', 'image').map((m) => m.url)).toEqual(['https://ovens.example/dome.jpg'])
-    expect(store.searchMedia('wood-fired', 'video')[0]).toMatchObject({ page: 'https://ovens.example/v', page_title: 'Wood-fired ovens', site: 'ovens.example' })
-    expect(store.mediaCount()).toEqual({ images: 1, videos: 1 })
-    store.add([page('Wood-fired ovens', 'x', [{ url: 'https://ovens.example/new.jpg', alt: 'New door' }], [])])
-    expect(store.mediaCount()).toEqual({ images: 1, videos: 0 })
-    expect(store.searchMedia('brick', 'image')).toEqual([])
-    expect(store.searchMedia('door', 'image')).toHaveLength(1)
-    for (const q of ['C#', 'catch-all', 'foo(bar']) expect(() => store.searchMedia(q, 'image')).not.toThrow()
+    store.add([page('Wood-fired ovens', 'x', [{ url: 'https://ovens.example/dome.jpg', alt: 'Brick dome at night' }], [{ url: 'https://youtu.be/x', title: 'Firing it up' }])])
+    expect(store.count()).toBe(1)
+    expect(store.tables()).not.toContain('media')
+    expect(store.tables()).not.toContain('media_fts')
+  })
+
+  test('an index over its budget drops its oldest pages and gives the space back', async () => {
+    const path = `${tmpdir()}/pit-index-trim-${Date.now()}.db`
+    const fat = 'lorem ipsum dolor sit amet '.repeat(200)
+    const fill = new IndexStore(path)
+    // A word only the first page has and one only the last has, so the test can tell
+    // which end was dropped without relying on how a title tokenizes.
+    for (let batch = 0; batch < 5; batch++)
+      fill.add(
+        Array.from({ length: 200 }, (_, i) => {
+          const first = batch === 0 && i === 0
+          const last = batch === 4 && i === 199
+          return entry(`https://a.example/${batch}-${i}`, `Page ${batch}-${i}`, `${fat}${first ? ' aardvarkzero' : ''}${last ? ' zebraomega' : ''}`)
+        }),
+      )
+    expect(fill.count()).toBe(1_000)
+    const grown = fill.sizeBytes()
+    fill.close()
+
+    // Half of what it grew to: it has to let go of roughly half its pages.
+    const store = new IndexStore(path, Math.floor(grown / 2))
+    expect(store.reclaims).toBe(true)
+    const result = await store.trim({ batch: 100, keepMin: 100 })
+    expect(result.deleted).toBeGreaterThan(0)
+    expect(result.bytesAfter).toBeLessThan(result.bytesBefore)
+    expect(store.sizeBytes()).toBeLessThanOrEqual(store.maxBytes)
+    expect(store.count()).toBe(1_000 - result.deleted)
+    // The newest pages are the ones it kept, and they are still searchable; the
+    // oldest is gone from the index as well as from the table.
+    expect(store.search('zebraomega')).toHaveLength(1)
+    expect(store.search('aardvarkzero')).toHaveLength(0)
+    // A page that survived keeps its id, so a corpus cursor still means what it meant.
+    expect(store.highWaterMark()).toBe(1_000)
+    store.close()
+    rmSync(path, { force: true })
+    for (const suffix of ['-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
+  })
+
+  test('an index inside its budget is left alone, and no budget means no trimming', async () => {
+    const store = new IndexStore(':memory:', 1024 ** 3)
+    store.add([entry('https://a.example/', 'Small', 'words')])
+    expect(await store.trim()).toMatchObject({ deleted: 0, done: true })
+    const unbounded = new IndexStore(':memory:')
+    unbounded.add([entry('https://a.example/', 'Small', 'words')])
+    expect(await unbounded.trim()).toMatchObject({ deleted: 0, done: true })
+    expect(unbounded.maxBytes).toBe(0)
+  })
+
+  test('a budget too small to meet leaves a working index rather than an empty one', async () => {
+    const path = `${tmpdir()}/pit-index-floor-${Date.now()}.db`
+    const fill = new IndexStore(path)
+    fill.add(Array.from({ length: 300 }, (_, i) => entry(`https://a.example/${i}`, `Page ${i}`, `${'lorem ipsum '.repeat(200)}${i === 299 ? ' newest' : ''}`)))
+    fill.close()
+    const store = new IndexStore(path, 4096)
+    const result = await store.trim({ batch: 50, keepMin: 100 })
+    expect(result.done).toBe(false)
+    expect(store.count()).toBe(100)
+    expect(store.search('newest')).toHaveLength(1)
+    store.close()
+    for (const suffix of ['', '-wal', '-shm']) rmSync(`${path}${suffix}`, { force: true })
   })
 })

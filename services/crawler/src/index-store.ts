@@ -10,6 +10,16 @@
  *
  * Written by the publish role (one writer), read by the health server. A
  * record is keyed by canonical address, so a re-crawl replaces it.
+ *
+ * It is a cache, not the archive: nichedb keeps every record for good, this
+ * file only has to answer fast. So it lives inside a byte budget
+ * (CRAWL_INDEX_MAX_BYTES) and drops its oldest pages to stay there. Without
+ * that it grew to 207 GB in 2.7 days and filled dev2's root filesystem, which
+ * truncated the append-only file of every other Redis on the box (2026-11-04).
+ * Two things make the budget keepable: `auto_vacuum = INCREMENTAL`, so freed
+ * pages go back to the filesystem rather than to a freelist this disk cannot
+ * afford, and not keeping media here at all -- images and videos are published
+ * on the nichedb record, and nothing ever read them back from this file.
  */
 import { Database } from 'bun:sqlite'
 import { mkdirSync } from 'node:fs'
@@ -28,8 +38,6 @@ export type IndexedRecord = {
     videos?: Array<{ url: string; title?: string; thumbnail?: string | null; provider?: string | null }>
   }
 }
-
-export type MediaHit = { kind: 'image' | 'video'; url: string; text: string; thumbnail: string | null; width: number | null; height: number | null; provider: string | null; page: string; page_title: string; site: string; score: number }
 
 export type IndexHit = { url: string; title: string; summary: string; site: string; kind: string; fetched_at: string; score: number }
 
@@ -99,13 +107,23 @@ const TOTAL_CAP = 10_000
 export class IndexStore {
   private db: Database
   private statsCache: { at: number; value: Record<string, unknown> } | null = null
+  /** Bytes the file may use before trim() drops its oldest pages. 0: no budget. */
+  readonly maxBytes: number
+  /** Whether freed pages can go back to the filesystem (auto_vacuum = INCREMENTAL). */
+  readonly reclaims: boolean
   /** When the publisher last added a batch (this process). */
   lastAddAt: string | null = null
 
-  constructor(path: string) {
+  constructor(path: string, maxBytes = 0) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true })
+    this.maxBytes = maxBytes > 0 ? maxBytes : 0
     this.db = new Database(path, { create: true })
+    // auto_vacuum only takes on an empty database, so an index made before the byte
+    // budget existed keeps auto_vacuum = NONE: deletes still bound the rows, but the
+    // file keeps its high-water mark, and trim() says so once rather than every sweep.
+    this.db.exec('PRAGMA auto_vacuum = INCREMENTAL;')
     this.db.exec('PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA busy_timeout = 5000;')
+    this.reclaims = (this.db.query('PRAGMA auto_vacuum').get() as { auto_vacuum: number } | null)?.auto_vacuum === 2
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS pages (
         id INTEGER PRIMARY KEY,
@@ -129,21 +147,6 @@ export class IndexStore {
       CREATE TRIGGER IF NOT EXISTS pages_ad AFTER DELETE ON pages BEGIN
         INSERT INTO pages_fts(pages_fts, rowid, title, description, keywords, body, site) VALUES ('delete', old.id, old.title, old.description, old.keywords, old.body, old.site);
       END;
-      -- Images and videos a page shows: references only, never the files.
-      CREATE TABLE IF NOT EXISTS media (
-        id INTEGER PRIMARY KEY,
-        page_url TEXT NOT NULL,
-        kind TEXT NOT NULL,
-        url TEXT NOT NULL,
-        text TEXT NOT NULL DEFAULT '',
-        thumbnail TEXT,
-        width INTEGER,
-        height INTEGER,
-        provider TEXT,
-        UNIQUE (page_url, url)
-      );
-      CREATE INDEX IF NOT EXISTS media_page ON media (page_url);
-      CREATE VIRTUAL TABLE IF NOT EXISTS media_fts USING fts5(text, page_title, tokenize='unicode61 remove_diacritics 2');
       -- The training corpus's view of each page: whether its publisher left AI training open
       -- (train 1), reserved it (0) or it is not known yet (NULL, pages indexed before this was
       -- recorded, until the backfill or a re-crawl decides). Its own small table: an UPDATE
@@ -168,6 +171,31 @@ export class IndexStore {
         INSERT INTO pages_fts(rowid, title, description, keywords, body, site) VALUES (new.id, new.title, new.description, new.keywords, new.body, new.site);
       END;
     `)
+    // Media used to be kept here too: 135M rows, a UNIQUE index over (page_url, url) and an
+    // FTS5 table that stored a second copy of every alt text, about 75 GB of the 207 GB, and
+    // no reader -- pit.world's Images and Videos tabs come from the media search providers,
+    // never from this file. The references still travel on the nichedb record.
+    this.db.exec('DROP TABLE IF EXISTS media_fts; DROP TABLE IF EXISTS media;')
+    // How many pages are actually here. max(id) stopped being that answer when trim()
+    // began deleting from the low end, and count(*) over millions of rows blocks the
+    // event loop for seconds (2026-11-02), so it is kept as it changes.
+    if (!this.meta('pages_live')) {
+      const hwm = this.maxId()
+      this.setMeta('pages_live', String(hwm))
+      this.setMeta('pages_hwm', String(hwm))
+    }
+  }
+
+  private meta(key: string): string | null {
+    return (this.db.query('SELECT value FROM corpus_meta WHERE key = ?').get(key) as { value: string } | null)?.value ?? null
+  }
+
+  private setMeta(key: string, value: string): void {
+    this.db.run('INSERT INTO corpus_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value', [key, value])
+  }
+
+  private maxId(): number {
+    return (this.db.query('SELECT coalesce(max(id), 0) AS n FROM pages').get() as { n: number }).n
   }
 
   /** Keep a batch (one transaction). Entries are the outbox's JSON lines or objects. */
@@ -190,13 +218,9 @@ export class IndexStore {
         reason = CASE WHEN excluded.source = 'crawl' THEN excluded.reason ELSE page_policy.reason END,
         source = CASE WHEN excluded.source = 'crawl' THEN 'crawl' ELSE page_policy.source END
     `)
-    const addMedia = this.db.prepare(
-      'INSERT OR IGNORE INTO media (page_url, kind, url, text, thumbnail, width, height, provider) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id',
-    )
-    const addFts = this.db.prepare('INSERT INTO media_fts (rowid, text, page_title) VALUES (?, ?, ?)')
-    const dropFts = this.db.prepare('DELETE FROM media_fts WHERE rowid IN (SELECT id FROM media WHERE page_url = ?)')
-    const clearMedia = this.db.prepare('DELETE FROM media WHERE page_url = ?')
     let kept = 0
+    let hwm = Number(this.meta('pages_hwm') ?? 0)
+    let live = Number(this.meta('pages_live') ?? 0)
     this.db.transaction(() => {
       for (const raw of entries) {
         let entry: IndexedRecord
@@ -238,21 +262,79 @@ export class IndexStore {
             $reason: training ? String(training.reason ?? '').slice(0, 120) : null,
             $source: training ? 'crawl' : 'legacy',
           })
-        // A re-crawl replaces the page's media wholesale.
-        dropFts.run(r.canonical)
-        clearMedia.run(r.canonical)
-        const pageTitle = r.title ?? site
-        const add = (kind: 'image' | 'video', url: string, text: string, thumbnail: string | null, width: number | null, height: number | null, provider: string | null) => {
-          const row = addMedia.get(r.canonical, kind, url, text, thumbnail, width, height, provider) as { id: number } | null
-          if (row) addFts.run(row.id, text, pageTitle)
+        // A new row always takes an id above every id ever used, so this tells an
+        // insert from an upsert without asking the database to count anything.
+        if (row && row.id > hwm) {
+          hwm = row.id
+          live++
         }
-        for (const img of entry.enrichment?.images ?? []) if (img?.url) add('image', img.url, img.alt ?? '', null, img.width ?? null, img.height ?? null, null)
-        for (const vid of entry.enrichment?.videos ?? []) if (vid?.url) add('video', vid.url, vid.title ?? '', vid.thumbnail ?? null, null, null, vid.provider ?? null)
         kept++
+      }
+      if (kept) {
+        this.setMeta('pages_hwm', String(hwm))
+        this.setMeta('pages_live', String(live))
       }
     })()
     if (kept) this.lastAddAt = new Date().toISOString()
     return kept
+  }
+
+  // ---- the byte budget ---------------------------------------------------------------
+
+  /** What the file takes on disk right now (two pragmas, no scan). */
+  sizeBytes(): number {
+    const pages = (this.db.query('PRAGMA page_count').get() as { page_count: number }).page_count
+    const size = (this.db.query('PRAGMA page_size').get() as { page_size: number }).page_size
+    return pages * size
+  }
+
+  /**
+   * Brings the file back inside its budget by dropping its oldest pages, in small
+   * batches so one sweep never holds the event loop (BullMQ renews its locks on the
+   * same loop, and a stalled renewal is what read as "Offline" before).
+   *
+   * Oldest first, by id: the mirror is what pit.world searches now, so the newest
+   * crawl is the part worth keeping, and a dropped page comes back on its next
+   * recrawl. Every record is still on nichedb either way.
+   */
+  async trim(options: { batch?: number; maxBatches?: number; keepMin?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ deleted: number; bytesBefore: number; bytesAfter: number; done: boolean; reclaims: boolean }> {
+    const batch = Math.max(1, Math.trunc(options.batch ?? 2_000))
+    const maxBatches = Math.max(1, Math.trunc(options.maxBatches ?? 50))
+    // A budget too small for the index's own overhead must leave a working mirror
+    // rather than empty it: a wrong number in the environment is not a reason to
+    // throw away the index.
+    const keepMin = Math.max(0, Math.trunc(options.keepMin ?? 1_000))
+    const idle = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
+    const bytesBefore = this.sizeBytes()
+    if (!this.maxBytes || bytesBefore <= this.maxBytes) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: this.reclaims }
+    const pick = this.db.prepare('SELECT id FROM pages ORDER BY id LIMIT ?')
+    const dropPages = this.db.prepare('DELETE FROM pages WHERE id <= ?')
+    const dropPolicy = this.db.prepare('DELETE FROM page_policy WHERE id <= ?')
+    let deleted = 0
+    let rounds = 0
+    while (rounds++ < maxBatches && this.sizeBytes() > this.maxBytes) {
+      const room = this.count() - keepMin
+      if (room < 1) break
+      const rows = pick.all(Math.min(batch, room)) as Array<{ id: number }>
+      if (rows.length < 1) break
+      const upTo = rows[rows.length - 1]!.id
+      this.db.transaction(() => {
+        dropPolicy.run(upTo)
+        dropPages.run(upTo)
+        this.setMeta('pages_live', String(Math.max(0, Number(this.meta('pages_live') ?? 0) - rows.length)))
+      })()
+      deleted += rows.length
+      // Hand the freed pages back to the filesystem. Without INCREMENTAL they only
+      // reach the freelist, so the file never shrinks and the loop would not end:
+      // the row deletes still bound the index, so stop and let the log say why.
+      if (this.reclaims) this.db.exec('PRAGMA incremental_vacuum(4000);')
+      else break
+      if (rows.length < Math.min(batch, room)) break
+      await idle(0)
+    }
+    this.statsCache = null
+    const bytesAfter = this.sizeBytes()
+    return { deleted, bytesBefore, bytesAfter, done: bytesAfter <= this.maxBytes, reclaims: this.reclaims }
   }
 
   // ---- the training corpus (/api/corpus) ---------------------------------------------------
@@ -269,7 +351,7 @@ export class IndexStore {
     const budget = query.budgetMs ?? 800
     const start = Math.max(0, Math.trunc(query.cursor ?? 0))
     const match = query.q ? corpusMatch(query.q) : null
-    const maxId = this.count()
+    const maxId = this.highWaterMark()
     const filters: string[] = []
     const params: Array<string | number> = []
     if (query.site) {
@@ -419,30 +501,6 @@ export class IndexStore {
     })()
   }
 
-  /** Images or videos whose own words (alt text, title) or page title match. */
-  searchMedia(query: string, kind: 'image' | 'video', limit = 20): MediaHit[] {
-    const terms = toFtsTerms(query)
-    if (!terms.length) return []
-    const run = (match: string) =>
-      this.db
-        .query(
-          `SELECT m.kind, m.url, m.text, m.thumbnail, m.width, m.height, m.provider, m.page_url AS page,
-                  p.title AS page_title, p.site, bm25(media_fts, 5.0, 1.0) AS score
-           FROM media_fts JOIN media m ON m.id = media_fts.rowid JOIN pages p ON p.url = m.page_url
-           WHERE media_fts MATCH ? AND m.kind = ?
-           ORDER BY score LIMIT ?`,
-        )
-        .all(match, kind, Math.min(Math.max(1, limit), 50)) as MediaHit[]
-    const all = run(terms.join(' AND '))
-    return all.length || terms.length === 1 ? all : run(terms.join(' OR '))
-  }
-
-  /** Full scan: tests and one-off checks only, never a request path. */
-  mediaCount(): { images: number; videos: number } {
-    const rows = this.db.query('SELECT kind, count(*) AS n FROM media GROUP BY kind').all() as Array<{ kind: string; n: number }>
-    return { images: rows.find((r) => r.kind === 'image')?.n ?? 0, videos: rows.find((r) => r.kind === 'video')?.n ?? 0 }
-  }
-
   /** Best matches: every word if any page has them all, else any word. Title weighs most. */
   search(query: string, limit = 10): IndexHit[] {
     const terms = toFtsTerms(query)
@@ -463,12 +521,23 @@ export class IndexStore {
   }
 
   /**
-   * Pages kept, instantly: the highest id. Rows are upserted, never deleted, so it is the
-   * count. A count(*) here took 14 s at 812k pages and blocked the event loop until the
-   * health check failed (2026-11-02).
+   * Pages kept, instantly: a counter add() and trim() keep up to date. A count(*) here
+   * took 14 s at 812k pages and blocked the event loop until the health check failed
+   * (2026-11-02), and max(id) stopped being the answer once trim() deletes from the
+   * low end.
    */
   count(): number {
-    return (this.db.query('SELECT coalesce(max(id), 0) AS n FROM pages').get() as { n: number }).n
+    return Number(this.meta('pages_live') ?? 0)
+  }
+
+  /** Which tables the file actually has, for tests and one-off checks. */
+  tables(): string[] {
+    return (this.db.query("SELECT name FROM sqlite_master WHERE type IN ('table','view') ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name)
+  }
+
+  /** The highest id ever used: the top of the id space a corpus scan has to cover. */
+  highWaterMark(): number {
+    return Math.max(Number(this.meta('pages_hwm') ?? 0), this.maxId())
   }
 
   close(): void {

@@ -638,6 +638,7 @@ export function privacyPage(): string {
 export function statusPage(st: CrawlStatus): string {
   const label: Record<string, string> = { healthy: 'Healthy', idle: 'Idle', degraded: 'Degraded', stalled: 'Stalled', offline: 'Offline' }
   const stat = (name: string, value: string, note: string) => `<div class="stat"><span class="stat-label">${esc(name)}</span><b>${esc(value)}</b><small>${esc(note)}</small></div>`
+  const gbytes = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(bytes < 10 * 1024 ** 3 ? 1 : 0)} GB`
   const ago = (iso: string) => {
     const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
     return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`
@@ -693,6 +694,7 @@ ${stat('Pages read', fmt(st.totals.pagesIndexed), `${fmt(st.totals.pagesRendered
 ${stat('Read (1h)', fmt(st.lastHour.pages), `${fmt(st.lastHour.rendered)} rendered`)}
 ${stat('Read (24h)', fmt(st.lastDay.pages), `${fmt(st.lastDay.sitesStarted)} sites started`)}
 ${stat('Searchable', fmt(st.totals.searchable), 'pages in the index pit.world searches')}
+${st.index ? stat('Index size', gbytes(st.index.bytes), st.index.maxBytes ? `of a ${gbytes(st.index.maxBytes)} budget; oldest pages make room` : 'no budget set') : ''}
 ${stat('Images', fmt(st.totals.images), 'found on those pages, by reference')}
 ${stat('Videos', fmt(st.totals.videos), 'embedded or linked, by reference')}
 ${stat('Published', fmt(st.totals.published), `${fmt(st.lastHour.published)} in the last hour`)}
