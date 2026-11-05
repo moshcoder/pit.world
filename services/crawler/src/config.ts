@@ -49,6 +49,15 @@ export type Config = {
   healthHost: string
   /** The local search mirror (SQLite FTS5) the publish role writes and /api/v1/search reads. */
   indexPath: string
+  /**
+   * Bytes the mirror may use. Over it, the publish role drops its oldest pages (they
+   * stay on nichedb, and come back on a recrawl). Unbounded it reached 207 GB in 2.7
+   * days and filled dev2's root filesystem, taking every other Redis on the box with
+   * it; 0 turns the budget off, which only a box with its own disk for this should do.
+   */
+  indexMaxBytes: number
+  /** How often the publish role checks the mirror against its budget. */
+  indexTrimMs: number
   userAgent: string
 }
 
@@ -88,6 +97,8 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     // Loopback on a host; 0.0.0.0 inside a container, whose port is published on the host's loopback.
     healthHost: env.CRAWL_HEALTH_HOST ?? '127.0.0.1',
     indexPath: env.CRAWL_INDEX_PATH ?? './data/index.db',
+    indexMaxBytes: num(env.CRAWL_INDEX_MAX_BYTES, 60 * 1024 ** 3, 0),
+    indexTrimMs: num(env.CRAWL_INDEX_TRIM_MS, 300_000, 1_000),
     userAgent: env.CRAWL_USER_AGENT ?? USER_AGENT,
   }
 }

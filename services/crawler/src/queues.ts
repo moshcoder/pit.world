@@ -80,7 +80,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
   }
   const frontier = new RedisFrontier(redis, config.maxPages, Math.min(config.seenTtlMs, config.recrawlDays * 86_400_000))
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
-  const index = new IndexStore(config.indexPath)
+  const index = new IndexStore(config.indexPath, config.indexMaxBytes)
   const crawler = createCrawler({
     config,
     frontier,
@@ -276,6 +276,8 @@ export async function report(runtime: Runtime, config: Config) {
   const stats: Record<string, number> = {
     ...snap.stats,
     index_pages: runtime.index.count(),
+    index_bytes: runtime.index.sizeBytes(),
+    index_max_bytes: runtime.index.maxBytes,
     index_images: snap.stats.images_found ?? 0,
     index_videos: snap.stats.videos_found ?? 0,
   }

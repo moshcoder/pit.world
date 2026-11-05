@@ -41,6 +41,8 @@ export type CrawlStatus = {
   summary: string
   reachable: boolean
   totals: { sites: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number; images: number; videos: number }
+  /** The local mirror against its byte budget. The index filling the disk is what took the box down on 2026-11-04, so it is on the page. */
+  index: { bytes: number; maxBytes: number } | null
   lastHour: { pages: number; rendered: number; failed: number; published: number; sitesStarted: number }
   lastDay: { pages: number; rendered: number; failed: number; published: number; sitesStarted: number }
   jobs: Job[]
@@ -76,6 +78,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       summary: 'The crawler did not answer. Searches still work; the index just is not growing right now.',
       reachable: false,
       totals: { sites: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0, images: 0, videos: 0 },
+      index: null,
       lastHour: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
       lastDay: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
       jobs: [],
@@ -126,6 +129,10 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
     health = 'healthy'
     summary = `${fmt(lastHour.pages)} pages read in the last hour, ${fmt(waiting)} jobs waiting.`
   }
+  // The index at its budget is normal (it drops its oldest pages and carries on), but say so:
+  // the one time it had no budget it filled the box's disk.
+  const maxBytes = n(stats, 'index_max_bytes')
+  if (maxBytes && n(stats, 'index_bytes') >= maxBytes * 0.95) summary += ' The index is at its size budget, so its oldest pages are making room for new ones.'
 
   return {
     health,
@@ -142,6 +149,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       images: n(stats, 'index_images'),
       videos: n(stats, 'index_videos'),
     },
+    index: stats.index_bytes ? { bytes: n(stats, 'index_bytes'), maxBytes: n(stats, 'index_max_bytes') } : null,
     lastHour,
     lastDay,
     jobs,
