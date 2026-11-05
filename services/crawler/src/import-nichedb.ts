@@ -35,6 +35,8 @@ export type ImportProgress = {
   kept: number
   /** Records that carried no canonical address to key them by. */
   skipped: number
+  /** Batches the other writer held the lock against, each retried from the same cursor. */
+  locked: number
   /** The id to carry on before, or null once the collection ends. */
   cursor: number | null
   bytes: number
@@ -95,6 +97,7 @@ export async function importFromNichedb(
     /** Gap between requests, so a backfill never looks like an attack on our own API. */
     pauseMs?: number
     onProgress?: (progress: ImportProgress) => void
+    onLocked?: (cursor: number, message: string) => void
   },
 ): Promise<ImportProgress> {
   const fetchImpl = options.fetch ?? fetch
@@ -104,7 +107,7 @@ export async function importFromNichedb(
   const pause = Math.max(0, Math.trunc(options.pauseMs ?? 50))
   const base = options.nichedbUrl.replace(/\/+$/, '')
   let cursor = options.cursor ?? Number(index.importCursor() ?? 0)
-  const progress: ImportProgress = { read: 0, kept: 0, skipped: 0, cursor: cursor || null, bytes: index.sizeBytes() }
+  const progress: ImportProgress = { read: 0, kept: 0, skipped: 0, locked: 0, cursor: cursor || null, bytes: index.sizeBytes(0) }
 
   while (progress.read < limit) {
     const url = `${base}/api/v1/items?collection=sites&limit=${pageSize}${cursor ? `&before=${cursor}` : ''}`
@@ -132,11 +135,26 @@ export async function importFromNichedb(
       if (record) batch.push(record)
       else progress.skipped++
     }
-    if (batch.length) progress.kept += index.add(batch)
+    if (batch.length) {
+      // The index has another writer (the publish role), and a batch that cannot get the
+      // write lock even after IndexStore's retries must not end a run of millions: the
+      // cursor only moves on a batch that landed, so the page is simply read again.
+      try {
+        progress.kept += index.add(batch)
+      } catch (error) {
+        const message = String((error as Error)?.message ?? error)
+        if (!/database is locked|SQLITE_BUSY|database table is locked/i.test(message)) throw error
+        progress.locked++
+        progress.read -= items.length
+        options.onLocked?.(cursor, message)
+        await new Promise<void>((resolve) => setTimeout(resolve, 5_000))
+        continue
+      }
+    }
     cursor = items[items.length - 1]!.id
     progress.cursor = cursor
     index.setImportCursor(cursor)
-    progress.bytes = index.sizeBytes()
+    progress.bytes = index.sizeBytes(0)
     options.onProgress?.({ ...progress })
     if (ceiling && progress.bytes >= ceiling) break
     if (items.length < pageSize) {

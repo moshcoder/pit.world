@@ -115,6 +115,31 @@ describe('crawler status', () => {
     expect(describeCrawl(null).index).toBeNull()
   })
 
+  it('one missed answer is not an outage: the last good report stands inside the grace window', async () => {
+    let fail = false
+    const answers = (async () => {
+      if (fail) throw new Error('timeout')
+      return Response.json(report())
+    }) as unknown as typeof fetch
+    // ttl 0 so every call asks again; a 10 s grace window.
+    const status = createCrawlStatus('http://127.0.0.1:8807', answers, 0, 10_000)
+    expect((await status()).health).toBe('healthy')
+    fail = true
+    // The crawler missed one. It was healthy a moment ago, so say so rather than "Offline".
+    expect((await status()).health).toBe('healthy')
+
+    // Past the window, a crawler that has stayed quiet really is offline.
+    const brief = createCrawlStatus('http://127.0.0.1:8807', answers, 0, 0)
+    expect((await brief()).health).toBe('offline')
+  })
+
+  it('never answered at all is offline, with no stale report to fall back on', async () => {
+    const down = createCrawlStatus('http://127.0.0.1:8807', (async () => {
+      throw new Error('refused')
+    }) as unknown as typeof fetch, 0, 60_000)
+    expect((await down()).health).toBe('offline')
+  })
+
   it('a crawler that does not answer is shown as offline, not as an error page', async () => {
     const down = createCrawlStatus('http://127.0.0.1:9', (async () => {
       throw new Error('refused')

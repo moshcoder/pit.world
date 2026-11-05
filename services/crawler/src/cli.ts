@@ -264,7 +264,10 @@ async function importCmd(args: string[]) {
         // One line per 20,000 records: enough to watch, not enough to fill a log.
         if (p.read - lastSaid < 20_000) return
         lastSaid = p.read
-        log(`import: ${p.read} read, ${p.kept} kept, ${gb(p.bytes)} of ${gb(index.maxBytes)}, cursor ${p.cursor}`)
+        log(`import: ${p.read} read, ${p.kept} kept, ${gb(p.bytes)} of ${gb(index.maxBytes)}, cursor ${p.cursor}${p.locked ? `, ${p.locked} waited on the lock` : ''}`)
+      },
+      onLocked(cursor, message) {
+        log(`import: the index is busy at cursor ${cursor} (${message}); waiting 5 s and reading that page again`)
       },
     })
     console.log(JSON.stringify({ ...result, bytes: undefined, size: gb(result.bytes), pages: index.count() }))

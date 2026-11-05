@@ -271,15 +271,21 @@ export async function snapshot(runtime: Runtime) {
 /** Everything /status shows: the snapshot, rates over the hour and the day, the log tail. */
 export async function report(runtime: Runtime, config: Config) {
   const [snap, activity, log] = await Promise.all([snapshot(runtime), runtime.frontier.activity(), runtime.frontier.recent(60)])
-  // Cheap index figures: max(id) for pages, Redis counters for media (a GROUP BY over
-  // millions of media rows is a multi-second synchronous scan).
-  const stats: Record<string, number> = {
-    ...snap.stats,
-    index_pages: runtime.index.count(),
-    index_bytes: runtime.index.sizeBytes(),
-    index_max_bytes: runtime.index.maxBytes,
-    index_images: snap.stats.images_found ?? 0,
-    index_videos: snap.stats.videos_found ?? 0,
+  // Cheap index figures: a counter for pages, two cached pragmas for the size, Redis
+  // counters for media (a GROUP BY over millions of media rows is a multi-second scan).
+  //
+  // And never fatal. /status gives this a 3 s leash and reads a throw as the crawler
+  // being down, so a SQLite read waiting behind another writer must cost a number on the
+  // page, not the whole page: the one thing /status exists to tell you is whether the
+  // crawler is alive, and it was reporting "Offline" on a healthy one (2026-11-05).
+  const stats: Record<string, number> = { ...snap.stats, index_images: snap.stats.images_found ?? 0, index_videos: snap.stats.videos_found ?? 0 }
+  try {
+    stats.index_pages = runtime.index.count()
+    stats.index_bytes = runtime.index.sizeBytes()
+    stats.index_max_bytes = runtime.index.maxBytes
+  } catch {
+    // Leave them out rather than report a wrong zero: /status shows no tile for a figure
+    // it did not get, and still says the crawler is up.
   }
   return {
     ...snap,
