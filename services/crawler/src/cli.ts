@@ -19,6 +19,8 @@ import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
 import { createRuntime, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
 import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
+import { importFromNichedb } from './import-nichedb.ts'
+import { IndexStore } from './index-store.ts'
 import { normalizeUrl, resolvesPublic, siteOf } from './url.ts'
 import { trainingFor } from './crawler.ts'
 import { pathOf } from './robots.ts'
@@ -237,6 +239,40 @@ async function seed(args: string[]) {
   }
 }
 
+/**
+ * Refill the mirror from nichedb instead of crawling it all again. Safe to stop and
+ * re-run: it keeps a cursor, and a page already there is replaced, not duplicated.
+ */
+async function importCmd(args: string[]) {
+  const config = configFromEnv()
+  const from = flag(args, '--from') ?? 'nichedb'
+  if (from !== 'nichedb') throw new Error(`unknown --from ${from} (nichedb)`)
+  const limit = Number(flag(args, '--limit')) || undefined
+  const maxGb = Number(flag(args, '--max-gb')) || undefined
+  const restart = args.includes('--restart')
+  const index = new IndexStore(config.indexPath, config.indexMaxBytes)
+  if (restart) index.setImportCursor(null)
+  const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`
+  let lastSaid = 0
+  try {
+    const result = await importFromNichedb(index, {
+      nichedbUrl: config.nichedbUrl,
+      ...(config.nichedbKey ? { key: config.nichedbKey } : {}),
+      ...(limit ? { limit } : {}),
+      ...(maxGb ? { maxBytes: Math.round(maxGb * 1024 ** 3) } : {}),
+      onProgress(p) {
+        // One line per 20,000 records: enough to watch, not enough to fill a log.
+        if (p.read - lastSaid < 20_000) return
+        lastSaid = p.read
+        log(`import: ${p.read} read, ${p.kept} kept, ${gb(p.bytes)} of ${gb(index.maxBytes)}, cursor ${p.cursor}`)
+      },
+    })
+    console.log(JSON.stringify({ ...result, bytes: undefined, size: gb(result.bytes), pages: index.count() }))
+  } finally {
+    index.close()
+  }
+}
+
 async function stats() {
   const runtime = createRuntime(configFromEnv(), log)
   try {
@@ -267,10 +303,12 @@ async function read(args: string[]) {
 }
 
 const [command, ...rest] = process.argv.slice(2)
-const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, stats: () => stats(), read }
+const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, import: importCmd, stats: () => stats(), read }
 const run = command ? commands[command] : undefined
 if (!run) {
-  console.log('usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | stats | read <url> [--render]')
+  console.log(
+    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render]',
+  )
   process.exit(command ? 1 : 0)
 }
 run(rest).catch((error) => {
