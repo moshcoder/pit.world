@@ -218,7 +218,7 @@ async function seed(args: string[]) {
   const file = flag(args, '--file')
   const limit = Number(flag(args, '--limit')) || undefined
   let sites: string[] = []
-  if (from === 'nichedb') sites = await sitesFromNichedb(config.nichedbUrl, { ...(limit ? { limit } : {}) })
+  if (from === 'nichedb') sites = await sitesFromNichedb(config.nichedbUrl, { ...(limit ? { limit } : {}), ...(config.nichedbKey ? { key: config.nichedbKey } : {}) })
   else if (from === 'ring') sites = sitesFromRing()
   else if (from && OPML_SOURCES[from]) sites = sitesFromOpml(await opmlText(from))
   else if (from) throw new Error(`unknown --from ${from} (nichedb, ring, ${Object.keys(OPML_SOURCES).join(', ')})`)
