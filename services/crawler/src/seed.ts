@@ -8,16 +8,28 @@ import { siteFromInput } from './url.ts'
 
 type Fetch = typeof fetch
 
-/** Every distinct site nichedb's sites collection holds, newest pages first, up to `limit` sites. */
-export async function sitesFromNichedb(nichedbUrl: string, options: { limit?: number; fetch?: Fetch; maxPages?: number } = {}): Promise<string[]> {
+/**
+ * Every distinct site nichedb's sites collection holds, newest pages first, up to `limit`
+ * sites. Reading it is metered now, and an unauthenticated run answers 402 a few pages in
+ * (2026-11-05), so this sends the same key the publisher uses -- it is our own collection.
+ */
+export async function sitesFromNichedb(nichedbUrl: string, options: { limit?: number; fetch?: Fetch; maxPages?: number; key?: string } = {}): Promise<string[]> {
   const fetchImpl = options.fetch ?? fetch
   const limit = options.limit ?? 50_000
   const found = new Set<string>()
   let before = 0
   for (let page = 0; page < (options.maxPages ?? 2_000) && found.size < limit; page++) {
     const url = `${nichedbUrl}/api/v1/items?collection=sites&limit=200${before ? `&before=${before}` : ''}`
-    const response = await fetchImpl(url, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(30_000) })
-    if (!response.ok) throw new Error(`nichedb ${url} answered HTTP ${response.status}`)
+    const response = await fetchImpl(url, {
+      headers: { accept: 'application/json', ...(options.key ? { authorization: `Bearer ${options.key}` } : {}) },
+      signal: AbortSignal.timeout(30_000),
+    })
+    // Keep what it did hand over: a seed of the first few thousand sites is worth more than
+    // an error, and the next run carries on from a fuller collection anyway.
+    if (!response.ok) {
+      if (found.size) break
+      throw new Error(`nichedb ${url} answered HTTP ${response.status}${response.status === 402 && !options.key ? ' (metered: NICHEDB_API_KEY is not set)' : ''}`)
+    }
     const body = (await response.json()) as { items?: Array<{ id: number; url?: string; tags?: string[] }> }
     const items = body.items ?? []
     if (!items.length) break

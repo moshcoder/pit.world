@@ -166,7 +166,7 @@ test("a publisher's JSON-LD never titles the page", () => {
   expect(doc.record.jsonld).toHaveLength(2)
 })
 
-import { sitesFromOpml } from '../src/seed.ts'
+import { sitesFromNichedb, sitesFromOpml } from '../src/seed.ts'
 
 test('OPML: the site behind each feed, htmlUrl first, once each, never a private host', () => {
   const xml = `<opml><body>
@@ -177,6 +177,32 @@ test('OPML: the site behind each feed, htmlUrl first, once each, never a private
 <outline text="group"><outline text="E" xmlUrl="https://e.example/rss" htmlUrl="" /></outline>
 </body></opml>`
   expect(sitesFromOpml(xml)).toEqual(['show-one.example', 'blog.example', 'e.example'])
+})
+
+describe('seeding from nichedb, which meters its reads', () => {
+  const page = (ids: number[]) => Response.json({ items: ids.map((id) => ({ id, url: `https://s${id}.example/a`, tags: [`site:s${id}.example`] })) })
+
+  test('sends the publisher key, so a metered collection answers', async () => {
+    const auth: Array<string | null> = []
+    const fake = (async (input: string | URL, init?: RequestInit) => {
+      auth.push(new Headers(init?.headers).get('authorization'))
+      return auth.length === 1 ? page([2, 1]) : Response.json({ items: [] })
+    }) as typeof fetch
+    expect(await sitesFromNichedb('https://nichedb.test', { fetch: fake, key: 'k1' })).toEqual(['s2.example', 's1.example'])
+    expect(auth[0]).toBe('Bearer k1')
+  })
+
+  test('keeps the sites it did get when the meter cuts in part way', async () => {
+    let calls = 0
+    const fake = (async () => (++calls === 1 ? page([2, 1]) : new Response('payment required', { status: 402 }))) as unknown as typeof fetch
+    expect(await sitesFromNichedb('https://nichedb.test', { fetch: fake, key: 'k1' })).toEqual(['s2.example', 's1.example'])
+  })
+
+  test('with nothing to keep it says what went wrong, and names a missing key', async () => {
+    const paywalled = (async () => new Response('payment required', { status: 402 })) as unknown as typeof fetch
+    await expect(sitesFromNichedb('https://nichedb.test', { fetch: paywalled })).rejects.toThrow('NICHEDB_API_KEY is not set')
+    await expect(sitesFromNichedb('https://nichedb.test', { fetch: paywalled, key: 'k1' })).rejects.toThrow('answered HTTP 402')
+  })
 })
 
 import { videoRefOf } from '../src/extract.ts'
