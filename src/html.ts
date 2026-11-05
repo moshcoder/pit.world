@@ -638,7 +638,10 @@ export function privacyPage(): string {
 export function statusPage(st: CrawlStatus): string {
   const label: Record<string, string> = { healthy: 'Healthy', idle: 'Idle', degraded: 'Degraded', stalled: 'Stalled', offline: 'Offline' }
   const stat = (name: string, value: string, note: string) => `<div class="stat"><span class="stat-label">${esc(name)}</span><b>${esc(value)}</b><small>${esc(note)}</small></div>`
-  const gbytes = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(bytes < 10 * 1024 ** 3 ? 1 : 0)} GB`
+  // A fresh index is megabytes and a full one is tens of gigabytes, and "0.0 GB" reads as
+  // broken rather than as small, so each gets its own unit.
+  const gbytes = (bytes: number) =>
+    bytes < 1024 ** 2 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : bytes < 1024 ** 3 ? `${Math.round(bytes / 1024 ** 2)} MB` : `${(bytes / 1024 ** 3).toFixed(bytes < 10 * 1024 ** 3 ? 1 : 0)} GB`
   const ago = (iso: string) => {
     const s = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 1000))
     return s < 60 ? `${s}s ago` : s < 3600 ? `${Math.round(s / 60)}m ago` : `${Math.round(s / 3600)}h ago`
