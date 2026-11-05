@@ -98,6 +98,13 @@ describe('crawler status', () => {
     expect(page).toContain('32 GB')
     expect(page).toContain('of a 60 GB budget')
 
+    // A fresh index is megabytes: "0.0 GB" would read as broken rather than as small.
+    const small = describeCrawl(report({ stats: { ...bounded.stats, index_bytes: 2_543_616 } }))
+    const fresh = createApp({ keys: {}, crawlStatus: async () => small })
+    const freshPage = await (await fresh.request('/status')).text()
+    expect(freshPage).toContain('2 MB')
+    expect(freshPage).not.toContain('0.0 GB')
+
     // At the budget it keeps working by dropping its oldest pages, and the page says so.
     const full = describeCrawl(report({ stats: { ...bounded.stats, index_bytes: 59 * 1024 ** 3 } }))
     expect(full.health).toBe('healthy')
