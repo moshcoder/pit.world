@@ -164,6 +164,10 @@ export class IndexStore {
       CREATE INDEX IF NOT EXISTS page_policy_train ON page_policy (train, id);
       CREATE INDEX IF NOT EXISTS page_policy_site ON page_policy (site, id);
       CREATE INDEX IF NOT EXISTS page_policy_train_site ON page_policy (train, site);
+      -- trim() takes the oldest pages first, and "oldest" is when the page was read,
+      -- not what id it happens to hold: a bulk import from nichedb arrives newest-first,
+      -- so id order and crawl order are not the same thing.
+      CREATE INDEX IF NOT EXISTS pages_fetched_at ON pages (fetched_at);
       CREATE TABLE IF NOT EXISTS policy_site_checks (site TEXT PRIMARY KEY, checked_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS corpus_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
@@ -293,9 +297,10 @@ export class IndexStore {
    * batches so one sweep never holds the event loop (BullMQ renews its locks on the
    * same loop, and a stalled renewal is what read as "Offline" before).
    *
-   * Oldest first, by id: the mirror is what pit.world searches now, so the newest
-   * crawl is the part worth keeping, and a dropped page comes back on its next
-   * recrawl. Every record is still on nichedb either way.
+   * Oldest first by `fetched_at`, which is when the page was actually read. It used
+   * to go by id, on the assumption that ids ascend with crawl time -- true for a
+   * crawl, false the moment a bulk import from nichedb inserts newest-first, which
+   * would have made the newest records the first to be evicted.
    */
   async trim(options: { batch?: number; maxBatches?: number; keepMin?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ deleted: number; bytesBefore: number; bytesAfter: number; done: boolean; reclaims: boolean }> {
     const batch = Math.max(1, Math.trunc(options.batch ?? 2_000))
@@ -307,9 +312,7 @@ export class IndexStore {
     const idle = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
     const bytesBefore = this.sizeBytes()
     if (!this.maxBytes || bytesBefore <= this.maxBytes) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: this.reclaims }
-    const pick = this.db.prepare('SELECT id FROM pages ORDER BY id LIMIT ?')
-    const dropPages = this.db.prepare('DELETE FROM pages WHERE id <= ?')
-    const dropPolicy = this.db.prepare('DELETE FROM page_policy WHERE id <= ?')
+    const pick = this.db.prepare('SELECT id FROM pages ORDER BY fetched_at, id LIMIT ?')
     let deleted = 0
     let rounds = 0
     while (rounds++ < maxBatches && this.sizeBytes() > this.maxBytes) {
@@ -317,10 +320,13 @@ export class IndexStore {
       if (room < 1) break
       const rows = pick.all(Math.min(batch, room)) as Array<{ id: number }>
       if (rows.length < 1) break
-      const upTo = rows[rows.length - 1]!.id
+      // The ids are scattered now that they are picked by date, so they go as a list.
+      const ids = rows.map((r) => r.id).join(',')
       this.db.transaction(() => {
-        dropPolicy.run(upTo)
-        dropPages.run(upTo)
+        // threatcrush-disable-next-line sql-template-interpolation  ids come from this table's own INTEGER PRIMARY KEY, never from a request
+        this.db.run(`DELETE FROM page_policy WHERE id IN (${ids})`)
+        // threatcrush-disable-next-line sql-template-interpolation  same ids, read out of the index a line above
+        this.db.run(`DELETE FROM pages WHERE id IN (${ids})`)
         this.setMeta('pages_live', String(Math.max(0, Number(this.meta('pages_live') ?? 0) - rows.length)))
       })()
       deleted += rows.length
@@ -528,6 +534,17 @@ export class IndexStore {
    */
   count(): number {
     return Number(this.meta('pages_live') ?? 0)
+  }
+
+  /** Where a nichedb backfill left off, so a later run carries on. Null when it finished. */
+  importCursor(): number | null {
+    const value = this.meta('import_cursor')
+    return value ? Number(value) : null
+  }
+
+  setImportCursor(cursor: number | null): void {
+    if (cursor === null) this.db.run("DELETE FROM corpus_meta WHERE key = 'import_cursor'")
+    else this.setMeta('import_cursor', String(cursor))
   }
 
   /** Which tables the file actually has, for tests and one-off checks. */

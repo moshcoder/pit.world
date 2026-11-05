@@ -44,6 +44,21 @@ truncated the append-only file of every other Redis on the box (2026-11-04). So:
   the file keeps its high-water mark, so rebuild it rather than expecting it to shrink.
 
 `/stats` reports `index_bytes` against `index_max_bytes`, so /status shows the headroom.
+Eviction goes by **`fetched_at`**, not by id: a bulk import arrives newest-first, so id order
+and crawl order are not the same thing.
+
+### Refilling it without crawling again
+
+```
+bun services/crawler/src/cli.ts import --from nichedb [--limit n] [--max-gb n] [--restart]
+```
+
+Reads `/c/sites` back out of nichedb newest-first and writes each page into the mirror, stopping
+at the byte budget. Safe to stop and re-run: it keeps a cursor in `corpus_meta` and a page already
+there is replaced, not duplicated. **It does not restore everything a crawl would**: a published
+record carries the 1,000-character excerpt rather than the full page text, and no training verdict,
+so imported pages are searchable on title/description/keywords/excerpt and stay out of
+`/api/corpus` until the policy backfill judges their site. A recrawl later replaces them whole.
 
 ## Training opt-outs
 
