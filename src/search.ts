@@ -207,10 +207,10 @@ async function getJson(fetchImpl: Fetch, url: string, headers: Record<string, st
   return readJson(await fetchImpl(url, { headers: { ...headers, accept: 'application/json' }, signal: AbortSignal.timeout(TIMEOUT_MS) }))
 }
 
-export async function callProvider(provider: Provider, key: string, query: string, limit: number, fetchImpl: Fetch = fetch): Promise<Hit[]> {
+export async function callProvider(provider: Provider, key: string, query: string, limit: number, fetchImpl: Fetch = fetch, lang?: string): Promise<Hit[]> {
   switch (provider) {
     case 'serper':
-      return parseSerper(await postJson(fetchImpl, 'https://google.serper.dev/search', { 'x-api-key': key }, { q: query, num: limit })).slice(0, limit)
+      return parseSerper(await postJson(fetchImpl, 'https://google.serper.dev/search', { 'x-api-key': key }, { q: query, num: limit, ...(lang ? { hl: lang } : {}) })).slice(0, limit)
     case 'bing':
       // key is "login:password", sent as HTTP basic auth.
       return parseDataForSeo(
@@ -233,7 +233,7 @@ export async function callProvider(provider: Provider, key: string, query: strin
       return parseCeramic(await postJson(fetchImpl, 'https://api.ceramic.ai/search', { authorization: `Bearer ${key}` }, { query })).slice(0, limit)
     case 'searxng':
       // key is the instance's base URL, e.g. http://127.0.0.1:8888, reached over loopback.
-      return parseSearxng(await getJson(fetchImpl, `${key.replace(/\/+$/, '')}/search?${new URLSearchParams({ q: query, format: 'json' })}`, {})).slice(0, limit)
+      return parseSearxng(await getJson(fetchImpl, `${key.replace(/\/+$/, '')}/search?${new URLSearchParams({ q: query, format: 'json', ...(lang ? { language: lang } : {}) })}`, {})).slice(0, limit)
     case 'pit': {
       // key is "<nichedb base URL>[ <api key>]": the index is public, a key only lifts the rate limit.
       const [base = '', token] = key.trim().split(/\s+/)
@@ -342,13 +342,14 @@ async function askPrimaries(
   limit: number,
   fetchImpl: Fetch | undefined,
   failures: SearchResult['failures'],
+  lang?: string,
 ): Promise<{ answers: Array<{ provider: Provider; hits: Hit[] }>; settled: boolean }> {
   const answers: Array<{ provider: Provider; hits: Hit[] }> = []
   let done = 0
   let firstAnswer: () => void = () => {}
   const first = new Promise<void>((resolve) => (firstAnswer = resolve))
   const calls = providers.map((provider) =>
-    callProvider(provider, keys[provider]!, q, limit, fetchImpl).then(
+    callProvider(provider, keys[provider]!, q, limit, fetchImpl, lang).then(
       (hits) => {
         done++
         answers.push({ provider, hits })
@@ -387,11 +388,13 @@ export async function search(
     order?: Provider[]
     /** Told the engines' full text per hit before it is cut to a snippet (the summarizer reads it). */
     onText?: (hits: Hit[]) => void
+    /** A language to ask the engines that can be asked (see src/language.ts). */
+    lang?: string
   } = {},
 ): Promise<SearchResult> {
   const q = normalizeQuery(query)
   const limit = Math.min(20, Math.max(1, options.limit ?? 10))
-  const cacheKey = `${limit}:${q.toLowerCase()}`
+  const cacheKey = `${limit}:${options.lang ?? ''}:${q.toLowerCase()}`
   const hit = options.cache?.get(cacheKey)
   // Answer with the caller's words: echoing the first asker's would tell this one what someone else searched.
   if (hit) return { ...hit, query: q }
@@ -405,7 +408,7 @@ export async function search(
   const fallbacks = order.filter((p) => !PRIMARY.includes(p))
 
   if (primaries.length) {
-    const { answers, settled } = await askPrimaries(primaries, keys, q, Math.max(PER_ENGINE, limit), options.fetch, failures)
+    const { answers, settled } = await askPrimaries(primaries, keys, q, Math.max(PER_ENGINE, limit), options.fetch, failures, options.lang)
     if (answers.length) {
       const result: SearchResult = {
         query: q,
@@ -422,7 +425,7 @@ export async function search(
   }
   for (const provider of fallbacks) {
     try {
-      const hits = finish((await callProvider(provider, keys[provider]!, q, limit, options.fetch)).map((h) => ({ ...h, sources: [provider] })), q, options.onText)
+      const hits = finish((await callProvider(provider, keys[provider]!, q, limit, options.fetch, options.lang)).map((h) => ({ ...h, sources: [provider] })), q, options.onText)
       const result: SearchResult = { query: q, provider, hits, failures, cached: false }
       options.cache?.set(cacheKey, result)
       return result

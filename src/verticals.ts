@@ -17,6 +17,8 @@ import { bookReader, embedFor, peertubeEmbed, previewPlayer, readableScans, show
 
 type Fetch = typeof fetch
 
+import { ALL_LANGUAGES, inLanguage, languageOf } from './language.js'
+
 export type Vertical = 'web' | 'images' | 'videos' | 'music' | 'live' | 'shopping' | 'news' | 'books' | 'podcasts' | 'blogs' | 'places' | 'scholar' | 'mcps' | 'social'
 
 export const VERTICALS: Array<{ id: Vertical; label: string }> = [
@@ -89,8 +91,15 @@ export type MediaResult = {
   hits: Media[]
   /** Blogs: the blogs themselves (their rssamplifier.com pages), beside the posts in `hits`. */
   sites?: Media[]
+  /** Rows left out for being in another language. */
+  hidden?: number
+  /** Nothing was in the asked-for language, so these are in any. */
+  allLanguages?: boolean
   cached: boolean
 }
+
+/** Tabs of written rows, whose language can be read. Pictures, products, places and servers are not filtered; books and papers ask their source. */
+const READ_FOR_LANGUAGE = new Set<Vertical>(['news', 'blogs', 'podcasts', 'videos', 'live', 'social'])
 
 /** Where each provider's results come from, as the page says it. */
 export const MEDIA_SOURCES: Record<MediaProvider, string> = {
@@ -739,8 +748,9 @@ async function askOwnProducts(fetchImpl: Fetch, pit: string, q: string, limit: n
   })
 }
 
-async function askSerper(fetchImpl: Fetch, key: string, vertical: SerperVertical, q: string, limit: number): Promise<Media[]> {
-  const { endpoint, body } = serperRequest(vertical, q, limit)
+async function askSerper(fetchImpl: Fetch, key: string, vertical: SerperVertical, q: string, limit: number, lang?: string): Promise<Media[]> {
+  const { endpoint, body: request } = serperRequest(vertical, q, limit)
+  const body = lang ? { ...request, hl: lang } : request
   const json = await fetchJson(fetchImpl, `https://google.serper.dev/${endpoint}`, {
     method: 'POST',
     headers: { 'x-api-key': key, 'content-type': 'application/json' },
@@ -766,8 +776,8 @@ async function askCommons(fetchImpl: Fetch, q: string, limit: number): Promise<M
 }
 
 /** Videos (or live streams) without Google: PeerTube's Sepia Search, with the Internet Archive's films beside it. */
-async function askOpenVideo(fetchImpl: Fetch, q: string, limit: number, live: boolean): Promise<Media[]> {
-  const sepia = new URLSearchParams({ search: q, count: String(Math.min(50, limit)), sort: '-match', nsfw: 'false', ...(live ? { isLive: 'true' } : {}) })
+async function askOpenVideo(fetchImpl: Fetch, q: string, limit: number, live: boolean, lang?: string): Promise<Media[]> {
+  const sepia = new URLSearchParams({ search: q, count: String(Math.min(50, limit)), sort: '-match', nsfw: 'false', ...(live ? { isLive: 'true' } : {}), ...(lang ? { languageOneOf: lang } : {}) })
   const archive = new URLSearchParams({ q: `(${q}) AND mediatype:movies`, rows: String(Math.min(50, limit)), output: 'json' })
   for (const f of ['identifier', 'title', 'description', 'date', 'year', 'creator']) archive.append('fl[]', f)
   const [peertube, ia] = await Promise.all([
@@ -779,10 +789,12 @@ async function askOpenVideo(fetchImpl: Fetch, q: string, limit: number, live: bo
 }
 
 /** News without Google: our own newsrooms (rssamplifier.com), newest first, filled from GDELT. */
-async function askOpenNews(fetchImpl: Fetch, q: string, limit: number, spacer: Spacer): Promise<{ provider: MediaProvider; hits: Media[] }> {
-  const gdeltParams = new URLSearchParams({ query: /\s/.test(q) ? `"${q.replace(/"/g, '')}"` : q, mode: 'artlist', format: 'json', maxrecords: String(Math.min(50, limit)), sort: 'datedesc' })
+async function askOpenNews(fetchImpl: Fetch, q: string, limit: number, spacer: Spacer, lang?: string): Promise<{ provider: MediaProvider; hits: Media[] }> {
+  const gdeltWords = /\s/.test(q) ? `"${q.replace(/"/g, '')}"` : q
+  const gdeltLanguage = lang ? languageOf(lang)?.gdelt : undefined
+  const gdeltParams = new URLSearchParams({ query: gdeltLanguage ? `${gdeltWords} sourcelang:${gdeltLanguage}` : gdeltWords, mode: 'artlist', format: 'json', maxrecords: String(Math.min(50, limit)), sort: 'datedesc' })
   const [ours, gdelt] = await Promise.all([
-    askRssAmplifier(fetchImpl, 'news', q, 12_000).then((r) => r.posts, () => null),
+    askRssAmplifier(fetchImpl, 'news', q, 12_000, lang).then((r) => r.posts, () => null),
     spacer.take().then((ok) => (ok ? fetchJson(fetchImpl, `https://api.gdeltproject.org/api/v2/doc/doc?${gdeltParams}`, { headers: OURS }).then(parseGdelt, () => null) : null)),
   ])
   if (!ours && !gdelt) throw new Error('no open news index answered')
@@ -792,39 +804,48 @@ async function askOpenNews(fetchImpl: Fetch, q: string, limit: number, spacer: S
   return { provider: newest.length ? 'rssamplifier' : 'gdelt', hits }
 }
 
-async function askRssAmplifier(fetchImpl: Fetch, kind: 'blogs' | 'news', q: string, timeoutMs = 8_000): Promise<{ posts: Media[]; sites: Media[] }> {
-  return parseRssAmplifier(await fetchJson(fetchImpl, `https://rssamplifier.com/api/search?${new URLSearchParams({ q, kind })}`, { headers: OURS }, timeoutMs))
+async function askRssAmplifier(fetchImpl: Fetch, kind: 'blogs' | 'news', q: string, timeoutMs = 8_000, lang?: string): Promise<{ posts: Media[]; sites: Media[] }> {
+  // Its search cannot be asked for a language, so take its most: rows we hide need others to take their place.
+  return parseRssAmplifier(await fetchJson(fetchImpl, `https://rssamplifier.com/api/search?${new URLSearchParams({ q, kind, ...(lang ? { limit: '100' } : {}) })}`, { headers: OURS }, timeoutMs))
 }
 
 export async function searchMedia(
   vertical: Exclude<Vertical, 'web'>,
   query: string,
   keys: Keys,
-  options: { limit?: number; cache?: Cache; fetch?: Fetch; spacers?: { gdelt?: Spacer; nominatim?: Spacer } } = {},
+  options: { limit?: number; cache?: Cache; fetch?: Fetch; spacers?: { gdelt?: Spacer; nominatim?: Spacer }; lang?: string } = {},
 ): Promise<MediaResult> {
   const q = normalizeQuery(query)
   const bounds = LIMITS[vertical] ?? { max: 20, default: 10 }
   const limit = Math.min(bounds.max, Math.max(1, options.limit ?? bounds.default))
   const key = keys.serper
   if (vertical === 'shopping' && !key && !keys.pit) throw new SearchUnavailable('shopping search needs our own index, which is not configured.')
-  const cacheKey = `${vertical}:${limit}:${q.toLowerCase()}`
+  const lang = options.lang ?? ALL_LANGUAGES
+  const asked = lang === ALL_LANGUAGES ? undefined : lang
+  const cacheKey = `${vertical}:${limit}:${lang}:${q.toLowerCase()}`
   const cached = options.cache?.getMedia<MediaResult>(cacheKey)
   if (cached) return { ...cached, query: q, cached: true }
   const fetchImpl = options.fetch ?? fetch
-  const make = (provider: MediaProvider, hits: Media[], sites?: Media[]): MediaResult => ({
-    query: q,
-    vertical,
-    provider,
-    // Video and paper descriptions can run to pages: the same short, query-biased snippet as web results.
-    hits: hits.slice(0, limit).map((h) => (h.description ? { ...h, description: makeSnippet(h.description, { title: h.title, query: q }) || undefined } : h)),
-    ...(sites?.length ? { sites: sites.slice(0, 6) } : {}),
-    cached: false,
-  })
+  const make = (provider: MediaProvider, hits: Media[], sites?: Media[]): MediaResult => {
+    // Before the cut to `limit`, so hidden rows make room for the next ones in the language.
+    const shown = READ_FOR_LANGUAGE.has(vertical) ? inLanguage(hits, lang, (h) => `${h.title} ${h.description ?? ''}`) : { rows: hits, hidden: 0, fellBack: false }
+    return {
+      query: q,
+      vertical,
+      provider,
+      // Video and paper descriptions can run to pages: the same short, query-biased snippet as web results.
+      hits: shown.rows.slice(0, limit).map((h) => (h.description ? { ...h, description: makeSnippet(h.description, { title: h.title, query: q }) || undefined } : h)),
+      ...(sites?.length ? { sites: sites.slice(0, 6) } : {}),
+      ...(shown.hidden ? { hidden: shown.hidden } : {}),
+      ...(shown.fellBack ? { allLanguages: true } : {}),
+      cached: false,
+    }
+  }
   let result: MediaResult
   try {
     switch (vertical) {
       case 'books': {
-        const params = new URLSearchParams({ q, limit: String(limit), fields: 'key,title,author_name,first_publish_year,cover_i,edition_count,first_sentence,ebook_access,ia' })
+        const params = new URLSearchParams({ q, limit: String(limit), fields: 'key,title,author_name,first_publish_year,cover_i,edition_count,first_sentence,ebook_access,ia', ...(asked ? { lang: asked } : {}) })
         const url = `https://openlibrary.org/search.json?${params}`
         // Open Library is free and sometimes slow (several seconds, the odd 5xx): one patient retry before giving up.
         const body = await fetchJson(fetchImpl, url, { headers: OURS }, 10_000).catch(() => fetchJson(fetchImpl, url, { headers: OURS }, 15_000))
@@ -853,7 +874,7 @@ export async function searchMedia(
         const own = keys.pit ? await askOwnProducts(fetchImpl, keys.pit, q, limit).catch(() => []) : []
         if (own.length) result = make('pit', own)
         else {
-          const google = key ? await askSerper(fetchImpl, key, 'shopping', q, limit).catch(() => null) : null
+          const google = key ? await askSerper(fetchImpl, key, 'shopping', q, limit, asked).catch(() => null) : null
           result = make(google?.length ? 'serper' : 'pit', google ?? [])
         }
         break
@@ -862,13 +883,13 @@ export async function searchMedia(
       case 'videos':
       case 'live': {
         // Google first; open indexes when it is not configured, out of credits, or does not answer.
-        const google = key ? await askSerper(fetchImpl, key, vertical, q, limit).catch(() => null) : null
+        const google = key ? await askSerper(fetchImpl, key, vertical, q, limit, asked).catch(() => null) : null
         if (google?.length) result = make('serper', google)
         else if (vertical === 'images') result = make('commons', await askCommons(fetchImpl, q, limit))
         else {
-          let videos = await askOpenVideo(fetchImpl, q, limit, vertical === 'live')
+          let videos = await askOpenVideo(fetchImpl, q, limit, vertical === 'live', asked)
           // Few PeerTube streams are live at any moment: then recorded streams, as Google's Live tab does.
-          if (vertical === 'live' && !videos.length) videos = await askOpenVideo(fetchImpl, `${q} live stream`, limit, false)
+          if (vertical === 'live' && !videos.length) videos = await askOpenVideo(fetchImpl, `${q} live stream`, limit, false, asked)
           result = make('peertube', videos)
         }
         break
@@ -877,23 +898,23 @@ export async function searchMedia(
         result = make('p0dcasters', parseP0dcasters(await fetchJson(fetchImpl, `https://p0dcasters.com/api/search?${new URLSearchParams({ q, limit: String(limit) })}`, { headers: OURS })))
         break
       case 'blogs': {
-        const { posts, sites } = await askRssAmplifier(fetchImpl, 'blogs', q)
+        const { posts, sites } = await askRssAmplifier(fetchImpl, 'blogs', q, undefined, asked)
         result = make('rssamplifier', posts, sites)
         break
       }
       case 'news': {
         // Google's news index first; our own directory of newsrooms (newest first) plus GDELT when it is not configured or does not answer.
-        const google = key ? await askSerper(fetchImpl, key, 'news', q, limit).catch(() => null) : null
+        const google = key ? await askSerper(fetchImpl, key, 'news', q, limit, asked).catch(() => null) : null
         if (google?.length) result = make('serper', google)
         else {
-          const open = await askOpenNews(fetchImpl, q, limit, options.spacers?.gdelt ?? GDELT)
+          const open = await askOpenNews(fetchImpl, q, limit, options.spacers?.gdelt ?? GDELT, asked)
           result = make(open.provider, open.hits)
         }
         break
       }
       case 'music': {
         // Google limited to music sites first; the iTunes catalogue (free, no key) when it does not answer.
-        const google = key ? await askSerper(fetchImpl, key, 'music', q, limit).catch(() => null) : null
+        const google = key ? await askSerper(fetchImpl, key, 'music', q, limit, asked).catch(() => null) : null
         if (google?.length) result = make('serper', google)
         else {
           const params = new URLSearchParams({ term: q, media: 'music', limit: String(Math.min(50, limit)) })
@@ -904,7 +925,7 @@ export async function searchMedia(
       case 'places': {
         // Google Maps first; OpenStreetMap's Nominatim when it does not answer: one request a second at most
         // across everyone, a real User-Agent, results cached (usage policy: operations.osmfoundation.org/policies/nominatim).
-        const google = key ? await askSerper(fetchImpl, key, 'places', q, limit).catch(() => null) : null
+        const google = key ? await askSerper(fetchImpl, key, 'places', q, limit, asked).catch(() => null) : null
         if (google?.length) result = make('serper', google)
         else {
           if (!(await (options.spacers?.nominatim ?? NOMINATIM).take())) throw new Error('nominatim is busy')
@@ -915,20 +936,21 @@ export async function searchMedia(
       }
       case 'scholar': {
         // Google Scholar first; OpenAlex (free, no key) when Google is not configured or does not answer.
-        const google = key ? await askSerper(fetchImpl, key, 'scholar', q, limit).catch(() => null) : null
+        const google = key ? await askSerper(fetchImpl, key, 'scholar', q, limit, asked).catch(() => null) : null
         if (google) result = make('serper', google)
         else {
           const params = new URLSearchParams({
             search: q,
             'per-page': String(limit),
             select: 'id,display_name,publication_year,cited_by_count,doi,primary_location,authorships,abstract_inverted_index',
+            ...(asked ? { filter: `language:${asked}` } : {}),
           })
           result = make('openalex', parseOpenAlex(await fetchJson(fetchImpl, `https://api.openalex.org/works?${params}`, { headers: OURS })))
         }
         break
       }
       default:
-        result = make('serper', await askSerper(fetchImpl, key!, vertical, q, limit))
+        result = make('serper', await askSerper(fetchImpl, key!, vertical, q, limit, asked))
     }
   } catch (error) {
     throw new SearchUnavailable(`The ${vertical} index did not answer: ${error instanceof Error ? error.message : String(error)}`)

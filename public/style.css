@@ -459,3 +459,7 @@ body.has-mini-player { padding-bottom: 72px; }
   .mini-player .mp-seek { order: 5; flex-basis: 100%; }
   body.has-mini-player { padding-bottom: 104px; }
 }
+
+/* /settings */
+.settings select { padding: 8px 10px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
+.settings .saved { margin-left: 10px; font: 13px var(--mono); color: var(--accent); }

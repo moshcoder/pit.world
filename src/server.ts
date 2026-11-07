@@ -10,7 +10,7 @@ import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { type RowTools, lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { type RowTools, settingsPage, lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { lookupSearchTerms, parseLookup, runLookup } from './lookups.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
@@ -28,6 +28,7 @@ import { FeaturedBusinesses } from './business-featured.js'
 import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
 import { PageImages } from './page-image.js'
+import { ALL_LANGUAGES, DEFAULT_LANGUAGE, inLanguage, parseLanguage } from './language.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
@@ -262,7 +263,7 @@ export function createApp(deps: Deps) {
     })
   }
 
-  async function runSearch(query: string, limit = 20): Promise<{ result: SearchResult | null; error: string | null }> {
+  async function runSearch(query: string, limit = 20, lang = ALL_LANGUAGES): Promise<{ result: (SearchResult & { hidden?: number; allLanguages?: boolean }) | null; error: string | null }> {
     try {
       // Our index's network pages are asked alongside the engines (loopback, capped at 1.5 s).
       const fromIndex = networkPagesFromIndex(query, deps.keys.pit, network, deps.fetch)
@@ -271,10 +272,16 @@ export function createApp(deps: Deps) {
         limit,
         ...(deps.fetch ? { fetch: deps.fetch } : {}),
         ...(deps.summarizer ? { onText: (hits) => deps.summarizer!.remember(hits) } : {}),
+        ...(lang === ALL_LANGUAGES ? {} : { lang }),
       })
       logFailures(result.failures)
       const preferred = featuredFor(query, 1)[0]
-      return { result: featureNetwork(result, network, await fromIndex, preferred), error: null }
+      // Read before our own network pages go in: those are featured whatever language they are in.
+      const shown = inLanguage(result.hits, lang, (h) => `${h.title} ${h.description}`)
+      return {
+        result: { ...featureNetwork({ ...result, hits: shown.rows }, network, await fromIndex, preferred), ...(shown.hidden ? { hidden: shown.hidden } : {}), ...(shown.fellBack ? { allLanguages: true } : {}) },
+        error: null,
+      }
     } catch (error) {
       // No query in the message or the log.
       if (error instanceof SearchUnavailable) console.warn(`search: ${error.message}`)
@@ -292,9 +299,9 @@ export function createApp(deps: Deps) {
   const rowTools = (): RowTools => ({ pageImage, ...(deps.summarizer?.enabled ? { summaries: true } : {}), ...(deps.speech?.enabled ? { listen: true } : {}) })
   const safeEqual = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 
-  async function runMedia(vertical: Exclude<Vertical, 'web'>, query: string, limit?: number): Promise<{ result: MediaResult | null; error: string | null }> {
+  async function runMedia(vertical: Exclude<Vertical, 'web'>, query: string, limit?: number, lang = ALL_LANGUAGES): Promise<{ result: MediaResult | null; error: string | null }> {
     try {
-      const result = await searchMedia(vertical, query, deps.keys, { cache, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      const result = await searchMedia(vertical, query, deps.keys, { cache, lang, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
       // Every tab's rows can be summarized and read aloud, so each is a "recent result" (on a cached search too).
       deps.summarizer?.remember(result.hits.map((h) => ({ url: h.url, title: h.title, host: h.host, description: h.description ?? '' })))
       // A shop's or a newsroom's own picture comes from any host, so it needs our signature to pass /img.
@@ -401,6 +408,7 @@ export function createApp(deps: Deps) {
     return c.body(newsletter.csv(normalizeSource(c.req.query('site')) ?? undefined), 200, { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store' })
   })
   app.get('/privacy', (c) => c.html(privacyPage()))
+  app.get('/settings', (c) => c.html(settingsPage()))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/why', (c) => c.html(whyPage()))
   // Share: check the signed result, keep it, and send the reader to its own page.
@@ -589,9 +597,10 @@ export function createApp(deps: Deps) {
     }
     const vertical = parseVertical(c.req.query('t'))
     c.header('cache-control', 'no-store')
-    const back = `/search?q=${encodeURIComponent(query)}${vertical === 'web' ? '' : `&t=${vertical}`}`
+    const lang = parseLanguage(c.req.query('lang'))
+    const back = `/search?q=${encodeURIComponent(query)}${vertical === 'web' ? '' : `&t=${vertical}`}${lang === DEFAULT_LANGUAGE ? '' : `&lang=${lang}`}`
     if (vertical !== 'web') {
-      const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query), promoted.for(query, vertical)])
+      const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, undefined, lang), promoted.for(query, vertical)])
       if (result) result.hits = votes.rerank(result.hits, query)
       const mediaFeatured = featuredFor(query)
       const mediaBackfill = mediaFeatured.length ? undefined : backfillFor(query)
@@ -608,11 +617,11 @@ export function createApp(deps: Deps) {
       )
       const frameHosts = embedHosts(result?.hits.map((h) => h.player) ?? [])
       if (frameHosts.length) c.header('x-frame-hosts', frameHosts.join(' '))
-      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, tools: rowTools(), ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, tools: rowTools(), lang, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const lookup = parseLookup(query)
     const lookupDone = lookup ? runLookup(lookup, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(process.env.NICHEDB_API_KEY ? { key: process.env.NICHEDB_API_KEY } : {}) }) : null
-    const [{ result, error }, resolution] = await Promise.all([runSearch(lookup ? lookupSearchTerms(lookup) : query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const [{ result, error }, resolution] = await Promise.all([runSearch(lookup ? lookupSearchTerms(lookup) : query, 20, lang), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     // Votes nudge the order a bounded number of places; the featured network site leading the results keeps its place.
     if (result) result.hits = votes.rerank(result.hits, query, (h) => Boolean(h.featured))
     const claimed = deps.listings?.claimedOnly(query)
@@ -632,7 +641,7 @@ export function createApp(deps: Deps) {
     )
     const answered = lookupDone ? await lookupDone : null
     const lookupHtml = answered ? lookupCard(answered, answered.image ? (thumbAllowed(answered.image) ? `/img?u=${encodeURIComponent(answered.image)}` : signedThumb(answered.image)) : undefined) : ''
-    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, pageImage, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
+    return c.html(resultsPage({ query, lang, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, pageImage, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
   })
 
   // --- votes -------------------------------------------------------------------
@@ -699,15 +708,16 @@ export function createApp(deps: Deps) {
     const n = Number.isFinite(raw) && raw >= 1 ? Math.min(raw, 20) : 10
     const vertical = parseVertical(c.req.query('t'))
     const featured = featuredFor(query).map((s) => ({ name: s.name, url: siteHref(s, false), about: s.about }))
+    const lang = parseLanguage(c.req.query('lang'), ALL_LANGUAGES)
     if (vertical !== 'web') {
-      const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, n), promoted.for(query, vertical)])
+      const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, n, lang), promoted.for(query, vertical)])
       if (!result) return c.json({ query, type: vertical, error, featured, promoted: promos }, 503)
       result.hits = votes.rerank(result.hits, query)
       return c.json({ query, type: vertical, provider: result.provider, featured, results: result.hits, promoted: promos })
     }
     const lookup = parseLookup(query)
     const lookupDone = lookup ? runLookup(lookup, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(process.env.NICHEDB_API_KEY ? { key: process.env.NICHEDB_API_KEY } : {}) }) : null
-    const [{ result, error }, resolution] = await Promise.all([runSearch(lookup ? lookupSearchTerms(lookup) : query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const [{ result, error }, resolution] = await Promise.all([runSearch(lookup ? lookupSearchTerms(lookup) : query, n, lang), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     const answered = lookupDone ? await lookupDone : null
     if (!result) return c.json({ query, error, featured, moshpit: resolution, ...(answered ? { lookup: answered } : {}) }, answered ? 200 : 503)
     result.hits = votes.rerank(result.hits, query, (h) => Boolean(h.featured))
