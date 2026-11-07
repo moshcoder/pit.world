@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { Database } from 'bun:sqlite'
 import { tmpdir } from 'node:os'
-import { c0mputeChat, pickModel, cleanSummary, fetchPageText, htmlText, readPage, readStream, relayPageText, Summarizer, SummaryStore, summaryKey } from '../src/summarize.ts'
+import { c0mputeChat, forgetStalledModels, pickModel, cleanSummary, fetchPageText, htmlText, readPage, readStream, relayPageText, Summarizer, SummaryStore, summaryKey } from '../src/summarize.ts'
 import { createApp } from '../src/server.ts'
 import { Cache } from '../src/search.ts'
 
@@ -121,6 +121,37 @@ describe('c0mpute client', () => {
     expect((await readStream(sse([['token', { text: 'a' }], ['token', { text: 'b' }], ['done', {}]]).body!)).text).toBe('ab')
     await expect(readStream(sse([['error', { message: 'node died' }]]).body!)).rejects.toThrow('node died')
     await expect(readStream(sse([['token', { text: 'a' }]]).body!)).rejects.toThrow('before the answer finished')
+  })
+})
+
+describe('a node that takes the job and goes silent', () => {
+  /** Infernet as it stood on 2026-11-07: one model with no node, one wedged, one working, and a list naming them all. */
+  function wedged() {
+    const asked: string[] = []
+    const dead = new Set(['qwen2.5:7b', 'gemma3:4b', 'qwen2.5:3b'])
+    const fake = (async (url: string, init?: RequestInit) => {
+      if (String(url).includes('/stream/')) {
+        if (String(url).endsWith('/qwen3')) return await new Promise<Response>((_, reject) => init!.signal!.addEventListener('abort', () => reject(new DOMException('timed out', 'TimeoutError'))))
+        return new Response('event: token\ndata: {"text":"ok"}\n\nevent: done\ndata: {"text":"ok"}\n\n')
+      }
+      const name = JSON.parse(String(init!.body)).modelName as string
+      asked.push(name)
+      if (dead.has(name)) return Response.json({ detail: { availableModels: ['qwen3:4b', 'gemma3:4b', 'qwen2.5:3b', 'qwen2.5:1.5b'] } }, { status: 503 })
+      return Response.json({ jobId: name.startsWith('qwen3') ? 'qwen3' : 'small', source: 'p2p', model: name })
+    }) as never
+    return { asked, fake }
+  }
+
+  it('moves on to a model that answers, and goes straight there next time', async () => {
+    forgetStalledModels()
+    const { asked, fake } = wedged()
+    const first = await c0mputeChat('s', 'u', { model: 'qwen2.5:7b', fetch: fake, timeoutMs: 6_000, firstTryShare: 0.1 })
+    expect(first.text).toBe('ok')
+    expect(asked).toEqual(['qwen2.5:7b', 'qwen3:4b', 'qwen2.5:7b', 'gemma3:4b', 'qwen2.5:3b', 'qwen2.5:1.5b'])
+    asked.length = 0
+    await c0mputeChat('s', 'u', { model: 'qwen2.5:7b', fetch: fake, timeoutMs: 6_000, firstTryShare: 0.1 })
+    expect(asked).not.toContain('qwen3:4b')
+    forgetStalledModels()
   })
 })
 
