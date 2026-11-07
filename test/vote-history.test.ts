@@ -5,6 +5,31 @@ import { DAILY_CAP, VoteRewards } from '../src/vote-rewards.ts'
 
 const item = (i: number) => `result:site${i}.example/page`
 
+const votes = () => new Votes(new Database(':memory:'), 's')
+
+describe('Votes: the words they were cast on', () => {
+  test('a signed-in vote keeps its search phrase, for its owner', () => {
+    const v = votes()
+    v.cast({ visitor: 'dev1', kind: 'result', item: item(1), domain: 'site1.example', value: 1, query: 'best films', account: 'acct-1' })
+    v.cast({ visitor: 'dev1', kind: 'ad', item: 'ad:web:top-1', domain: '', value: 1, query: 'best films', account: 'acct-1' })
+    expect(v.history('acct-1').map((r) => r.phrase)).toEqual(['best films', 'best films'])
+  })
+  test('a signed-out vote stores no words', () => {
+    const v = votes()
+    v.cast({ visitor: 'dev2', kind: 'result', item: item(2), domain: 'site2.example', value: 1, query: 'private words' })
+    const rows = (v as any).db.query('SELECT phrase, qkey FROM votes').all() as Array<{ phrase: string; qkey: string }>
+    expect(rows).toHaveLength(1)
+    expect(rows[0]!.phrase).toBe('')
+    expect(rows[0]!.qkey).not.toBe('')
+  })
+  test('undo deletes the words with the vote', () => {
+    const v = votes()
+    const { qkey } = v.cast({ visitor: 'dev1', kind: 'result', item: item(3), domain: 'site3.example', value: 1, query: 'gone soon', account: 'acct-1' })
+    v.undo('acct-1', item(3), qkey)
+    expect(((v as any).db.query('SELECT COUNT(*) AS n FROM votes').get() as { n: number }).n).toBe(0)
+  })
+})
+
 describe('Votes: account history and undo', () => {
   test('signed-in votes show in history, anonymous ones do not', () => {
     const v = new Votes(new Database(':memory:'), 's')

@@ -85,7 +85,7 @@ ${
   rows.length
     ? `<table class="facts"><tr><th>When</th><th>What</th><th>Vote</th><th></th></tr>${rows
         .map(
-          (r) => `<tr><td>${new Date(r.at).toISOString().slice(0, 16).replace('T', ' ')}</td><td>${esc(KIND_LABEL[r.kind] ?? r.kind)}: ${link(r.kind, r.target)}${r.qkey ? ' <span class="muted">(on a search)</span>' : ''}</td><td>${r.value > 0 ? '▲' : '▼'}</td><td><form method="post" action="/account/votes/undo" class="inline"><input type="hidden" name="item" value="${esc(r.item)}"><input type="hidden" name="qkey" value="${esc(r.qkey)}"><button class="link">Undo</button></form></td></tr>`,
+          (r) => `<tr><td>${new Date(r.at).toISOString().slice(0, 16).replace('T', ' ')}</td><td>${esc(KIND_LABEL[r.kind] ?? r.kind)}: ${link(r.kind, r.target)}${r.phrase ? ` <span class="muted">on “${esc(r.phrase)}”</span>` : r.qkey ? ' <span class="muted">(on a search)</span>' : ''}</td><td>${r.value > 0 ? '▲' : '▼'}</td><td><form method="post" action="/account/votes/undo" class="inline"><input type="hidden" name="item" value="${esc(r.item)}"><input type="hidden" name="qkey" value="${esc(r.qkey)}"><button class="link">Undo</button></form></td></tr>`,
         )
         .join('')}</table>${rows.length === 100 ? `<p><a href="/account/votes?before=${rows[rows.length - 1]!.at}">Older</a></p>` : ''}`
     : '<p class="muted">No votes yet.</p>'
@@ -115,7 +115,7 @@ ${
     const rows = d.votes.history(me.id, { limit: Number.isFinite(limit) ? limit : 50, ...(before ? { before } : {}) })
     return c.json({
       points: d.rewards.summary(me.id),
-      votes: rows.map((r) => ({ item: r.item, kind: r.kind, target: r.target, onSearch: Boolean(r.qkey), value: r.value, at: new Date(r.at).toISOString() })),
+      votes: rows.map((r) => ({ item: r.item, kind: r.kind, target: r.target, onSearch: Boolean(r.qkey || r.phrase), phrase: r.phrase || null, value: r.value, at: new Date(r.at).toISOString() })),
     })
   })
 
