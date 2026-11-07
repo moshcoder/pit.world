@@ -30,6 +30,50 @@
       focus(index - 1)
     }
   })
+  // The language setting (/settings, src/language.ts) lives here in the browser and rides on each search as ?lang=.
+  const LANG = 'pit-language'
+  const saveLanguage = (key, value) => {
+    try {
+      value === undefined ? localStorage.removeItem(key) : localStorage.setItem(key, value)
+    } catch {}
+  }
+  let language = null
+  try {
+    language = localStorage.getItem(LANG)
+  } catch {}
+  const picker = document.getElementById('language')
+  if (picker) {
+    if (language && [...picker.options].some((o) => o.value === language)) picker.value = language
+    picker.addEventListener('change', () => {
+      saveLanguage(LANG, picker.value === 'en' ? undefined : picker.value)
+      language = picker.value
+      addLanguage()
+      const saved = document.querySelector('.settings .saved')
+      if (saved) saved.hidden = false
+    })
+  }
+  function addLanguage() {
+    for (const form of document.querySelectorAll('form.search')) {
+      form.querySelector('input[name=lang]')?.remove()
+      if (!language || language === 'en') continue
+      const field = document.createElement('input')
+      field.type = 'hidden'
+      field.name = 'lang'
+      field.value = language
+      form.append(field)
+    }
+  }
+  if (language && language !== 'en') {
+    // A search from the address bar or a bookmark arrives without it.
+    const here = new URL(location.href)
+    if (here.pathname === '/search' && here.searchParams.has('q') && !here.searchParams.has('lang')) {
+      here.searchParams.set('lang', language)
+      location.replace(here)
+      return
+    }
+    // A page that carries its own lang= (Show all languages) keeps it.
+    if (!document.querySelector('form.search input[name=lang]')) addLanguage()
+  }
   // On a phone the tab row scrolls sideways: start it with the current tab in view, not off the edge.
   const tabs = document.querySelector('.tabs')
   const current = tabs?.querySelector('[aria-current="page"]')

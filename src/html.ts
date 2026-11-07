@@ -14,6 +14,7 @@ import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions }
 import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
 import type { LookupCard } from './lookups.js'
+import { ALL_LANGUAGES, DEFAULT_LANGUAGE, LANGUAGES, languageOf } from './language.js'
 import { MEDIA_SOURCES, thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 import { voteBox, type VoteView } from './vote-html.js'
 import { nichedbRecord, resultPath, type SharedResult } from './shares.js'
@@ -36,6 +37,7 @@ const asset = (name: string) => {
 setRingFooterOptions(
   ringFooterOptions([
     { label: 'Account', href: '/account' },
+    { label: 'Settings', href: '/settings' },
     { label: 'Search privacy', href: '/privacy' },
     { label: 'Connect to Moshpit', href: '/connect' },
     { label: 'Start building', href: '/start' },
@@ -145,9 +147,13 @@ ${ringFooter()}
 </html>`
 }
 
-function searchForm(query = '', autofocus = false, vertical: Vertical = 'web'): string {
+/** `&lang=` for a link, nothing for the default. */
+const langParam = (lang: string) => (lang === DEFAULT_LANGUAGE ? '' : `&lang=${encodeURIComponent(lang)}`)
+
+function searchForm(query = '', autofocus = false, vertical: Vertical = 'web', lang = DEFAULT_LANGUAGE): string {
   return `<form class="search" action="/search" method="get" role="search">
   <input name="q" type="search" value="${esc(query)}" placeholder="Search privately, or try chovy.hacker" aria-label="Search" autocomplete="off" spellcheck="false"${autofocus ? ' autofocus' : ''} maxlength="512" required>${vertical === 'web' ? '' : `\n  <input type="hidden" name="t" value="${vertical}">`}
+  ${lang === DEFAULT_LANGUAGE ? '' : `<input type="hidden" name="lang" value="${esc(lang)}">`}
   <button type="submit" aria-label="Search">Search</button>
 </form>`
 }
@@ -288,11 +294,21 @@ function moshpitCard(resolution: Resolution): string {
 }
 
 /** All · Images · Videos · Music · Live · Shopping · News · Books · Podcasts · Blogs · Places · Scholar · MCPs · Social: the same query in another index. */
-function tabs(query: string, active: Vertical): string {
+function tabs(query: string, active: Vertical, lang = DEFAULT_LANGUAGE): string {
   return `<nav class="tabs" aria-label="Search type">${VERTICALS.map((v) => {
-    const href = `/search?q=${encodeURIComponent(query)}${v.id === 'web' ? '' : `&t=${v.id}`}`
+    const href = `/search?q=${encodeURIComponent(query)}${v.id === 'web' ? '' : `&t=${v.id}`}${langParam(lang)}`
     return v.id === active ? `<a href="${href}" aria-current="page">${v.label}</a>` : `<a href="${href}">${v.label}</a>`
-  }).join('')}</nav>`
+  }).join('')}<a href="/settings">Settings</a></nav>`
+}
+
+/** What the language setting did to this page. Silent when it changed nothing. */
+function languageNote(query: string, vertical: Vertical, lang: string, result: { hidden?: number; allLanguages?: boolean } | null): string {
+  const name = languageOf(lang)?.label
+  if (!result || !name) return ''
+  if (result.allLanguages) return `<p class="via">Nothing in ${esc(name)} for this search, so these are in any language. <a href="/settings">Settings</a></p>`
+  if (!result.hidden) return ''
+  const all = `/search?q=${encodeURIComponent(query)}${vertical === 'web' ? '' : `&t=${vertical}`}&lang=${ALL_LANGUAGES}`
+  return `<p class="via">Showing ${esc(name)}. ${fmt(result.hidden)} in other languages hidden. <a href="${all}">Show all languages</a> · <a href="/settings">Settings</a></p>`
 }
 
 /** Our own ring sites a search is about, above every outside result (featured.ts). */
@@ -494,15 +510,16 @@ function viaLine(label: string, result: MediaResult): string {
   }
 }
 
-export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView; speech?: boolean; tools?: RowTools }): string {
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView; speech?: boolean; tools?: RowTools; lang?: string }): string {
   const { query, vertical, result, promos, error, votes: view } = options
+  const lang = options.lang ?? DEFAULT_LANGUAGE
   const hits = result?.hits ?? []
   const label = VERTICALS.find((v) => v.id === vertical)!.label
   const body = `<header class="bar">
   <a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
-  ${searchForm(query, false, vertical)}
+  ${searchForm(query, false, vertical, lang)}
 </header>
-${tabs(query, vertical)}
+${tabs(query, vertical, lang)}
 <main class="results ${vertical}" data-q="${esc(query)}"${options.speech ? ' data-speech="1"' : ''}>
   ${featuredBox(options.featured, view)}
   ${promoStrip(promos, vertical, view)}
@@ -513,6 +530,7 @@ ${tabs(query, vertical)}
   ${hits.length ? adUnit(vertical, view) : ''}
   ${featuredBox(options.backfill ? [options.backfill] : undefined, view)}
   ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
+  ${languageNote(query, vertical, lang, result)}
   ${result ? `<p class="via">${viaLine(label, result)}</p>` : ''}
 </main>`
   return layout({ title: `${query} · ${label} · pit.world`, description: `Private ${label.toLowerCase()} results for ${query}`, path: '/search', body, bodyClass: 'serp', noindex: true, track: false })
@@ -537,16 +555,16 @@ function hitItem(h: SearchResult['hits'][number], tools: RowTools = {}, view?: V
     </li>`
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; listen?: boolean; pageImage?: (url: string) => string; votes?: VoteView; share?: (h: SearchResult['hits'][number]) => string }): string {
+export function resultsPage(options: { query: string; lang?: string; result: (SearchResult & { hidden?: number; allLanguages?: boolean }) | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; listen?: boolean; pageImage?: (url: string) => string; votes?: VoteView; share?: (h: SearchResult['hits'][number]) => string }): string {
   const { query, result, resolution, error, votes: view } = options
   const item = (h: SearchResult['hits'][number]) => hitItem(h, { ...(options.summaries ? { summaries: true } : {}), ...(options.listen ? { listen: true } : {}), ...(options.pageImage ? { pageImage: options.pageImage } : {}) }, view, options.share)
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
   const body = `<header class="bar">
   <a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>
-  ${searchForm(query)}
+  ${searchForm(query, false, 'web', options.lang)}
 </header>
-${tabs(query, 'web')}
+${tabs(query, 'web', options.lang)}
 <main class="results" data-q="${esc(query)}"${options.listen ? ' data-speech="1"' : ''}>
   ${resolution?.registered ? moshpitCard(resolution) : ''}
   ${featuredBox(options.featured, view)}
@@ -648,6 +666,28 @@ ${adUnit()}
   })
 }
 
+/** Settings live in this browser: no cookie, no account. Saving needs script; `&lang=` on a search works without it. */
+export function settingsPage(): string {
+  return layout({
+    title: 'Settings · pit.world',
+    description: 'Choose the language of your pit.world results.',
+    path: '/settings',
+    noindex: true,
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose settings">
+<h1>Settings</h1>
+<h2><label for="language">Language of results</label></h2>
+<select id="language" name="language">
+${LANGUAGES.map((l) => `<option value="${l.code}"${l.code === DEFAULT_LANGUAGE ? ' selected' : ''}${l.code === 'ar' ? ' dir="rtl"' : ''}>${esc(l.label)}</option>`).join('\n')}
+<option value="${ALL_LANGUAGES}">All languages</option>
+</select>
+<span class="saved" role="status" hidden>Saved</span>
+<p class="muted">Kept in this browser only: no cookie, no account, nothing on our side. pit.world's own pages stay in English. Without JavaScript, add <code>&amp;lang=fr</code> to a search.</p>
+<p class="muted">Web, News, Blogs, Podcasts, Videos, Live and Social results are read for their language. Books and Scholar ask their source. Images, Shopping, Places and MCPs are not filtered.</p>
+</main>`,
+  })
+}
+
 export function privacyPage(): string {
   return layout({
     title: 'Privacy · pit.world',
@@ -679,6 +719,7 @@ export function privacyPage(): string {
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 <li><b>Summarize</b> under a result asks <a href="https://c0mpute.com/">c0mpute</a>, a peer network of inference nodes, for two or three sentences about that page. pit.world reads the page itself first, through <a href="https://tronbrowser.dev/">TronBrowser</a>'s page reader (the same one c0mpute's chat uses for web search), which is sent the page address only. The node is then sent the page's text and address only: never your search words, your IP address or your account. Summaries are kept by page address so the next person gets the same one instantly. Without an account you get a few an hour; signed in, more; with the <a href="/pass">$1 weekly pass</a>, up to 1,000 a week. The pass keeps only a count of summaries per account and time, never which pages.</li>
+<li id="language"><b>Your language setting</b> stays in your browser (local storage, not a cookie) and travels with each search as <code>lang=</code>, so the pages you get back are in it. pit.world keeps no record of it.</li>
 <li id="pictures"><b>Pictures beside results.</b> When a result comes without a picture, pit.world reads the top of that page itself for the picture it names for link previews, keeps only the address of that picture for a day, and loads it through its own proxy. The site sees our server, never your IP address, your browser or your search.</li>
 <li id="players"><b>Play here, Listen here, Read here</b> under a video, song, podcast or book plays it on the results page. Nothing loads until you press the button. Videos, Spotify, SoundCloud and Internet Archive books then load in the site's own player (YouTube through youtube-nocookie.com, Vimeo with do-not-track), and that site sees your IP address and pit.world as the page you came from, never your search. Song previews and podcast episodes are streamed through pit.world, so the publisher sees our server, not you.</li>
 <li id="speech"><b>Listen and Transcript</b> are written by <a href="https://c0mpute.com/">c0mpute</a>'s speech workers. Listen sends a page's text (its summary, or the start of the page pit.world read) to be read aloud; Transcript sends a podcast episode's audio, which pit.world fetches itself, to be written down. Neither is sent your search or who you are. Both are kept by page or episode address only, so the next person to ask gets them instantly; nothing records who asked. The pass counts uses per account and time, the same way it counts summaries.</li>
