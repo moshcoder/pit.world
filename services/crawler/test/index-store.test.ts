@@ -18,7 +18,24 @@ describe('the local search mirror', () => {
     for (const q of ['catch-all', 'TypeError: x', 'foo(bar', 'node.js', '1.3.14', 'C#', 'why "this fails', '***', '-'])
       expect(() => store.search(q)).not.toThrow()
     expect(store.search('node.js')).toHaveLength(1)
+    expect(store.search('node.js', 10, 'no-such-kind')).toHaveLength(0)
     expect(toFtsTerms('a "b" c-d')).toEqual(['"a"', '"b"', '"c"', '"d"'])
+  })
+
+  test('a search for one kind keeps that kind, with the most words in the title first', () => {
+    const store = new IndexStore(':memory:')
+    const product = (url: string, title: string, body: string) => {
+      const e = entry(url, title, body)
+      return { ...e, record: { ...e.record, kind: 'product' } }
+    }
+    store.add([
+      product('https://a.example/1', 'Trail running shoes', 'light and quick'),
+      product('https://b.example/2', 'Socks', 'for running in shoes'),
+      entry('https://c.example/3', 'Why running shoes wear out', 'an essay'),
+    ].map((e) => JSON.stringify(e)))
+    expect(store.search('running shoes', 10, 'product').map((h) => h.url)).toEqual(['https://a.example/1', 'https://b.example/2'])
+    expect(store.search('running shoes', 1, 'product').map((h) => h.url)).toEqual(['https://a.example/1'])
+    expect(store.search('running shoes').map((h) => h.url)).toContain('https://c.example/3')
   })
 
   test('all words first, any word when nothing has them all; title outranks body', () => {

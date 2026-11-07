@@ -39,6 +39,9 @@ export type IndexedRecord = {
   }
 }
 
+/** How many of a word's newest matches a search for one kind of page looks through. */
+const KIND_SCAN = 8_000
+
 export type IndexHit = { url: string; title: string; summary: string; site: string; kind: string; fetched_at: string; score: number }
 
 /**
@@ -553,8 +556,8 @@ export class IndexStore {
     })()
   }
 
-  /** Best matches: every word if any page has them all, else any word. Title weighs most. */
-  search(query: string, limit = 10): IndexHit[] {
+  /** Best matches: every word if any page has them all, else any word. Title weighs most. `kind` keeps one kind of page. */
+  search(query: string, limit = 10, kind?: string): IndexHit[] {
     const terms = toFtsTerms(query)
     if (!terms.length) return []
     const run = (match: string) =>
@@ -568,8 +571,40 @@ export class IndexStore {
            ORDER BY score LIMIT ?`,
         )
         .all(match, Math.min(Math.max(1, limit), 50)) as IndexHit[]
+    if (kind) return this.searchKind(terms, kind, limit)
     const all = run(terms.join(' AND '))
     return all.length || terms.length === 1 ? all : run(terms.join(' OR '))
+  }
+
+  /**
+   * Best matches of one kind, quickly. bm25 has to score every match before LIMIT applies, which
+   * took 6 s for "shoes" on 6M pages (2026-11-07), and SQLite here blocks the event loop the health
+   * check runs on. So: the newest KIND_SCAN matches, that kind only, most words in the title first.
+   */
+  private searchKind(terms: string[], kind: string, limit: number): IndexHit[] {
+    const run = (match: string) =>
+      this.db
+        .query(
+          `SELECT p.url, p.title, p.site, p.kind, p.fetched_at,
+                  CASE WHEN p.description != '' THEN p.description ELSE substr(p.body, 1, 300) END AS summary, 0 AS score
+           FROM pages p
+           WHERE p.id IN (SELECT rowid FROM pages_fts WHERE pages_fts MATCH ? ORDER BY rowid DESC LIMIT ${KIND_SCAN})
+             AND p.kind = ?
+           ORDER BY p.id DESC LIMIT 200`,
+        )
+        .all(match, kind) as IndexHit[]
+    let hits = run(terms.join(' AND '))
+    if (!hits.length && terms.length > 1) hits = run(terms.join(' OR '))
+    const words = terms.map((t) => t.replace(/"/g, '').toLowerCase())
+    const inTitle = (hit: IndexHit) => {
+      const title = hit.title.toLowerCase()
+      return words.filter((w) => title.includes(w)).length
+    }
+    return hits
+      .map((hit) => ({ hit, n: inTitle(hit) }))
+      .sort((a, b) => b.n - a.n)
+      .slice(0, Math.min(Math.max(1, limit), 50))
+      .map(({ hit }) => hit)
   }
 
   /**
