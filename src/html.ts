@@ -273,7 +273,7 @@ function moshpitCard(resolution: Resolution): string {
 </aside>`
 }
 
-/** All · Images · Videos · Music · Live · Shopping · News · Books · Podcasts · Blogs · Places · Scholar: the same query in another index. */
+/** All · Images · Videos · Music · Live · Shopping · News · Books · Podcasts · Blogs · Places · Scholar · MCPs: the same query in another index. */
 function tabs(query: string, active: Vertical): string {
   return `<nav class="tabs" aria-label="Search type">${VERTICALS.map((v) => {
     const href = `/search?q=${encodeURIComponent(query)}${v.id === 'web' ? '' : `&t=${v.id}`}`
@@ -356,6 +356,21 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
     return `<ul class="images">${hits
       .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a>${vote(m)}</li>`)
       .join('')}</ul>`
+  }
+  if (vertical === 'mcps') {
+    return `<p class="muted">Each answered MCP's handshake when pitbot asked. Not reviewed: the words below are the operators' own, so read a server before you connect an agent to it. <a href="/mcps">All servers</a></p>
+<ol class="hits">${hits
+      .map(
+        (m) => `<li>
+      <a class="title" href="${esc(m.url)}" rel="noreferrer noopener nofollow">${esc(m.title)}</a>
+      <div class="url"><code>${esc(m.endpoint ?? '')}</code></div>
+      ${m.description ? `<p>${esc(m.description)}</p>` : ''}
+      <div class="url">${esc(m.extra ?? '')}</div>
+      <pre><code>${esc(mcpAddLine(m.title, m.endpoint ?? ''))}</code></pre>
+      ${vote(m)}
+    </li>`,
+      )
+      .join('')}</ol>`
   }
   if (vertical === 'shopping') {
     return `<ul class="shop">${hits
@@ -807,20 +822,25 @@ const SUBMIT_ERRORS: Record<string, string> = {
 const explainSubmitError = (code: string) => SUBMIT_ERRORS[code] ?? code
 
 /** pitbot: who reads your site for pit.world's own index, and how to say no. */
+/** The line that connects one. A server's name is the operator's text, so only its safe characters reach a command. */
+function mcpAddLine(name: string, endpoint: string): string {
+  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'server'
+  return `claude mcp add --transport http ${slug} ${endpoint}`
+}
+
 export type FoundMcp = { mcp: string; name: string; description?: string; auth?: string; descriptor?: boolean; foundOn?: string; seenAt?: string; tools?: Array<{ name: string; description?: string | null }> }
 
 /** The MCP servers pitbot found and proved. Everything in a row was written by whoever runs that server: it is escaped and shown as what it is. */
 export function mcpsPage(o: { query: string; items: FoundMcp[]; total: number; error?: string | null }): string {
   const row = (m: FoundMcp) => {
     const tools = m.tools ?? []
-    const slug = m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'server'
     const found = m.foundOn && /^https:\/\//.test(m.foundOn) ? `<a href="${esc(m.foundOn)}" rel="noreferrer noopener nofollow">where we found it</a>` : ''
     return `<li><h2>${esc(m.name)}</h2>
 <p><code>${esc(m.mcp)}</code></p>
 ${m.description ? `<p>${esc(m.description)}</p>` : ''}
 <p class="muted">${m.auth === 'required' ? 'Needs sign-in' : `${tools.length.toLocaleString('en-US')} ${tools.length === 1 ? 'tool' : 'tools'}`}${m.descriptor ? ' · publishes its own descriptor' : ''}${found ? ` · ${found}` : ''}</p>
 ${tools.length ? `<details><summary>Tools</summary><ul>${tools.slice(0, 50).map((t) => `<li><code>${esc(t.name)}</code>${t.description ? ` ${esc(t.description)}` : ''}</li>`).join('')}</ul></details>` : ''}
-<pre><code>claude mcp add --transport http ${esc(slug)} ${esc(m.mcp)}</code></pre></li>`
+<pre><code>${esc(mcpAddLine(m.name, m.mcp))}</code></pre></li>`
   }
   const form = `<form method="get" action="/mcps" role="search"><input type="search" name="q" value="${esc(o.query)}" placeholder="Search by name or tool" aria-label="Search MCP servers"> <button type="submit">Search</button></form>`
   return layout({

@@ -604,7 +604,7 @@ describe('categories: shopping, news, books, podcasts, blogs, places, scholar', 
     const html = await (await request('/search?q=cats')).text()
     const nav = html.match(/<nav class="tabs"[\s\S]*?<\/nav>/)![0]
     const labels = [...nav.matchAll(/>([A-Za-z]+)<\/a>/g)].map((m) => m[1])
-    expect(labels).toEqual(['All', 'Images', 'Videos', 'Music', 'Live', 'Shopping', 'News', 'Books', 'Podcasts', 'Blogs', 'Places', 'Scholar'])
+    expect(labels).toEqual(['All', 'Images', 'Videos', 'Music', 'Live', 'Shopping', 'News', 'Books', 'Podcasts', 'Blogs', 'Places', 'Scholar', 'MCPs'])
     for (const t of ['shopping', 'news', 'books', 'podcasts', 'blogs', 'places', 'scholar']) expect(nav).toContain(`href="/search?q=cats&t=${t}"`)
   })
 

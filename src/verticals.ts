@@ -17,7 +17,7 @@ import { bookReader, embedFor, peertubeEmbed, previewPlayer, readableScans, show
 
 type Fetch = typeof fetch
 
-export type Vertical = 'web' | 'images' | 'videos' | 'music' | 'live' | 'shopping' | 'news' | 'books' | 'podcasts' | 'blogs' | 'places' | 'scholar'
+export type Vertical = 'web' | 'images' | 'videos' | 'music' | 'live' | 'shopping' | 'news' | 'books' | 'podcasts' | 'blogs' | 'places' | 'scholar' | 'mcps'
 
 export const VERTICALS: Array<{ id: Vertical; label: string }> = [
   { id: 'web', label: 'All' },
@@ -32,13 +32,14 @@ export const VERTICALS: Array<{ id: Vertical; label: string }> = [
   { id: 'blogs', label: 'Blogs' },
   { id: 'places', label: 'Places' },
   { id: 'scholar', label: 'Scholar' },
+  { id: 'mcps', label: 'MCPs' },
 ]
 
 /**
  * The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing.
  * Images, Videos and Live are not here: they fall back to open indexes (Wikimedia Commons, PeerTube, the Internet Archive).
  */
-type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs'>
+type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs' | 'mcps'>
 
 export function parseVertical(value: string | undefined | null): Vertical {
   return VERTICALS.some((v) => v.id === value) ? (value as Vertical) : 'web'
@@ -56,6 +57,8 @@ export type Media = {
   channel?: string
   width?: number
   height?: number
+  /** MCPs: the address a client connects to. `url` is where we found it, since an endpoint is nothing to a browser. */
+  endpoint?: string
   /** Shopping: as the shop wrote it, "$12.99". */
   price?: string
   rating?: number
@@ -661,6 +664,7 @@ const PARSERS: Record<string, (body: any) => Media[]> = {
 const LIMITS: Partial<Record<Vertical, { max: number; default: number }>> = {
   images: { max: 40, default: 30 },
   shopping: { max: 40, default: 20 },
+  mcps: { max: 50, default: 20 },
   books: { max: 40, default: 20 },
   podcasts: { max: 40, default: 20 },
   blogs: { max: 30, default: 20 },
@@ -684,6 +688,28 @@ export function priceIn(text: string | undefined): string | undefined {
 }
 
 /** Product pages pitbot read itself: `keys.pit` is "<base URL>[ <api key>]" (src/server.ts). */
+/** MCP servers pitbot proved (services/crawler/src/mcp.ts). Their words are their operators'. */
+async function askOwnMcps(fetchImpl: Fetch, pit: string, q: string, limit: number): Promise<Media[]> {
+  const [base] = pit.split(' ')
+  const body = await fetchJson(fetchImpl, `${base!.replace(/\/+$/, '')}/api/v1/mcp?${new URLSearchParams({ q, limit: String(limit) })}`, { headers: OURS }, 4_000)
+  const rows: any[] = Array.isArray(body?.items) ? body.items : []
+  return rows.flatMap((r) => {
+    const endpoint = httpsUrl(r?.mcp)
+    if (!endpoint) return []
+    const tools = Array.isArray(r?.tools) ? r.tools.length : 0
+    return [
+      {
+        url: httpsUrl(r?.foundOn) ?? `/mcps?q=${encodeURIComponent(str(r?.name))}`,
+        endpoint,
+        title: str(r?.name) || host(endpoint),
+        host: host(endpoint),
+        description: str(r?.description) || undefined,
+        extra: r?.auth === 'required' ? 'Needs sign-in' : `${tools.toLocaleString('en-US')} ${tools === 1 ? 'tool' : 'tools'}`,
+      },
+    ]
+  })
+}
+
 async function askOwnProducts(fetchImpl: Fetch, pit: string, q: string, limit: number): Promise<Media[]> {
   const [base, apiKey] = pit.split(' ')
   const params = new URLSearchParams({ q, limit: String(limit), kind: 'product' })
@@ -797,6 +823,10 @@ export async function searchMedia(
         )
         break
       }
+      case 'mcps':
+        if (!keys.pit) throw new Error('our own index is not configured')
+        result = make('pit', await askOwnMcps(fetchImpl, keys.pit, q, limit))
+        break
       case 'shopping': {
         // Our own index first: pages pitbot read and the shop itself marked as products. Google
         // only when we have nothing, and an empty page, never an error, when it cannot answer.
