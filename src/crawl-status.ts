@@ -40,7 +40,7 @@ export type CrawlStatus = {
   health: Health
   summary: string
   reachable: boolean
-  totals: { sites: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number; images: number; videos: number }
+  totals: { sites: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number; images: number; videos: number; mcps: number }
   /** The local mirror against its byte budget. The index filling the disk is what took the box down on 2026-11-04, so it is on the page. */
   index: { bytes: number; maxBytes: number } | null
   lastHour: { pages: number; rendered: number; failed: number; published: number; sitesStarted: number }
@@ -77,7 +77,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       health: 'offline',
       summary: 'The crawler did not answer. Searches still work; the index just is not growing right now.',
       reachable: false,
-      totals: { sites: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0, images: 0, videos: 0 },
+      totals: { sites: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0, images: 0, videos: 0, mcps: 0 },
       index: null,
       lastHour: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
       lastDay: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
@@ -148,6 +148,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       searchable: n(stats, 'index_pages'),
       images: n(stats, 'index_images'),
       videos: n(stats, 'index_videos'),
+      mcps: n(stats, 'index_mcps'),
     },
     index: stats.index_bytes ? { bytes: n(stats, 'index_bytes'), maxBytes: n(stats, 'index_max_bytes') } : null,
     lastHour,

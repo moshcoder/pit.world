@@ -141,6 +141,7 @@ export function thumbAllowed(raw: string): URL | null {
 export function thumbSrc(raw: string | undefined): string | null {
   if (!raw) return null
   if (/^data:image\/(jpeg|png|gif|webp);base64,[A-Za-z0-9+/=]+$/.test(raw) && raw.length < 64_000) return raw
+  if (/^\/img\?u=[^&]+&s=[A-Za-z0-9_-]+$/.test(raw)) return raw
   return thumbAllowed(raw) ? `/img?u=${encodeURIComponent(raw)}` : null
 }
 
@@ -674,6 +675,9 @@ async function fetchJson(fetchImpl: Fetch, url: string, init: RequestInit = {}, 
   return response.json()
 }
 
+/** An https address, or nothing: a card's image is shown through /img, which refuses anything else. */
+const httpsUrl = (v: unknown) => (typeof v === 'string' && v.startsWith('https://') ? v : undefined)
+
 /** The first price a shop wrote in its own description, "$12.99". Absent is fine: most pages do not say. */
 export function priceIn(text: string | undefined): string | undefined {
   return text?.match(/(?:[$€£]\s?\d[\d,]*(?:\.\d{2})?|\b(?:USD|EUR|GBP)\s?\d[\d,]*(?:\.\d{2})?)/)?.[0]
@@ -689,7 +693,7 @@ async function askOwnProducts(fetchImpl: Fetch, pit: string, q: string, limit: n
     const url = httpUrl(r?.url)
     if (!url) return []
     const summary = str(r?.summary)
-    return [{ url, title: str(r?.title) || host(url), host: str(r?.site) || host(url), price: priceIn(summary) }]
+    return [{ url, title: str(r?.title) || host(url), host: str(r?.site) || host(url), price: str(r?.price) || priceIn(summary), thumbnail: httpsUrl(r?.image) }]
   })
 }
 

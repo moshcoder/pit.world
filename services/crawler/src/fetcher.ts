@@ -22,7 +22,7 @@ type Fetch = typeof fetch
 export const MAX_BYTES = 2 * 1024 * 1024
 const MAX_REDIRECTS = 5
 
-async function readCapped(response: Response, max: number): Promise<string> {
+export async function readCapped(response: Response, max: number): Promise<string> {
   if (!response.body) return ''
   const reader = response.body.getReader()
   const chunks: Uint8Array[] = []

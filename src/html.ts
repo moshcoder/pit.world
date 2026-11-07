@@ -700,6 +700,7 @@ ${stat('Searchable', fmt(st.totals.searchable), 'pages in the index pit.world se
 ${st.index ? stat('Index size', gbytes(st.index.bytes), st.index.maxBytes ? `of a ${gbytes(st.index.maxBytes)} budget; oldest pages make room` : 'no budget set') : ''}
 ${stat('Images', fmt(st.totals.images), 'found on those pages, by reference')}
 ${stat('Videos', fmt(st.totals.videos), 'embedded or linked, by reference')}
+${stat('MCP servers', fmt(st.totals.mcps), 'found on the web, each proved by a live handshake')}
 ${stat('Published', fmt(st.totals.published), `${fmt(st.lastHour.published)} in the last hour`)}
 ${stat('Waiting to publish', fmt(st.totals.outbox), set?.publishing ? 'records for nichedb' : 'publishing is off')}
 ${stat('Failed (24h)', fmt(st.lastDay.failed), `${fmt(st.totals.failed)} all time`)}
