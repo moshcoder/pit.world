@@ -84,6 +84,11 @@ const KIND_BY_TYPE: Record<string, string> = {
   blogposting: 'article',
   techarticle: 'article',
   report: 'article',
+  socialmediaposting: 'post',
+  discussionforumposting: 'post',
+  comment: 'post',
+  qapage: 'post',
+  question: 'post',
   product: 'product',
   offer: 'product',
   person: 'profile',
@@ -106,6 +111,10 @@ const KIND_BY_TYPE: Record<string, string> = {
 
 /** JSON-LD types that describe a page's own subject, as opposed to its publisher or its site. */
 const CONTENT_TYPES = new Set([
+  'socialmediaposting',
+  'discussionforumposting',
+  'qapage',
+  'question',
   'article',
   'newsarticle',
   'blogposting',

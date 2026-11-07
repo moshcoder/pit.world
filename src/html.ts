@@ -273,7 +273,7 @@ function moshpitCard(resolution: Resolution): string {
 </aside>`
 }
 
-/** All · Images · Videos · Music · Live · Shopping · News · Books · Podcasts · Blogs · Places · Scholar · MCPs: the same query in another index. */
+/** All · Images · Videos · Music · Live · Shopping · News · Books · Podcasts · Blogs · Places · Scholar · MCPs · Social: the same query in another index. */
 function tabs(query: string, active: Vertical): string {
   return `<nav class="tabs" aria-label="Search type">${VERTICALS.map((v) => {
     const href = `/search?q=${encodeURIComponent(query)}${v.id === 'web' ? '' : `&t=${v.id}`}`
@@ -356,6 +356,19 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
     return `<ul class="images">${hits
       .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a>${vote(m)}</li>`)
       .join('')}</ul>`
+  }
+  if (vertical === 'social') {
+    return `<ol class="hits">${hits
+      .map(
+        (m) => `<li>
+      <a class="title" href="${esc(m.url)}" rel="noreferrer noopener nofollow">${esc(m.title)}</a>
+      <div class="url">${metaLine(m)}</div>
+      ${m.description ? `<p>${esc(m.description)}</p>` : ''}
+      <div class="url"><a href="${esc(m.url)}" rel="noreferrer noopener nofollow">Reply on ${esc(m.host)}</a></div>
+      ${vote(m)}
+    </li>`,
+      )
+      .join('')}</ol>`
   }
   if (vertical === 'mcps') {
     return `<p class="muted">Each answered MCP's handshake when pitbot asked. Not reviewed: the words below are the operators' own, so read a server before you connect an agent to it. <a href="/mcps">All servers</a></p>
@@ -626,6 +639,7 @@ export function privacyPage(): string {
 <li>Your browser sends the words to pit.world over HTTPS.</li>
 <li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo, and <a href="/bot">our own index</a>, kept at nichedb.dev), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
 <li>The tabs above the results work the same way. Shopping reads <a href="/bot">our own index</a>: pages shops themselves mark as products. Images, Videos, Live, Music, News, Places and Scholar ask Google through Serper. When Google does not answer, Music asks the <a href="https://performance-partners.apple.com/search-api">iTunes Search API</a>, Places asks <a href="https://nominatim.openstreetmap.org/">OpenStreetMap's Nominatim</a> (© OpenStreetMap contributors), News asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a> and the <a href="https://www.gdeltproject.org/">GDELT Project</a>, Images asks <a href="https://commons.wikimedia.org/">Wikimedia Commons</a>, Videos and Live ask PeerTube's <a href="https://sepiasearch.org/">Sepia Search</a> (Videos also the <a href="https://archive.org/">Internet Archive</a>), and Scholar asks <a href="https://openalex.org/">OpenAlex</a>; Books asks <a href="https://openlibrary.org/">Open Library</a>; Podcasts asks our own <a href="https://p0dcasters.com/">p0dcasters.com</a>; Blogs asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a>. Pictures and book covers are fetched by pit.world and handed to you, so none of them sees your IP address either.</li>
+<li>The Social tab reads any network pitbot can recognise: Bluesky, Hacker News, fediverse servers, AT Protocol servers and tsbb boards, plus forum threads in our own index. pit.world asks them, so they see our address and not yours. Your search words do reach those networks. Reply links open the post on its own network, and we post nothing.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 <li><b>Summarize</b> under a result asks <a href="https://c0mpute.com/">c0mpute</a>, a peer network of inference nodes, for two or three sentences about that page. pit.world reads the page itself first, through <a href="https://tronbrowser.dev/">TronBrowser</a>'s page reader (the same one c0mpute's chat uses for web search), which is sent the page address only. The node is then sent the page's text and address only: never your search words, your IP address or your account. Summaries are kept by page address so the next person gets the same one instantly. Without an account you get a few an hour; signed in, more; with the <a href="/pass">$1 weekly pass</a>, up to 1,000 a week. The pass keeps only a count of summaries per account and time, never which pages.</li>
