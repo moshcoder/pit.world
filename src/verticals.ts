@@ -38,8 +38,6 @@ export const VERTICALS: Array<{ id: Vertical; label: string }> = [
  * The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing.
  * Images, Videos and Live are not here: they fall back to open indexes (Wikimedia Commons, PeerTube, the Internet Archive).
  */
-const SERPER_ONLY: Vertical[] = ['shopping']
-
 type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs'>
 
 export function parseVertical(value: string | undefined | null): Vertical {
@@ -78,7 +76,7 @@ const playable = (url: string): { player?: Player } => {
   return player ? { player } : {}
 }
 
-export type MediaProvider = 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive' | 'gdelt' | 'itunes' | 'osm'
+export type MediaProvider = 'pit' | 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive' | 'gdelt' | 'itunes' | 'osm'
 
 export type MediaResult = {
   query: string
@@ -92,6 +90,7 @@ export type MediaResult = {
 
 /** Where each provider's results come from, as the page says it. */
 export const MEDIA_SOURCES: Record<MediaProvider, string> = {
+  pit: 'pit.world index',
   serper: 'the Google index',
   rssamplifier: 'the RSS Amplifier directory (rssamplifier.com)',
   p0dcasters: 'the p0dcasters.com directory',
@@ -675,6 +674,25 @@ async function fetchJson(fetchImpl: Fetch, url: string, init: RequestInit = {}, 
   return response.json()
 }
 
+/** The first price a shop wrote in its own description, "$12.99". Absent is fine: most pages do not say. */
+export function priceIn(text: string | undefined): string | undefined {
+  return text?.match(/(?:[$€£]\s?\d[\d,]*(?:\.\d{2})?|\b(?:USD|EUR|GBP)\s?\d[\d,]*(?:\.\d{2})?)/)?.[0]
+}
+
+/** Product pages pitbot read itself: `keys.pit` is "<base URL>[ <api key>]" (src/server.ts). */
+async function askOwnProducts(fetchImpl: Fetch, pit: string, q: string, limit: number): Promise<Media[]> {
+  const [base, apiKey] = pit.split(' ')
+  const params = new URLSearchParams({ q, limit: String(limit), kind: 'product' })
+  const body = await fetchJson(fetchImpl, `${base!.replace(/\/+$/, '')}/api/v1/search?${params}`, { headers: { ...OURS, ...(apiKey ? { authorization: `Bearer ${apiKey}` } : {}) } }, 4_000)
+  const rows: any[] = Array.isArray(body?.items) ? body.items : []
+  return rows.flatMap((r) => {
+    const url = httpUrl(r?.url)
+    if (!url) return []
+    const summary = str(r?.summary)
+    return [{ url, title: str(r?.title) || host(url), host: str(r?.site) || host(url), price: priceIn(summary) }]
+  })
+}
+
 async function askSerper(fetchImpl: Fetch, key: string, vertical: SerperVertical, q: string, limit: number): Promise<Media[]> {
   const { endpoint, body } = serperRequest(vertical, q, limit)
   const json = await fetchJson(fetchImpl, `https://google.serper.dev/${endpoint}`, {
@@ -742,7 +760,7 @@ export async function searchMedia(
   const bounds = LIMITS[vertical] ?? { max: 20, default: 10 }
   const limit = Math.min(bounds.max, Math.max(1, options.limit ?? bounds.default))
   const key = keys.serper
-  if (!key && SERPER_ONLY.includes(vertical)) throw new SearchUnavailable(`${vertical} search needs the Google index, which is not configured.`)
+  if (vertical === 'shopping' && !key && !keys.pit) throw new SearchUnavailable('shopping search needs our own index, which is not configured.')
   const cacheKey = `${vertical}:${limit}:${q.toLowerCase()}`
   const cached = options.cache?.getMedia<MediaResult>(cacheKey)
   if (cached) return { ...cached, query: q, cached: true }
@@ -773,6 +791,17 @@ export async function searchMedia(
             return reader ? { ...b, player: reader } : b
           }),
         )
+        break
+      }
+      case 'shopping': {
+        // Our own index first: pages pitbot read and the shop itself marked as products. Google
+        // only when we have nothing, and an empty page, never an error, when it cannot answer.
+        const own = keys.pit ? await askOwnProducts(fetchImpl, keys.pit, q, limit).catch(() => []) : []
+        if (own.length) result = make('pit', own)
+        else {
+          const google = key ? await askSerper(fetchImpl, key, 'shopping', q, limit).catch(() => null) : null
+          result = make(google?.length ? 'serper' : 'pit', google ?? [])
+        }
         break
       }
       case 'images':

@@ -62,7 +62,8 @@ async function worker() {
             // The same shape as nichedb's search, so pit.world reads either.
             const q = (url.searchParams.get('q') ?? '').slice(0, 512)
             const limit = Number(url.searchParams.get('limit')) || 10
-            const items = q ? runtime.index.search(q, limit) : []
+            const kind = url.searchParams.get('kind')?.slice(0, 40) || undefined
+            const items = q ? runtime.index.search(q, limit, kind) : []
             return Response.json({ q, count: items.length, items })
           }
           if (path === '/api/v1/submit' && request.method === 'POST') {

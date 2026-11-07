@@ -88,7 +88,25 @@ describe('News, Music and Places keep answering when Serper is out of credits', 
     expect(r.hits).toHaveLength(2)
     expect(log.find((l) => l.startsWith('nominatim'))).toContain('pit.world search')
   })
-  it('Shopping still needs Google', async () => {
-    await expect(searchMedia('shopping', 'shoes', {}, {})).rejects.toThrow('Google index')
+  it('Shopping needs an index of some kind', async () => {
+    await expect(searchMedia('shopping', 'shoes', {}, {})).rejects.toThrow('our own index')
+  })
+  it('Shopping comes from our own index, products only, with the price a shop wrote', async () => {
+    const asked: string[] = []
+    const fetchImpl = (async (url: string | URL | Request) => {
+      asked.push(String(url))
+      return Response.json({ items: [{ url: 'https://shop.example/shoe', title: 'Trail shoe', site: 'shop.example', summary: 'Light. Now $89.50 with free returns.' }] })
+    }) as typeof fetch
+    const r = await searchMedia('shopping', 'shoes', { pit: 'http://127.0.0.1:8807', serper: 'k' }, { fetch: fetchImpl })
+    expect(r.provider).toBe('pit')
+    expect(r.hits[0]).toMatchObject({ url: 'https://shop.example/shoe', title: 'Trail shoe', price: '$89.50' })
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toContain('kind=product')
+  })
+  it('Shopping asks Google only when our index has nothing, and survives Google being out of credits', async () => {
+    const fetchImpl = (async (url: string | URL | Request) =>
+      String(url).includes('serper') ? new Response('out of credits', { status: 400 }) : Response.json({ items: [] })) as typeof fetch
+    const r = await searchMedia('shopping', 'shoes', { pit: 'http://127.0.0.1:8807', serper: 'k' }, { fetch: fetchImpl })
+    expect(r.hits).toEqual([])
   })
 })
