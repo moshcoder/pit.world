@@ -6,7 +6,8 @@
  * Who voted is a `visitorKey` from @profullstack/browser-fingerprint: a keyed
  * hash of the device's fingerprint, never the fingerprint and never an address.
  * The search a result vote was cast on is kept the same way, as a keyed hash
- * (`qkey`), so a vote can nudge that search without the words being stored.
+ * (`qkey`), so a vote can nudge that search without its words sitting beside the
+ * voter. The words are counted on their own in src/vote-phrases.ts.
  *
  * One vote per (visitor, item, search): voting again replaces it, voting the
  * same way again takes it back. Results are nudged a bounded number of places;
@@ -146,11 +147,17 @@ export class Votes {
    * Cast, change or take back a vote. `value` 1 or -1; 0 (or the same value
    * again with `toggle`) removes it. Only result votes carry a search.
    */
-  cast(o: { visitor: string; kind: VoteKind; item: string; domain: string; value: number; query?: string | null; toggle?: boolean; account?: string | null }): { value: number; qkey: string } & Tally {
+  cast(o: { visitor: string; kind: VoteKind; item: string; domain: string; value: number; query?: string | null; toggle?: boolean; account?: string | null }): { value: number; qkey: string; firstOnSearch: boolean } & Tally {
     const qkey = o.kind === 'result' ? this.qkey(o.query) : ''
     const prev = this.db.query('SELECT value FROM votes WHERE visitor = ? AND item = ? AND qkey = ?').get(o.visitor, o.item, qkey) as { value: number } | null
     let value = Math.sign(o.value)
     if (o.toggle && prev && prev.value === value) value = 0
+    // This device's first vote on this search, whichever result it was on.
+    const firstOnSearch =
+      o.kind === 'result' &&
+      !!qkey &&
+      value !== 0 &&
+      !this.db.query('SELECT 1 FROM votes WHERE visitor = ? AND qkey = ? LIMIT 1').get(o.visitor, qkey)
     if (value === 0) {
       this.db.query('DELETE FROM votes WHERE visitor = ? AND item = ? AND qkey = ?').run(o.visitor, o.item, qkey)
       // Taken back while signed in: the same vote cast from another device of the account goes too.
@@ -163,7 +170,7 @@ export class Votes {
              account = CASE WHEN excluded.account <> '' THEN excluded.account ELSE votes.account END`,
         )
         .run(o.visitor, o.item, qkey, o.kind, o.domain, value, this.now(), o.account ?? '')
-    return { value, qkey, ...this.tally(o.item, o.kind === 'result' ? o.query : undefined) }
+    return { value, qkey, firstOnSearch, ...this.tally(o.item, o.kind === 'result' ? o.query : undefined) }
   }
 
   /** One item's tally: on one search when `query` is given (results), else across everything. */

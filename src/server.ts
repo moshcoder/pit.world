@@ -4,6 +4,7 @@
  * Nothing here writes a log line about a request. Errors are reported without
  * the query attached.
  */
+import { VotePhrases } from './vote-phrases'
 import { mountSubmit } from './submit-routes.js'
 import { featureNetwork, networkPagesFromIndex, W3bsNetwork } from './w3bs-network.js'
 import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
@@ -234,6 +235,7 @@ export function createApp(deps: Deps) {
     }
   }
   const voteRewards = deps.voteRewards ?? new VoteRewards(votes.db)
+  const votePhrases = new VotePhrases(votes.db)
   // Shared results (src/shares.ts): written only when someone clicks Share, in the votes database.
   const shares = new Shares(votes.db, fpSecret)
   // Summarize and Listen both read pages through the summarizer: every read it makes is a reader-health sample.
@@ -659,10 +661,19 @@ export function createApp(deps: Deps) {
     const query = typeof body.q === 'string' ? normalizeQuery(body.q) : ''
     // Signed in, the vote is also the account's: it shows in /account/votes and can earn a point.
     const account = deps.accounts ? accountOf(deps.accounts.accounts, c)?.id ?? null : null
-    const { qkey, ...result } = votes.cast({ visitor: gate.visitor, ...target, value, query, toggle: body.toggle === true || body.toggle === '1', account })
+    const { qkey, firstOnSearch, ...result } = votes.cast({ visitor: gate.visitor, ...target, value, query, toggle: body.toggle === true || body.toggle === '1', account })
+    if (firstOnSearch) votePhrases.record(query)
     const points = voteRewards.onVote(account, target.item, qkey, result.value)
     return { status: 200 as const, json: { ok: true, item: target.item, ...result, ...(account ? { signedIn: true, points } : {}) } }
   }
+  // Public on purpose: searches people voted on, once three votes have landed on one.
+  app.get('/api/voted-searches', (c) => {
+    c.header('cache-control', 'public, max-age=3600')
+    c.header('access-control-allow-origin', '*')
+    const days = Number(c.req.query('days')) || 7
+    const limit = Number(c.req.query('limit')) || 50
+    return c.json({ source: 'pit.world', window_days: days, topics: votePhrases.top({ days, limit }) })
+  })
   app.post('/api/vote', async (c) => {
     c.header('cache-control', 'no-store')
     const body = (await c.req.json().catch(() => ({}))) as VoteBody
