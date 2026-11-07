@@ -40,7 +40,7 @@ describe('c0mpute when nodes are missing or stuck', () => {
     expect(pickModel(undefined)).toBeUndefined()
   })
 
-  it('on "no live node serves it" asks for a listed model, then any node', async () => {
+  it('on "no live node serves it" asks for each listed model, then any node', async () => {
     const asked: Array<string | undefined> = []
     const f = (async (input: any, init?: RequestInit) => {
       const url = String(input)
@@ -53,7 +53,7 @@ describe('c0mpute when nodes are missing or stuck', () => {
       return done()
     }) as typeof fetch
     const r = await c0mputeChat('s', 'u', { model: 'qwen2.5:7b', fetch: f })
-    expect(asked).toEqual(['qwen2.5:7b', 'qwen3:4b', undefined])
+    expect(asked).toEqual(['qwen2.5:7b', 'qwen3:4b', 'gemma3:4b', undefined])
     expect(r.text).toBe('Fine.')
   })
 
