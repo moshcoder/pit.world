@@ -24,6 +24,7 @@ describe('quickSummary', () => {
     expect(out).toBe('A page about rates.\nThe bank raised rates.')
   })
   it('gives nothing rather than nonsense', () => {
+    expect(quickSummary('Copy and paste this code into your Wikipedia page right now please.')).toBe('')
     expect(quickSummary('Home About Contact')).toBe('')
     expect(quickSummary('')).toBe('')
   })
@@ -45,6 +46,11 @@ describe('a click', () => {
     const s = new Summarizer({ apiKey: 'k', store: new SummaryStore(':memory:'), fetch: never, pageText: async () => '' })
     s.remember([{ url: 'https://b.example/x', title: 'X', host: 'b.example', description: 'The central bank raised interest rates by a quarter point on Tuesday, citing stubborn inflation.' }])
     expect(((await s.begin('https://b.example/x')) as { draft?: string }).draft).toContain('quarter point')
+  })
+  it('prefers the snippet to one thin line of page', async () => {
+    const s = new Summarizer({ apiKey: 'k', store: new SummaryStore(':memory:'), fetch: never, pageText: async () => 'A very short line that is barely a real sentence.' })
+    s.remember([{ url: 'https://d.example/x', title: 'X', host: 'd.example', description: 'The central bank raised interest rates by a quarter point on Tuesday, citing stubborn inflation that has lasted all year.' }])
+    expect(((await s.begin('https://d.example/x')) as { draft?: string }).draft).toContain('quarter point')
   })
   it('does not wait on a page that hangs', async () => {
     const s = new Summarizer({ apiKey: 'k', store: new SummaryStore(':memory:'), fetch: never, pageText: () => new Promise(() => {}) })
