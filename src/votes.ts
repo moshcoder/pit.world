@@ -13,6 +13,7 @@
  * sponsored and paid slots are never moved, their votes are a quality signal
  * kept for later.
  */
+import type { Engagement } from './engagement.js'
 import type { Database } from 'bun:sqlite'
 import { createHmac } from 'node:crypto'
 import type { ReaderHealth } from './reader-health.js'
@@ -88,6 +89,8 @@ export const resultItem = (url: string) => {
 export class Votes {
   /** Reader health (src/reader-health.ts), when the server has it: one more bounded term in nudges(). */
   health: ReaderHealth | null = null
+  /** The use people make of each site (src/engagement.ts); unset, the ranking ignores it. */
+  engagement?: Engagement
 
   constructor(
     readonly db: Database,
@@ -235,7 +238,8 @@ export class Votes {
 
   /**
    * How many places each result moves: QUERY_WEIGHT x its score on this search
-   * plus DOMAIN_WEIGHT x its domain's score plus SHARED_WEIGHT x its shared page's score, capped at MAX_MOVE either way.
+   * plus DOMAIN_WEIGHT x its domain's score plus SHARED_WEIGHT x its shared page's score, plus what its
+   * site earns from reader health and from people using Summarize and Listen on it, capped at MAX_MOVE either way.
    */
   nudges(urls: string[], query: string): Map<string, number> {
     const items = urls.map((u) => resultItem(u))
@@ -245,6 +249,8 @@ export class Votes {
     const byShared = this.sharedTallies(items.filter((i): i is string => Boolean(i)))
     // Sites that turn the page reader away (src/reader-health.ts): a separate signal, never a vote.
     const byHealth = this.health?.moves(domains) ?? new Map<string, number>()
+    // The use people make of a site (src/engagement.ts): separate again, and only ever up.
+    const byUse = this.engagement?.moves(domains) ?? new Map<string, number>()
     const out = new Map<string, number>()
     urls.forEach((url, i) => {
       const item = items[i]
@@ -253,7 +259,8 @@ export class Votes {
       const d = byDomain.get(domains[i]!)?.score ?? 0
       const s = byShared.get(item)?.score ?? 0
       const h = byHealth.get(domains[i]!) ?? 0
-      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * q + DOMAIN_WEIGHT * d + SHARED_WEIGHT * s + h))
+      const e = byUse.get(domains[i]!) ?? 0
+      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * q + DOMAIN_WEIGHT * d + SHARED_WEIGHT * s + h + e))
       if (move) out.set(url, move)
     })
     return out
@@ -277,15 +284,17 @@ export class Votes {
   }
 
   /**
-   * Listing nudges for /pros: the same bounded rule on each listing's votes.
+   * Listing nudges for /pros: the same bounded rule on each listing's votes, reader health and use.
    * The directory applies them only among unpaid, unpromoted listings.
    */
   listingMoves(domains: string[]): Map<string, number> {
     const t = this.tallies(domains.map((d) => `listing:${d}`))
+    const byHealth = this.health?.moves(domains) ?? new Map<string, number>()
+    const byUse = this.engagement?.moves(domains) ?? new Map<string, number>()
     const out = new Map<string, number>()
     for (const d of domains) {
       const s = t.get(`listing:${d}`)?.score ?? 0
-      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * s))
+      const move = Math.max(-MAX_MOVE, Math.min(MAX_MOVE, QUERY_WEIGHT * s + (byHealth.get(d) ?? 0) + (byUse.get(d) ?? 0)))
       if (move) out.set(d, move)
     }
     return out
