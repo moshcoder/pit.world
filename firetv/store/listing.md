@@ -12,13 +12,13 @@
 
 ## Short description
 
-Private web search for your TV. No logs, no cookies, no profile.
+Private web search for your TV. No search logs, no cookies, no profile.
 
 ## Long description
 
 pit.world is a private search engine, now on Fire TV.
 
-Search the web from your couch without being the product: pit.world keeps no logs of what you search, sets no cookies, and builds no profile to sell. Results come from several engines at once (Google, Bing, Brave and more), merged into one clean page.
+Search the web from your couch without being the product: pit.world keeps no logs of what you search (a search you vote on is counted, unlinked from you), sets no cookies, and builds no profile to sell. Results come from several engines at once (Google, Bing, Brave and more), merged into one clean page.
 
 Made for the remote:
 - Press OK on the search box (or the Menu button anywhere) and type with the Fire TV keyboard or your voice.

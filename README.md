@@ -122,6 +122,7 @@ Both sign people in with their **pit.world account**: sign in once at [pit.world
 - **No cookies to search.** The server strips `Set-Cookie` from every response except the sign-in and account routes, which set one only after you press Sign in.
 - Rate limiting keys on an **HMAC of the IP under a secret regenerated every hour**, in memory only.
 - **Anonymous votes and form limits use a salted, hashed device fingerprint** ([@profullstack/browser-fingerprint](https://github.com/profullstack/browser-fingerprint)), used only to stop one device voting many times or flooding a form. The fingerprint itself is never stored, only `HMAC(secret, stable components)`. A result vote keeps a keyed hash of its search, never the words. See [Votes](#votes).
+- **Searches you vote on are counted, unlinked.** `vote_phrases` holds the phrase, the day and a number, nothing about the voter. A search with no vote keeps nothing. Public at `/api/voted-searches` after three votes.
 - Identical searches are cached **in memory for ten minutes** to avoid paying twice; the cache holds words and results, nothing about who asked, and never touches disk.
 - Strict CSP (`default-src 'none'`, same-origin scripts and styles only), `Referrer-Policy: no-referrer`, results link straight to the site.
 
