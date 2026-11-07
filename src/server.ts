@@ -53,13 +53,13 @@ import { Cache, normalizeQuery, search, SearchUnavailable, type Keys, type Searc
 import { parseVertical, searchMedia, thumbAllowed, type MediaResult, type Vertical } from './verticals.js'
 import { AudioRegistry, embedHosts, FIXED_FRAME_HOSTS, proxyAudio, showEpisodes, showPage } from './players.js'
 import { readableText, Speech, SpeechClient } from './speech.js'
-import { summaryKey } from './summarize.js'
+import { summaryKey, isPublicPageUrl } from './summarize.js'
 import { Summarizer, SummaryStore } from './summarize.js'
 import { createThrottle } from '@profullstack/throttle'
 import { CorpusBilling, pricingFromEnv } from './corpus.js'
 import { corpusSection, mountCorpus } from './corpus-routes.js'
 import { Database } from 'bun:sqlite'
-import { randomBytes } from 'node:crypto'
+import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 import { clientSource, CLIENT_HEADERS } from '@profullstack/browser-fingerprint/source'
 import { itemFor, KINDS, Votes, type VoteKind } from './votes.js'
 import { ReaderHealth } from './reader-health.js'
@@ -280,9 +280,16 @@ export function createApp(deps: Deps) {
     }
   }
 
+  const thumbSignature = (raw: string) => createHmac('sha256', fpSecret).update(`img|${raw}`).digest('base64url').slice(0, 32)
+  const signedThumb = (raw: string) => `/img?u=${encodeURIComponent(raw)}&s=${thumbSignature(raw)}`
+  const safeEqual = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
+
   async function runMedia(vertical: Exclude<Vertical, 'web'>, query: string, limit?: number): Promise<{ result: MediaResult | null; error: string | null }> {
     try {
-      return { result: await searchMedia(vertical, query, deps.keys, { cache, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) }), error: null }
+      const result = await searchMedia(vertical, query, deps.keys, { cache, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      // A shop's own picture comes from any host, so it needs our signature to pass /img.
+      if (result.provider !== 'pit') return { result, error: null }
+      return { result: { ...result, hits: result.hits.map((h) => (h.thumbnail && !thumbAllowed(h.thumbnail) ? { ...h, thumbnail: signedThumb(h.thumbnail) } : h)) }, error: null }
     } catch (error) {
       // No query in the message, and nothing logged.
       return { result: null, error: error instanceof SearchUnavailable ? 'These results are unavailable for a moment. Try again shortly.' : 'Something went wrong fetching results.' }
@@ -877,8 +884,24 @@ export function createApp(deps: Deps) {
   // the visitor's browser never talks to Google, YouTube or Open Library. Only the hosts in thumbAllowed():
   // a redirect is followed by hand (covers.openlibrary.org -> archive.org -> ia<N>.us.archive.org), and every
   // hop must pass the same allowlist, so a redirect can never lead the proxy anywhere else.
+  // A URL we signed ourselves, from a card we put on a page, may be on any public host. Nothing
+  // a visitor types can get a signature, so this is not an open proxy.
   app.get('/img', async (c) => {
-    let url = thumbAllowed(c.req.query('u') ?? '')
+    const raw = c.req.query('u') ?? ''
+    const signed = safeEqual(c.req.query('s') ?? '', thumbSignature(raw))
+    const check = async (href: string): Promise<URL | null> => {
+      const listed = thumbAllowed(href)
+      if (listed) return listed
+      if (!signed) return null
+      try {
+        const target = new URL(href)
+        if (target.protocol !== 'https:' || target.port || target.username || target.password) return null
+        return (await isPublicPageUrl(target, deps.resolve)) ? target : null
+      } catch {
+        return null
+      }
+    }
+    let url = await check(raw)
     if (!url) return c.body(null, 400)
     try {
       let upstream: Response | null = null
@@ -889,7 +912,7 @@ export function createApp(deps: Deps) {
           upstream = response
           break
         }
-        const next: URL | null = thumbAllowed(new URL(response.headers.get('location') ?? '', url).href)
+        const next: URL | null = await check(new URL(response.headers.get('location') ?? '', url).href)
         if (!next) return c.body(null, 502)
         url = next
       }

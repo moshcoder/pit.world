@@ -13,6 +13,7 @@
  * Admission is one Lua call, so two workers finding the same link at once
  * still admit it once, and the thousand-page cap is exact.
  */
+import type { McpServer } from './mcp.ts'
 import type { Redis } from 'ioredis'
 import { EMPTY, type Robots } from './robots.ts'
 import { urlId } from './url.ts'
@@ -20,7 +21,7 @@ import { urlId } from './url.ts'
 /** One line of the crawl log, newest first on /status. */
 export type CrawlEvent = {
   at: string
-  kind: 'site' | 'page' | 'render' | 'skip' | 'fail' | 'publish'
+  kind: 'site' | 'page' | 'render' | 'skip' | 'mcp' | 'fail' | 'publish'
   site?: string
   url?: string
   title?: string
@@ -61,6 +62,12 @@ export interface Frontier {
   sitesDue(olderThanMs: number, limit: number): Promise<string[]>
   /** The first start of a site in a cycle claims it; every later one is told no. */
   claimStart(site: string, cycleMs: number): Promise<boolean>
+  /** The first sighting of an MCP address in a cycle claims its probe; every later one is told no. */
+  claimMcp(endpoint: string, cycleMs: number): Promise<boolean>
+  /** A proved server, kept by address. A later proof replaces it. */
+  saveMcp(server: McpServer): Promise<void>
+  listMcp(): Promise<McpServer[]>
+  mcpCount(): Promise<number>
   push(entries: unknown[], max: number): Promise<void>
   /** Records waiting to be published. */
   outboxLength(): Promise<number>
@@ -98,6 +105,8 @@ const K = {
   sites: 'pitcrawl:sites',
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
+  mcp: 'pitcrawl:mcp',
+  mcpSeen: (id: string) => `pitcrawl:mcpseen:${id}`,
   minute: (m: number) => `pitcrawl:m:${m}`,
   hour: (h: number) => `pitcrawl:h:${h}`,
   log: 'pitcrawl:log',
@@ -156,6 +165,25 @@ export class RedisFrontier implements Frontier {
 
   async setRobots(site: string, robots: Robots) {
     await this.redis.set(K.robots(site), JSON.stringify(robots), 'EX', 86_400)
+  }
+
+  async claimMcp(endpoint: string, cycleMs: number) {
+    return (await this.redis.set(K.mcpSeen(urlId(endpoint)), '1', 'PX', cycleMs, 'NX')) === 'OK'
+  }
+  async saveMcp(server: McpServer) {
+    await this.redis.hset(K.mcp, server.mcp, JSON.stringify(server))
+  }
+  async listMcp() {
+    return Object.values(await this.redis.hgetall(K.mcp)).flatMap((raw) => {
+      try {
+        return [JSON.parse(raw) as McpServer]
+      } catch {
+        return []
+      }
+    })
+  }
+  async mcpCount() {
+    return this.redis.hlen(K.mcp)
   }
 
   async noteSite(site: string, maxSites: number, cycleMs: number) {
@@ -288,6 +316,23 @@ export class MemoryFrontier implements Frontier {
     this.leases.set(site, Date.now() + gapMs)
     this.fetched.set(site, (this.fetched.get(site) ?? 0) + 1)
     return { waitMs: 0, pending: 0 }
+  }
+
+  mcpSeen = new Map<string, number>()
+  mcp = new Map<string, McpServer>()
+  async claimMcp(endpoint: string, cycleMs: number) {
+    if ((this.mcpSeen.get(endpoint) ?? 0) > Date.now()) return false
+    this.mcpSeen.set(endpoint, Date.now() + cycleMs)
+    return true
+  }
+  async saveMcp(server: McpServer) {
+    this.mcp.set(server.mcp, server)
+  }
+  async listMcp() {
+    return [...this.mcp.values()]
+  }
+  async mcpCount() {
+    return this.mcp.size
   }
 
   async getRobots(site: string) {

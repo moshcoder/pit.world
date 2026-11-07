@@ -7,6 +7,7 @@
 import type { Config } from './config.ts'
 import { extract, needsRender, type Extracted } from './extract.ts'
 import { politeGet, readSitemapXml } from './fetcher.ts'
+import { endpointsIn, handshake, mcpRecord, type McpJob, WELL_KNOWN } from './mcp.ts'
 import type { Frontier } from './frontier.ts'
 import type { Rendered } from './obscura.ts'
 import { aiDisallowed, allows, EMPTY, parseRobots, parseTdmrep, pathOf, tdmReserved, type Robots } from './robots.ts'
@@ -50,6 +51,8 @@ export type Enqueue = {
   sites(jobs: SiteJob[]): Promise<void>
   pages(jobs: PageJob[]): Promise<void>
   render(job: PageJob): Promise<void>
+  /** MCP addresses to prove (src/mcp.ts). Unset, the crawl does not look for them. */
+  mcp?(jobs: McpJob[]): Promise<void>
 }
 
 export type Deps = {
@@ -65,7 +68,7 @@ export type Deps = {
   /** Offer a submitted feed to rssamplifier.com too (best effort). */
   forwardFeed?: (feedUrl: string) => Promise<void>
   /** The local search mirror; every published batch lands here first. */
-  index?: { add(entries: string[]): number } | null
+  index?: { add(entries: string[]): number; setCard?(url: string, image: string | null, price: string | null): void } | null
 }
 
 export type PageOutcome = { delayMs?: number; outcome: string }
@@ -140,6 +143,89 @@ export function createCrawler(deps: Deps) {
     return robots
   }
 
+  /** Queue addresses for proving, each once a cycle however many pages mention it. */
+  async function noteMcps(endpoints: string[], foundOn: string, descriptor = false): Promise<void> {
+    if (!enqueue.mcp || !endpoints.length) return
+    const fresh: McpJob[] = []
+    for (const endpoint of endpoints) {
+      if (await frontier.claimMcp(endpoint, config.recrawlDays * 86_400_000)) fresh.push({ endpoint, foundOn, ...(descriptor ? { descriptor } : {}) })
+    }
+    if (fresh.length) {
+      await frontier.bump('mcp_candidates', fresh.length)
+      await enqueue.mcp(fresh)
+    }
+  }
+
+  /** What a site says about its own MCP server, read once per cycle at its start. */
+  async function readMcpDescriptors(site: string, robots: Robots): Promise<void> {
+    if (!enqueue.mcp) return
+    for (const path of WELL_KNOWN) {
+      if (!allows(robots, path)) continue
+      try {
+        const r = await get(`https://${site}${path}`, site, 'application/json')
+        if (r.status !== 200 || !/json/.test(r.contentType)) continue
+        await noteMcps(endpointsIn(JSON.parse(r.body)), `https://${site}${path}`, true)
+      } catch {
+        // Not there, or not JSON: most sites have neither.
+      }
+    }
+  }
+
+  /** Ask one address MCP's handshake. Only a server that answers it is kept. */
+  async function probeMcp(job: McpJob): Promise<{ outcome: string }> {
+    const site = siteOf(job.endpoint)
+    if (!site) return { outcome: 'not an address' }
+    const robots = await robotsFor(site)
+    if (robots === 'unavailable') return { outcome: 'robots.txt unavailable' }
+    if (!allows(robots, pathOf(job.endpoint))) return { outcome: 'disallowed' }
+    await frontier.bump('mcp_probed')
+    const proof = await handshake(job.endpoint, { userAgent: config.userAgent, resolver, ...(deps.fetch ? { fetch: deps.fetch } : {}) }).catch(() => null)
+    if (!proof) return { outcome: 'not an MCP server' }
+    const server = mcpRecord(job, proof)
+    await frontier.saveMcp(server)
+    await frontier.bump('mcp_found')
+    await frontier.log({ kind: 'mcp', site, url: job.endpoint, title: server.name, note: `${server.tools.length} tools${server.auth === 'required' ? ', sign-in required' : ''}` })
+    if (config.nichedbKey) {
+      const response = await (deps.fetch ?? fetch)(`${config.nichedbUrl}/api/v1/mcp/records`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${config.nichedbKey}`, 'user-agent': config.userAgent },
+        body: JSON.stringify({ records: [server] }),
+        signal: AbortSignal.timeout(30_000),
+      })
+      if (!response.ok) throw new Error(`nichedb answered HTTP ${response.status} for an MCP record`)
+    }
+    return { outcome: 'proved' }
+  }
+
+  /**
+   * Product pages indexed before cards existed: read each once and keep its image and price, so
+   * the index fills in where people actually look instead of re-crawling all of it. Up to 12 at a
+   * time, each politely: robots.txt applies, and a site that says no gets an empty card.
+   */
+  async function fillCards(urls: string[]): Promise<void> {
+    await Promise.all(
+      urls.slice(0, 12).map(async (url) => {
+        let image: string | null = null
+        let price: string | null = null
+        try {
+          const site = siteOf(url)
+          const robots = site ? await robotsFor(site) : 'unavailable'
+          if (site && robots !== 'unavailable' && allows(robots, pathOf(url))) {
+            const r = await politeGet(url, { userAgent: config.userAgent, resolver, site, timeoutMs: 8_000, ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+            if (r.status < 400 && /html/.test(r.contentType)) {
+              const doc = extract(r.body, normalizeUrl(r.finalUrl) ?? url, { crawler: config.userAgent })
+              image = doc.record.image?.url ?? doc.enrichment.images[0]?.url ?? null
+              price = doc.enrichment.price
+            }
+          }
+        } catch (error) {
+          log(`card ${url}: ${(error as Error).message}`)
+        }
+        deps.index?.setCard?.(url, image, price)
+      }),
+    )
+  }
+
   const gapFor = (robots: Robots) => Math.max(config.hostDelayMs, Math.min(robots.crawlDelayMs ?? 0, config.maxDelayMs))
 
   async function admitAll(site: string, urls: string[], depth: number, robots: Robots): Promise<PageJob[]> {
@@ -180,6 +266,7 @@ export function createCrawler(deps: Deps) {
       await frontier.log({ kind: 'skip', site, note: 'robots.txt disallows pitbot' })
       return { admitted: 0, outcome: 'robots.txt disallows /' }
     }
+    await readMcpDescriptors(site, robots)
     const home = `https://${site}/`
     const listed: string[] = []
     const queue = robots.sitemaps.length ? [...robots.sitemaps] : [`https://${site}/sitemap.xml`]
@@ -234,6 +321,7 @@ export function createCrawler(deps: Deps) {
       note: doc.noindex ? 'noindex' : `${doc.enrichment.words} words${followed ? `, ${followed} new links` : ''}`,
     })
     if (config.discover && doc.external.length) await scheduleSites(doc.external.slice(0, SITES_PER_PAGE), 'link')
+    await noteMcps(doc.mcp, doc.record.url)
     return doc.noindex ? 'noindex' : 'indexed'
   }
 
@@ -436,7 +524,7 @@ export function createCrawler(deps: Deps) {
     return out
   }
 
-  return { scheduleSites, crawlSite, crawlPage, renderPage, publish, recrawl, submit, robotsFor }
+  return { scheduleSites, crawlSite, crawlPage, renderPage, probeMcp, fillCards, publish, recrawl, submit, robotsFor }
 }
 
 export type Crawler = ReturnType<typeof createCrawler>

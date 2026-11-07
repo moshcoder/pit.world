@@ -23,6 +23,7 @@ import { createCrawler, type Crawler, type PageJob, type SiteJob } from './crawl
 import { RedisFrontier } from './frontier.ts'
 import { submitFeed } from '@profullstack/submit-feed/core'
 import { IndexStore } from './index-store.ts'
+import type { McpJob } from './mcp.ts'
 import { ObscuraPool } from './obscura.ts'
 import { urlId } from './url.ts'
 
@@ -32,6 +33,7 @@ export const QUEUES = {
   render: 'pit-crawl-render',
   publish: 'pit-crawl-publish',
   submit: 'pit-crawl-submit',
+  mcp: 'pit-crawl-mcp',
 } as const
 
 /** addBulk in chunks: one call with half a million jobs is one enormous Redis script run. */
@@ -77,6 +79,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     render: new Queue(QUEUES.render, opts),
     publish: new Queue(QUEUES.publish, opts),
     submit: new Queue(QUEUES.submit, opts),
+    mcp: new Queue(QUEUES.mcp, opts),
   }
   const frontier = new RedisFrontier(redis, config.maxPages, Math.min(config.seenTtlMs, config.recrawlDays * 86_400_000))
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
@@ -107,6 +110,9 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
       },
       async render(job: PageJob) {
         await queues.render.add('render', job, { jobId: `r-${urlId(job.url)}`, attempts: 2 })
+      },
+      async mcp(jobs: McpJob[]) {
+        await addInChunks(jobs, (chunk) => queues.mcp.addBulk(chunk.map((data) => ({ name: 'mcp', data, opts: { jobId: `m-${urlId(data.endpoint)}`, attempts: 2 } }))))
       },
     },
   })
@@ -211,6 +217,17 @@ export async function startWorkers(config: Config, log: (line: string) => void =
         lockDuration: 120_000,
       }),
     )
+  if (role('publish'))
+    workers.push(
+      new Worker<McpJob>(
+        QUEUES.mcp,
+        async (job) => {
+          const out = await crawler.probeMcp(job.data)
+          if (out.outcome === 'proved') log(`mcp ${job.data.endpoint}: proved`)
+        },
+        { ...common, connection: workerConnection(), concurrency: 8, lockDuration: 60_000 },
+      ),
+    )
   if (role('publish')) {
     await runtime.queues.publish.upsertJobScheduler('flush', { every: 5_000 }, { name: 'flush', opts: { removeOnComplete: true, removeOnFail: 100 } })
     await runtime.queues.publish.upsertJobScheduler('recrawl', { every: 3_600_000 }, { name: 'recrawl', opts: { removeOnComplete: true, removeOnFail: 100 } })
@@ -235,7 +252,7 @@ export async function startWorkers(config: Config, log: (line: string) => void =
       if (error instanceof DelayedError) return
       log(`${w.name} ${job?.id ?? '?'} failed: ${error.message}`)
       const data = (job?.data ?? {}) as Partial<PageJob>
-      const field = w.name === QUEUES.render ? 'renders_errored' : w.name === QUEUES.publish ? 'publish_errored' : 'pages_errored'
+      const field = w.name === QUEUES.render ? 'renders_errored' : w.name === QUEUES.publish ? 'publish_errored' : w.name === QUEUES.mcp ? 'mcp_errored' : 'pages_errored'
       void runtime.frontier.bump(field).catch(() => {})
       void runtime.frontier
         .log({ kind: 'fail', ...(data.site ? { site: data.site } : {}), ...(data.url ? { url: data.url } : {}), note: `${w.name.replace('pit-crawl-', '')}: ${error.message.slice(0, 160)}` })
@@ -279,6 +296,8 @@ export async function report(runtime: Runtime, config: Config) {
   // page, not the whole page: the one thing /status exists to tell you is whether the
   // crawler is alive, and it was reporting "Offline" on a healthy one (2026-11-05).
   const stats: Record<string, number> = { ...snap.stats, index_images: snap.stats.images_found ?? 0, index_videos: snap.stats.videos_found ?? 0 }
+  // Redis, like the media counters: this page must never wait on SQLite for it.
+  stats.index_mcps = await runtime.frontier.mcpCount().catch(() => 0)
   try {
     stats.index_pages = runtime.index.count()
     stats.index_bytes = runtime.index.sizeBytes()

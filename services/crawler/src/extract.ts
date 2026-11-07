@@ -7,6 +7,7 @@
  *
  * Reading order per the spec: JSON-LD, then og:, then twitter:, then HTML.
  */
+import { mcpCandidates } from './mcp.ts'
 import { createHash } from 'node:crypto'
 import { type HTMLElement, parse } from 'node-html-parser'
 import { normalizeUrl, sameSite, siteOf } from './url.ts'
@@ -44,6 +45,8 @@ export type Enrichment = {
   language: string | null
   keywords: string[]
   excerpt: string
+  /** The price the page states, as a shop would write it. */
+  price: string | null
   /** The page's main text, up to TEXT_MAX characters: what the local index searches. */
   text: string
   images: ImageRef[]
@@ -63,6 +66,8 @@ export type Extracted = {
   internal: string[]
   /** Sites this page links to. */
   external: string[]
+  /** Addresses on the page that look like MCP endpoints (src/mcp.ts); nothing is proved yet. */
+  mcp: string[]
   noindex: boolean
   nofollow: boolean
   /** `noai` in meta robots (or a pitbot meta): no AI training on this page. */
@@ -234,6 +239,29 @@ export function videoRefOf(raw: string, base: string): { url: string; provider: 
 }
 
 /** Images and videos a page shows, as references. Read before the text pass, which drops iframes. */
+const SYMBOLS: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+const priced = (amount: unknown, currency: unknown): string | null => {
+  const value = typeof amount === 'number' ? String(amount) : typeof amount === 'string' ? amount.trim() : ''
+  if (!/^\d[\d,]*(\.\d+)?$/.test(value) || Number(value.replace(/,/g, '')) <= 0) return null
+  const code = typeof currency === 'string' ? currency.trim().toUpperCase().slice(0, 3) : ''
+  return SYMBOLS[code] ? `${SYMBOLS[code]}${value}` : code ? `${code} ${value}` : `$${value}`
+}
+
+/** The price a product page states: Open Graph first, then JSON-LD offers. Null when it states none. */
+export function priceOf(og: Record<string, string>, jsonld: unknown[]): string | null {
+  const fromOg = priced(og['product:price:amount'] ?? og['og:price:amount'], og['product:price:currency'] ?? og['og:price:currency'])
+  if (fromOg) return fromOg
+  const nodes = jsonld.flatMap((e: any) => (Array.isArray(e?.['@graph']) ? e['@graph'] : [e]))
+  for (const node of nodes) {
+    const offers: any[] = [node?.offers].flat().filter(Boolean)
+    for (const offer of offers) {
+      const found = priced(offer?.price ?? offer?.lowPrice, offer?.priceCurrency)
+      if (found) return found
+    }
+  }
+  return null
+}
+
 export function mediaOf(root: HTMLElement, url: string, metas: { og: Record<string, string>; twitter: Record<string, string> }, jsonld: Array<Record<string, unknown>>): { images: ImageRef[]; videos: VideoRef[] } {
   const images = new Map<string, ImageRef>()
   const addImage = (raw: string | undefined | null, alt: string, width: number | null, height: number | null) => {
@@ -405,6 +433,7 @@ export function extract(
       language,
       keywords,
       excerpt: clip(main, 1000),
+      price: priceOf(metas.og, jsonld),
       text: main.length > TEXT_MAX ? main.slice(0, TEXT_MAX) : main,
       images: media.images,
       videos: media.videos,
@@ -417,6 +446,7 @@ export function extract(
     },
     internal: nofollow ? [] : [...internal],
     external: nofollow ? [] : [...external],
+    mcp: nofollow ? [] : mcpCandidates(html),
     noindex,
     nofollow,
     noai,

@@ -26,7 +26,7 @@ import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export type IndexedRecord = {
-  record: { url: string; canonical: string; title: string; description: string | null; kind: string; language: string | null; fetched_at: string; site?: { name?: string } }
+  record: { image?: { url: string } | null; url: string; canonical: string; title: string; description: string | null; kind: string; language: string | null; fetched_at: string; site?: { name?: string } }
   enrichment: {
     keywords?: string[]
     excerpt?: string
@@ -34,6 +34,7 @@ export type IndexedRecord = {
     language?: string | null
     /** Set by the crawler from the publisher's opt-outs (crawler.ts trainingFor). */
     training?: { allowed: boolean; reason: string }
+    price?: string | null
     images?: Array<{ url: string; alt?: string; width?: number | null; height?: number | null }>
     videos?: Array<{ url: string; title?: string; thumbnail?: string | null; provider?: string | null }>
   }
@@ -178,6 +179,8 @@ export class IndexStore {
       CREATE INDEX IF NOT EXISTS pages_fetched_at ON pages (fetched_at);
       CREATE TABLE IF NOT EXISTS policy_site_checks (site TEXT PRIMARY KEY, checked_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS corpus_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+      -- What a product card shows, by reference. A row with no image is a page that has none: not asked again.
+      CREATE TABLE IF NOT EXISTS page_cards (url TEXT PRIMARY KEY, image TEXT, price TEXT);
       CREATE TRIGGER IF NOT EXISTS pages_au AFTER UPDATE ON pages BEGIN
         INSERT INTO pages_fts(pages_fts, rowid, title, description, keywords, body, site) VALUES ('delete', old.id, old.title, old.description, old.keywords, old.body, old.site);
         INSERT INTO pages_fts(rowid, title, description, keywords, body, site) VALUES (new.id, new.title, new.description, new.keywords, new.body, new.site);
@@ -275,6 +278,7 @@ export class IndexStore {
         } catch {
           continue
         }
+        if (r.kind === 'product') this.setCard(r.canonical, entry.record.image?.url ?? entry.enrichment?.images?.[0]?.url ?? null, entry.enrichment?.price ?? null)
         const language = entry.enrichment?.language ?? r.language ?? null
         const fetched = r.fetched_at ?? new Date().toISOString()
         const row = upsert.get({
@@ -554,6 +558,22 @@ export class IndexStore {
       for (const v of verdicts) set.run(v.allowed ? 1 : 0, v.reason.slice(0, 120), v.id)
       this.db.run('INSERT INTO policy_site_checks (site, checked_at) VALUES (?, ?) ON CONFLICT(site) DO UPDATE SET checked_at = excluded.checked_at', [site, now])
     })()
+  }
+
+  setCard(url: string, image: string | null, price: string | null): void {
+    this.db.query('INSERT INTO page_cards (url, image, price) VALUES (?, ?, ?) ON CONFLICT(url) DO UPDATE SET image = excluded.image, price = excluded.price').run(url, image, price)
+  }
+
+  /** Cards for these pages. A page absent from the map has never been looked at. */
+  cards(urls: string[]): Map<string, { image: string | null; price: string | null }> {
+    const out = new Map<string, { image: string | null; price: string | null }>()
+    if (!urls.length) return out
+    const rows = this.db
+      // threatcrush-disable-next-line sql-template-interpolation  only "?" placeholders are interpolated; every value is bound
+      .query(`SELECT url, image, price FROM page_cards WHERE url IN (${urls.map(() => '?').join(',')})`)
+      .all(...urls) as Array<{ url: string; image: string | null; price: string | null }>
+    for (const r of rows) out.set(r.url, { image: r.image, price: r.price })
+    return out
   }
 
   /** Best matches: every word if any page has them all, else any word. Title weighs most. `kind` keeps one kind of page. */

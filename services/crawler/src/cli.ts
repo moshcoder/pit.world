@@ -13,6 +13,7 @@
  *   pit-crawler read <url> [--render]        read one page now and print its record (no Redis)
  */
 import { readFileSync } from 'node:fs'
+import { searchMcps } from './mcp.ts'
 import { type Config, configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
@@ -64,7 +65,22 @@ async function worker() {
             const limit = Number(url.searchParams.get('limit')) || 10
             const kind = url.searchParams.get('kind')?.slice(0, 40) || undefined
             const items = q ? runtime.index.search(q, limit, kind) : []
+            if (kind === 'product' && items.length) {
+              const urls = items.map((i) => i.url)
+              const known = runtime.index.cards(urls)
+              const unread = urls.filter((u) => !known.has(u))
+              // A shopper waits a moment for pictures, never long: the reads finish and are kept either way.
+              if (unread.length) await Promise.race([runtime.crawler.fillCards(unread), new Promise((done) => setTimeout(done, 2_500))])
+              const cards = unread.length ? runtime.index.cards(urls) : known
+              return Response.json({ q, count: items.length, items: items.map((i) => ({ ...i, ...cards.get(i.url) })) })
+            }
             return Response.json({ q, count: items.length, items })
+          }
+          if (path === '/api/v1/mcp') {
+            // Proved servers, from Redis: no SQLite in this path.
+            const q = (url.searchParams.get('q') ?? '').slice(0, 200)
+            const items = searchMcps(await runtime.frontier.listMcp(), q, Number(url.searchParams.get('limit')) || 20)
+            return Response.json({ q, count: items.length, total: await runtime.frontier.mcpCount(), items })
           }
           if (path === '/api/v1/submit' && request.method === 'POST') {
             // Loopback only (the port is published on 127.0.0.1): pit.world's /submit posts here.
