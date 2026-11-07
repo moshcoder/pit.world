@@ -587,7 +587,10 @@ export class Summarizer {
     if (now.status === 'done' || now.status === 'pending') return now
     const page = await this.quickRead(url)
     const remembered = (this.texts.get(key)?.text ?? '').split('\n')
-    const draft = quickSummary(page.article) || quickSummary(page.text, page.title) || quickSummary(remembered.slice(1).join(' '))
+    const fromPage = quickSummary(page.article) || quickSummary(page.text, page.title)
+    const fromSearch = quickSummary(remembered.slice(1).join(' '))
+    // One thin line from a page says less than the engine's snippet did.
+    const draft = fromPage.length >= 100 || !fromSearch ? fromPage : fromSearch
     while (this.drafts.size >= 2_000) this.drafts.delete(this.drafts.keys().next().value!)
     if (draft || page.text) this.drafts.set(key, { draft, page: page.text, at: Date.now() })
     const started = this.start(url)

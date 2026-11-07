@@ -7,7 +7,7 @@
 const MAX_CHARS = 480
 const SENTENCES = 3
 /** Page furniture that survives stripping the markup. */
-const NOISE = /\b(cookies?|subscribe|sign (?:up|in)|log ?in|newsletter|copyright|all rights reserved|javascript|advertisement|read more|click here|privacy policy|terms of (?:use|service)|share this|follow us)\b/i
+const NOISE = /\b(cookies?|subscribe|sign (?:up|in)|log ?in|newsletter|copyright|all rights reserved|javascript|advertisement|read more|click here|privacy policy|terms of (?:use|service)|share this|follow us|dismiss alert|copy and paste|embed code|instantly share|skip to content|sign-?in to|enable notifications)\b/i
 
 const words = (text: string) => (text.toLowerCase().match(/[\p{L}\p{N}]{4,}/gu) ?? []) as string[]
 
