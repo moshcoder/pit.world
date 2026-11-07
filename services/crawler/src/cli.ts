@@ -4,6 +4,7 @@
  *
  *   pit-crawler worker                       run the roles in CRAWL_ROLES (default all) until stopped
  *   pit-crawler seed <site...>               crawl these sites
+ *   pit-crawler social <site...> [--file f]  recognise social sites now, without a crawl cycle
  *   pit-crawler seed --from nichedb|ring     backfill: every site nichedb keeps, or the ring
  *   pit-crawler seed --from rssamplifier|p0dcasters   every site behind every feed in that directory's OPML
  *   pit-crawler seed --opml <url|path>       any OPML file
@@ -75,6 +76,13 @@ async function worker() {
               return Response.json({ q, count: items.length, items: items.map((i) => ({ ...i, ...cards.get(i.url) })) })
             }
             return Response.json({ q, count: items.length, items })
+          }
+          if (path === '/api/v1/social') {
+            // Across networks, asked from here: see searchSocial.
+            const q = (url.searchParams.get('q') ?? '').slice(0, 200)
+            const limit = Math.min(50, Number(url.searchParams.get('limit')) || 20)
+            if (!q) return Response.json({ items: [], unavailable: false })
+            return Response.json(await runtime.crawler.searchSocial(q, limit, runtime.index.search(q, limit, 'post')))
           }
           if (path === '/api/v1/mcp') {
             // Proved servers, from Redis: no SQLite in this path.
@@ -231,6 +239,18 @@ function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, inde
   }
 }
 
+/** Recognise sites now: the crawl does this itself at each site's start. `--file` takes one per line. */
+async function social(args: string[]) {
+  const fileAt = args.indexOf('--file')
+  const sites = fileAt === -1 ? args : sitesFromText(readFileSync(args[fileAt + 1] ?? '', 'utf8'))
+  const runtime = createRuntime(configFromEnv(), log)
+  try {
+    console.log(JSON.stringify(await runtime.crawler.identifySocial(sites), null, 2))
+  } finally {
+    await runtime.close()
+  }
+}
+
 async function seed(args: string[]) {
   const config = configFromEnv()
   const from = flag(args, '--from')
@@ -323,7 +343,7 @@ async function read(args: string[]) {
 }
 
 const [command, ...rest] = process.argv.slice(2)
-const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, import: importCmd, stats: () => stats(), read }
+const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read }
 const run = command ? commands[command] : undefined
 if (!run) {
   console.log(

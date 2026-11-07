@@ -17,7 +17,7 @@ import { bookReader, embedFor, peertubeEmbed, previewPlayer, readableScans, show
 
 type Fetch = typeof fetch
 
-export type Vertical = 'web' | 'images' | 'videos' | 'music' | 'live' | 'shopping' | 'news' | 'books' | 'podcasts' | 'blogs' | 'places' | 'scholar' | 'mcps'
+export type Vertical = 'web' | 'images' | 'videos' | 'music' | 'live' | 'shopping' | 'news' | 'books' | 'podcasts' | 'blogs' | 'places' | 'scholar' | 'mcps' | 'social'
 
 export const VERTICALS: Array<{ id: Vertical; label: string }> = [
   { id: 'web', label: 'All' },
@@ -33,13 +33,14 @@ export const VERTICALS: Array<{ id: Vertical; label: string }> = [
   { id: 'places', label: 'Places' },
   { id: 'scholar', label: 'Scholar' },
   { id: 'mcps', label: 'MCPs' },
+  { id: 'social', label: 'Social' },
 ]
 
 /**
  * The tabs only Google answers (through Serper); without a Serper key they say so instead of guessing.
  * Images, Videos and Live are not here: they fall back to open indexes (Wikimedia Commons, PeerTube, the Internet Archive).
  */
-type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs' | 'mcps'>
+type SerperVertical = Exclude<Vertical, 'web' | 'books' | 'podcasts' | 'blogs' | 'mcps' | 'social'>
 
 export function parseVertical(value: string | undefined | null): Vertical {
   return VERTICALS.some((v) => v.id === value) ? (value as Vertical) : 'web'
@@ -665,6 +666,7 @@ const LIMITS: Partial<Record<Vertical, { max: number; default: number }>> = {
   images: { max: 40, default: 30 },
   shopping: { max: 40, default: 20 },
   mcps: { max: 50, default: 20 },
+  social: { max: 50, default: 24 },
   books: { max: 40, default: 20 },
   podcasts: { max: 40, default: 20 },
   blogs: { max: 30, default: 20 },
@@ -689,6 +691,20 @@ export function priceIn(text: string | undefined): string | undefined {
 
 /** Product pages pitbot read itself: `keys.pit` is "<base URL>[ <api key>]" (src/server.ts). */
 /** MCP servers pitbot proved (services/crawler/src/mcp.ts). Their words are their operators'. */
+/** Posts across networks, asked by the crawler (services/crawler/src/social.ts). Their words are strangers'. */
+async function askSocial(fetchImpl: Fetch, pit: string, q: string, limit: number): Promise<Media[]> {
+  const [base] = pit.split(' ')
+  const body = await fetchJson(fetchImpl, `${base!.replace(/\/+$/, '')}/api/v1/social?${new URLSearchParams({ q, limit: String(limit) })}`, { headers: OURS }, 12_000)
+  if (body?.unavailable) throw new Error('no network answered')
+  const rows: any[] = Array.isArray(body?.items) ? body.items : []
+  return rows.flatMap((r) => {
+    const url = httpsUrl(r?.url)
+    const title = str(r?.title)
+    if (!url || !title) return []
+    return [{ url, title, host: str(r?.host) || host(url), description: str(r?.description) || undefined, author: str(r?.author) || undefined, date: str(r?.date) || undefined, extra: str(r?.extra) || undefined }]
+  })
+}
+
 async function askOwnMcps(fetchImpl: Fetch, pit: string, q: string, limit: number): Promise<Media[]> {
   const [base] = pit.split(' ')
   const body = await fetchJson(fetchImpl, `${base!.replace(/\/+$/, '')}/api/v1/mcp?${new URLSearchParams({ q, limit: String(limit) })}`, { headers: OURS }, 4_000)
@@ -823,6 +839,10 @@ export async function searchMedia(
         )
         break
       }
+      case 'social':
+        if (!keys.pit) throw new Error('our own index is not configured')
+        result = make('pit', await askSocial(fetchImpl, keys.pit, q, limit))
+        break
       case 'mcps':
         if (!keys.pit) throw new Error('our own index is not configured')
         result = make('pit', await askOwnMcps(fetchImpl, keys.pit, q, limit))

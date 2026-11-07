@@ -14,6 +14,7 @@
  * still admit it once, and the thousand-page cap is exact.
  */
 import type { McpServer } from './mcp.ts'
+import type { SocialSite } from './social.ts'
 import type { Redis } from 'ioredis'
 import { EMPTY, type Robots } from './robots.ts'
 import { urlId } from './url.ts'
@@ -21,7 +22,7 @@ import { urlId } from './url.ts'
 /** One line of the crawl log, newest first on /status. */
 export type CrawlEvent = {
   at: string
-  kind: 'site' | 'page' | 'render' | 'skip' | 'mcp' | 'fail' | 'publish'
+  kind: 'site' | 'page' | 'render' | 'skip' | 'mcp' | 'social' | 'fail' | 'publish'
   site?: string
   url?: string
   title?: string
@@ -64,6 +65,9 @@ export interface Frontier {
   claimStart(site: string, cycleMs: number): Promise<boolean>
   /** The first sighting of an MCP address in a cycle claims its probe; every later one is told no. */
   claimMcp(endpoint: string, cycleMs: number): Promise<boolean>
+  /** A site pitbot recognised as social, kept by host. */
+  saveSocial(site: SocialSite): Promise<void>
+  listSocial(): Promise<SocialSite[]>
   /** A proved server, kept by address. A later proof replaces it. */
   saveMcp(server: McpServer): Promise<void>
   listMcp(): Promise<McpServer[]>
@@ -106,6 +110,7 @@ const K = {
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
   mcp: 'pitcrawl:mcp',
+  social: 'pitcrawl:social',
   mcpSeen: (id: string) => `pitcrawl:mcpseen:${id}`,
   minute: (m: number) => `pitcrawl:m:${m}`,
   hour: (h: number) => `pitcrawl:h:${h}`,
@@ -169,6 +174,18 @@ export class RedisFrontier implements Frontier {
 
   async claimMcp(endpoint: string, cycleMs: number) {
     return (await this.redis.set(K.mcpSeen(urlId(endpoint)), '1', 'PX', cycleMs, 'NX')) === 'OK'
+  }
+  async saveSocial(site: SocialSite) {
+    await this.redis.hset(K.social, site.site, JSON.stringify(site))
+  }
+  async listSocial() {
+    return Object.values(await this.redis.hgetall(K.social)).flatMap((raw) => {
+      try {
+        return [JSON.parse(raw) as SocialSite]
+      } catch {
+        return []
+      }
+    })
   }
   async saveMcp(server: McpServer) {
     await this.redis.hset(K.mcp, server.mcp, JSON.stringify(server))
@@ -318,6 +335,13 @@ export class MemoryFrontier implements Frontier {
     return { waitMs: 0, pending: 0 }
   }
 
+  social = new Map<string, SocialSite>()
+  async saveSocial(site: SocialSite) {
+    this.social.set(site.site, site)
+  }
+  async listSocial() {
+    return [...this.social.values()]
+  }
   mcpSeen = new Map<string, number>()
   mcp = new Map<string, McpServer>()
   async claimMcp(endpoint: string, cycleMs: number) {

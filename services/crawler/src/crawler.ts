@@ -8,6 +8,7 @@ import type { Config } from './config.ts'
 import { extract, needsRender, type Extracted } from './extract.ts'
 import { politeGet, readSitemapXml } from './fetcher.ts'
 import { endpointsIn, handshake, mcpRecord, type McpJob, WELL_KNOWN } from './mcp.ts'
+import { globalSources, interleave, isTsbbDescriptor, recognise, sampleInstances, searchInstance, type SocialPost, type SocialSite } from './social.ts'
 import type { Frontier } from './frontier.ts'
 import type { Rendered } from './obscura.ts'
 import { aiDisallowed, allows, EMPTY, parseRobots, parseTdmrep, pathOf, tdmReserved, type Robots } from './robots.ts'
@@ -156,15 +157,78 @@ export function createCrawler(deps: Deps) {
     }
   }
 
+  async function noteSocial(found: SocialSite): Promise<void> {
+    await frontier.saveSocial(found)
+    await frontier.bump('social_found')
+    await frontier.log({ kind: 'social', site: found.site, note: found.software })
+  }
+
+  /** Is this site a social network? Asked once per cycle, by the protocol it speaks. */
+  async function recogniseSocial(site: string, robots: Robots): Promise<SocialSite | null> {
+    const found = await recognise(site, async (path) => {
+      if (!allows(robots, path)) return { status: 403, contentType: '', body: '' }
+      return get(`https://${site}${path}`, site, 'application/json,text/html;q=0.5')
+    }).catch(() => null)
+    if (found) await noteSocial(found)
+    return found
+  }
+
+  /** Recognise these sites now, without waiting for their next crawl cycle. */
+  async function identifySocial(sites: string[]): Promise<Array<SocialSite | { site: string; adapter: null }>> {
+    const out: Array<SocialSite | { site: string; adapter: null }> = []
+    for (const input of sites) {
+      const site = siteFromInput(input)
+      if (!site) continue
+      const robots = await robotsFor(site)
+      let found = robots === 'unavailable' ? null : await recogniseSocial(site, robots)
+      if (!found && robots !== 'unavailable') {
+        await readMcpDescriptors(site, robots)
+        found = (await frontier.listSocial()).find((s) => s.site === site) ?? null
+      }
+      out.push(found ?? { site, adapter: null })
+    }
+    return out
+  }
+
+  /**
+   * One search across social networks: the two big public indexes, a fair sample of the sites
+   * pitbot recognised, and pages in our own index that mark themselves as posts or threads. A
+   * network that fails or runs long costs only itself. Asked here rather than from the web server:
+   * these hostnames came off the open web, and this container cannot reach the host's services.
+   */
+  async function searchSocial(q: string, limit: number, ownPages: Array<{ url: string; title: string; site: string; summary?: string; fetched_at?: string }> = []): Promise<{ items: SocialPost[]; unavailable: boolean }> {
+    const per = Math.min(25, Math.max(5, Math.ceil(limit / 2)))
+    const getJson = (site?: string) => async (url: string) => {
+      const r = await politeGet(url, { userAgent: config.userAgent, resolver, timeoutMs: 4_000, accept: 'application/json', ...(site ? { site } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      if (r.status !== 200) throw new Error(`HTTP ${r.status}`)
+      return JSON.parse(r.body)
+    }
+    const instances = sampleInstances(await frontier.listSocial())
+    const asks: Array<Promise<SocialPost[]>> = [
+      ...globalSources(q, per).map(async (s) => s.parse(await getJson()(s.url))),
+      ...instances.map(async (instance) => {
+        const robots = await robotsFor(instance.site)
+        if (robots === 'unavailable') throw new Error('robots.txt unavailable')
+        return searchInstance(getJson(instance.site), instance, q, per)
+      }),
+    ]
+    const within = <T>(work: Promise<T>) => Promise.race([work, new Promise<T>((_, no) => setTimeout(() => no(new Error('too slow')), 6_000))])
+    const settled = await Promise.allSettled(asks.map(within))
+    const lists = settled.flatMap((s) => (s.status === 'fulfilled' ? [s.value] : []))
+    const own = ownPages.flatMap((p) => (p.url.startsWith('https://') ? [{ url: p.url, title: p.title, host: p.site, ...(p.summary ? { description: p.summary.slice(0, 300) } : {}), ...(p.fetched_at ? { date: p.fetched_at.slice(0, 10) } : {}) }] : []))
+    return { items: interleave([...lists, own], limit), unavailable: !lists.length && !own.length }
+  }
+
   /** What a site says about its own MCP server, read once per cycle at its start. */
   async function readMcpDescriptors(site: string, robots: Robots): Promise<void> {
-    if (!enqueue.mcp) return
     for (const path of WELL_KNOWN) {
       if (!allows(robots, path)) continue
       try {
         const r = await get(`https://${site}${path}`, site, 'application/json')
         if (r.status !== 200 || !/json/.test(r.contentType)) continue
-        await noteMcps(endpointsIn(JSON.parse(r.body)), `https://${site}${path}`, true)
+        const doc = JSON.parse(r.body)
+        if (isTsbbDescriptor(doc)) await noteSocial({ site, software: 'tsbb', adapter: 'tsbb', seenAt: new Date().toISOString() })
+        await noteMcps(endpointsIn(doc), `https://${site}${path}`, true)
       } catch {
         // Not there, or not JSON: most sites have neither.
       }
@@ -267,6 +331,7 @@ export function createCrawler(deps: Deps) {
       return { admitted: 0, outcome: 'robots.txt disallows /' }
     }
     await readMcpDescriptors(site, robots)
+    await recogniseSocial(site, robots)
     const home = `https://${site}/`
     const listed: string[] = []
     const queue = robots.sitemaps.length ? [...robots.sitemaps] : [`https://${site}/sitemap.xml`]
@@ -524,7 +589,7 @@ export function createCrawler(deps: Deps) {
     return out
   }
 
-  return { scheduleSites, crawlSite, crawlPage, renderPage, probeMcp, fillCards, publish, recrawl, submit, robotsFor }
+  return { scheduleSites, crawlSite, crawlPage, renderPage, probeMcp, fillCards, identifySocial, searchSocial, publish, recrawl, submit, robotsFor }
 }
 
 export type Crawler = ReturnType<typeof createCrawler>
