@@ -108,19 +108,21 @@ export class Votes {
     const cols = db.query('PRAGMA table_info(votes)').all() as Array<{ name: string }>
     if (!cols.some((c) => c.name === 'account')) db.run("ALTER TABLE votes ADD COLUMN account TEXT NOT NULL DEFAULT ''")
     db.run("CREATE INDEX IF NOT EXISTS votes_account ON votes (account, at) WHERE account <> ''")
+    // The words a signed-in vote was cast on, so its owner can see them. '' when signed out: those stay a hash. Additive.
+    if (!cols.some((c) => c.name === 'phrase')) db.run("ALTER TABLE votes ADD COLUMN phrase TEXT NOT NULL DEFAULT ''")
   }
 
   /**
-   * A signed-in account's votes, newest first. The search a result vote was cast on is only ever a
-   * keyed hash, so history says "on a search", never which words.
+   * A signed-in account's votes, newest first, with the words each was cast on. Votes from before
+   * the words were kept have only their keyed hash, so `phrase` is '' and they say "on a search".
    */
-  history(account: string, options: { limit?: number; before?: number } = {}): Array<{ item: string; kind: VoteKind; target: string; qkey: string; value: number; at: number }> {
+  history(account: string, options: { limit?: number; before?: number } = {}): Array<{ item: string; kind: VoteKind; target: string; qkey: string; phrase: string; value: number; at: number }> {
     if (!account) return []
     const limit = Math.min(200, Math.max(1, Math.trunc(options.limit ?? 50)))
     const before = options.before ?? Number.MAX_SAFE_INTEGER
     const rows = this.db
-      .query("SELECT item, kind, qkey, value, at FROM votes WHERE account = ? AND account <> '' AND at < ? ORDER BY at DESC LIMIT ?")
-      .all(account, before, limit) as Array<{ item: string; kind: VoteKind; qkey: string; value: number; at: number }>
+      .query("SELECT item, kind, qkey, phrase, value, at FROM votes WHERE account = ? AND account <> '' AND at < ? ORDER BY at DESC LIMIT ?")
+      .all(account, before, limit) as Array<{ item: string; kind: VoteKind; qkey: string; phrase: string; value: number; at: number }>
     return rows.map((r) => ({ ...r, target: r.item.slice(r.kind.length + 1) }))
   }
 
@@ -158,11 +160,12 @@ export class Votes {
     } else
       this.db
         .query(
-          `INSERT INTO votes (visitor, item, qkey, kind, domain, value, at, account) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO votes (visitor, item, qkey, kind, domain, value, at, account, phrase) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT (visitor, item, qkey) DO UPDATE SET value = excluded.value, at = excluded.at,
-             account = CASE WHEN excluded.account <> '' THEN excluded.account ELSE votes.account END`,
+             account = CASE WHEN excluded.account <> '' THEN excluded.account ELSE votes.account END,
+             phrase = CASE WHEN excluded.phrase <> '' THEN excluded.phrase ELSE votes.phrase END`,
         )
-        .run(o.visitor, o.item, qkey, o.kind, o.domain, value, this.now(), o.account ?? '')
+        .run(o.visitor, o.item, qkey, o.kind, o.domain, value, this.now(), o.account ?? '', o.account ? (o.query ?? '').trim().slice(0, 200) : '')
     return { value, qkey, ...this.tally(o.item, o.kind === 'result' ? o.query : undefined) }
   }
 
