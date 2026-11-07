@@ -22,6 +22,7 @@ import { Database } from 'bun:sqlite'
 import { lookup } from 'node:dns/promises'
 import type { Hit } from './search.js'
 import { isPublicAddress } from './listings.js'
+import { quickSummary } from './quick-summary.js'
 
 type Fetch = typeof fetch
 
@@ -29,7 +30,10 @@ export const DEFAULT_C0MPUTE_URL = 'https://infernetprotocol.com'
 /** Submit to done. A cold 7B on a CPU node takes minutes; a page must not hang on that, it polls. */
 export const SUMMARY_TIMEOUT_MS = 90_000
 /** How much page text a node is given: a small model on a CPU reads ~4k characters in reasonable time. */
-const MAX_INPUT = 4_000
+/** Past about this a c0mpute node cannot answer in time: 800 characters took 21 s, 3,000 timed out at 40 s. */
+const MAX_INPUT = 1_500
+/** How long a click waits for the page before answering from the search snippet instead. */
+const DRAFT_WAIT_MS = 2_500
 /** An engine snippet shorter than this is not worth summarizing on its own when the page cannot be read. */
 const THIN_TEXT = 600
 /** The page reader Infernet's /chat web search uses (keyless MCP, tools/call fetch_page). */
@@ -225,8 +229,21 @@ export function cleanSummary(text: string): string {
 }
 
 /** Visible text of an HTML page: no scripts, styles, navigation, headers or footers. */
+/** A page's description and its paragraphs, one a line: the prose, without the menus flattening a whole page keeps. */
+export function articleText(html: string): string {
+  const meta = (name: string) =>
+    new RegExp(`<meta[^>]+(?:name|property)=["']${name}["'][^>]*content=["']([^"']*)["']`, 'i').exec(html)?.[1] ??
+    new RegExp(`<meta[^>]+content=["']([^"']*)["'][^>]*(?:name|property)=["']${name}["']`, 'i').exec(html)?.[1] ??
+    ''
+  const body = html.replace(/<(head|script|style|noscript|svg|nav|header|footer|form|aside|iframe|template)\b[\s\S]*?<\/\1>/gi, ' ')
+  const paragraphs = [...body.matchAll(/<p\b[^>]*>([\s\S]*?)<\/p>/gi)].map((m) => m[1]!.replace(/<sup\b[\s\S]*?<\/sup>/gi, '').replace(/<[^>]+>/g, ''))
+  return [meta('description') || meta('og:description'), ...paragraphs].filter(Boolean).join('\n')
+}
+
+const PAGE_TITLE = /<title[^>]*>([\s\S]*?)<\/title>/i
+
 export function htmlText(html: string): string {
-  const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? ''
+  const title = PAGE_TITLE.exec(html)?.[1] ?? ''
   const meta = /<meta[^>]+name=["']description["'][^>]*content=["']([^"']*)["']/i.exec(html)?.[1] ?? ''
   const body = html
     .replace(/<(head|title|script|style|noscript|svg|nav|header|footer|form|iframe|template)\b[\s\S]*?<\/\1>/gi, ' ')
@@ -283,7 +300,7 @@ const INTERSTITIAL = /(not a (ro)?bot|verify(ing)? you are human|just a moment|e
  * Only `blocked` is the site's doing, so only `blocked` ever counts against it (src/reader-health.ts).
  */
 export type ReadState = 'ok' | 'blocked' | 'down' | 'private'
-export type Read = { text: string; state: ReadState }
+export type Read = { text: string; state: ReadState; title?: string; article?: string }
 
 /** Statuses that mean the site turned the reader away, not that it is broken for everyone. */
 const REFUSED = new Set([401, 403, 429, 451, 503])
@@ -395,7 +412,7 @@ export async function fetchRead(raw: string, fetchImpl: Fetch = fetch, resolve: 
     reader.cancel().catch(() => {})
     const text = htmlText(html)
     if (INTERSTITIAL.test(text.slice(0, 600))) return { text: '', state: 'blocked' }
-    return { text, state: enough(text) ? 'ok' : 'blocked' }
+    return { text, state: enough(text) ? 'ok' : 'blocked', title: PAGE_TITLE.exec(html)?.[1]?.replace(/\s+/g, ' ').trim() ?? '', article: articleText(html) }
   }
   return { text: '', state: 'down' }
 }
@@ -448,7 +465,7 @@ export class SummaryStore {
 
 export type SummaryState =
   | { status: 'done'; url: string; summary: string; model: string; cached: boolean; source: 'page' | 'snippet' }
-  | { status: 'pending'; url: string }
+  | { status: 'pending'; url: string; draft?: string }
   | { status: 'failed'; url: string; error: string }
   | { status: 'unknown'; url: string }
 
@@ -469,6 +486,8 @@ export type SummarizerOptions = C0mputeOptions & {
   pageText?: (url: string) => Promise<string>
   /** The fetch_page relay (default DEFAULT_PAGE_RELAY_URL); '' reads pages directly only. */
   pageRelayUrl?: string
+  /** Injectable DNS for the direct read, as elsewhere. */
+  resolve?: Resolve
   /** How long a result stays summarizable after pit.world showed it. */
   textTtlMs?: number
   /** Told how every page read went (Summarize and Listen both read through pageText), for src/reader-health.ts. */
@@ -480,6 +499,8 @@ export class Summarizer {
   private texts = new Map<string, { url: string; text: string; at: number }>()
   private jobs = new Map<string, Promise<void>>()
   private failures = new Map<string, { error: string; at: number }>()
+  /** Instant summaries, and the page text behind them so the model need not read it again. In RAM only. */
+  private drafts = new Map<string, { draft: string; page: string; at: number }>()
   constructor(private options: SummarizerOptions = {}) {
     this.store = options.store ?? new SummaryStore()
   }
@@ -523,7 +544,10 @@ export class Summarizer {
     const done = this.store.get(key)
     if (done?.source && SOURCES.has(done.source))
       return { status: 'done', url, summary: done.summary, model: done.model, cached: true, source: done.source as 'page' | 'snippet' }
-    if (this.jobs.has(key)) return { status: 'pending', url }
+    if (this.jobs.has(key)) {
+      const draft = this.drafts.get(key)?.draft
+      return { status: 'pending', url, ...(draft ? { draft } : {}) }
+    }
     const failed = this.failures.get(key)
     if (failed && Date.now() - failed.at < 10 * 60_000) return { status: 'failed', url, error: failed.error }
     return { status: 'unknown', url }
@@ -552,6 +576,32 @@ export class Summarizer {
     return { status: 'pending', url }
   }
 
+  /**
+   * What a click gets: a summary at once if there is one, and the model's better one on the way. The page is read
+   * directly (under a second, where the relay took up to 22 s). A page we cannot read that fast falls back to the
+   * search snippet, and the model's job still gets the slower readers.
+   */
+  async begin(url: string): Promise<SummaryState> {
+    const key = summaryKey(url)
+    const now = this.status(url)
+    if (now.status === 'done' || now.status === 'pending') return now
+    const page = await this.quickRead(url)
+    const remembered = (this.texts.get(key)?.text ?? '').split('\n')
+    const draft = quickSummary(page.article) || quickSummary(page.text, page.title) || quickSummary(remembered.slice(1).join(' '))
+    while (this.drafts.size >= 2_000) this.drafts.delete(this.drafts.keys().next().value!)
+    if (draft || page.text) this.drafts.set(key, { draft, page: page.text, at: Date.now() })
+    const started = this.start(url)
+    return { ...started, ...(draft && started.status === 'pending' ? { draft } : {}) }
+  }
+
+  private async quickRead(url: string): Promise<{ text: string; title: string; article: string }> {
+    const none = { text: '', title: '', article: '' }
+    const reading = this.options.pageText
+      ? this.options.pageText(url).then((text) => ({ text, title: '', article: '' }))
+      : fetchRead(url, this.options.fetch, this.options.resolve).then((r) => (r.state === 'ok' ? { text: r.text, title: r.title ?? '', article: r.article ?? '' } : none))
+    return Promise.race([reading.catch(() => none), new Promise<typeof none>((done) => setTimeout(() => done(none), DRAFT_WAIT_MS))])
+  }
+
   /** For tests and the CLI: start and wait. */
   async wait(url: string): Promise<SummaryState> {
     this.start(url)
@@ -576,7 +626,16 @@ export class Summarizer {
 
   private async run(key: string, url: string): Promise<void> {
     const snippet = (this.texts.get(key)?.text ?? '').replace(/\s+/g, ' ').trim()
-    const page = await this.pageText(url)
+    // Already read for the instant summary, or read now the slow way, which reaches more sites.
+    const readAlready = this.drafts.get(key)?.page ?? ''
+    if (readAlready.length >= 200) {
+      try {
+        this.options.onRead?.(url, 'ok')
+      } catch (error) {
+        console.warn(`reader health: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    }
+    const page = readAlready.length >= 200 ? readAlready : await this.pageText(url)
     // The page is what gets summarized. The snippet stands in only when no page could be read.
     let text: string
     let source: 'page' | 'snippet'

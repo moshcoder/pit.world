@@ -857,7 +857,7 @@ export function createApp(deps: Deps) {
       const used = await passes.useToken(token)
       if (used === 'over') return c.json({ status: 'limited', url, error: `That is ${PASS_SUMMARIES.toLocaleString('en-US')} summaries in ${PASS_DAYS} days, this pass's limit. Buy another pass for more.` }, 429)
       if (used === 'none') return paymentRequired(c, url, 'That summary pass is not valid or has ended.')
-      return c.json({ ...summarizer.start(url), ...(sold ? { pass: { token, header: PASS_HEADER, days: PASS_DAYS, limit: PASS_SUMMARIES } } : {}) }, 202)
+      return c.json({ ...(await summarizer.begin(url)), ...(sold ? { pass: { token, header: PASS_HEADER, days: PASS_DAYS, limit: PASS_SUMMARIES } } : {}) }, 202)
     }
     const me = summaryAccount(c)
     // A paid pass replaces the hourly allowance with 1,000 a week (src/summary-pass.ts).
@@ -886,7 +886,7 @@ export function createApp(deps: Deps) {
         return paymentRequired(c, url, `Free summaries are ${summaryLimits.anon} an hour without an account. Sign in for ${summaryLimits.signedIn} an hour, or pay $${PASS_USD} over x402 for ${PASS_SUMMARIES.toLocaleString('en-US')} in ${PASS_DAYS} days.`, { signIn: '/signin' })
       }
     }
-    return c.json(summarizer.start(url), 202)
+    return c.json(await summarizer.begin(url), 202)
   })
 
   // Vote tallies: read-only, no fingerprint needed. ?kind=&target= (one), or ?item=kind:target repeated; ?q= for results on one search.

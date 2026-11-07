@@ -453,8 +453,9 @@
       const url = button.dataset.url
       const box = button.parentElement.querySelector('.summary')
       button.disabled = true
-      show(box, 'Summarizing on c0mpute… this can take a minute.', 'wait')
+      show(box, 'Summarizing…', 'wait')
       const started = Date.now()
+      let drafted = false
       try {
         // The device fingerprint, so the free allowance is per device rather than per address (privacy#votes).
         const headers = { 'content-type': 'application/json' }
@@ -464,16 +465,28 @@
         } catch {}
         let res = await fetch('/api/summarize', { method: 'POST', headers, body: JSON.stringify({ url }) })
         let body = await res.json().catch(() => ({}))
-        while (res.ok && body.status === 'pending' && Date.now() - started < 150_000) {
+        // An instant summary from the page itself. The model's replaces it if it arrives; if not, this one stands.
+        if (body.draft) {
+          drafted = true
+          show(box, body.draft, '')
+          button.hidden = true
+        }
+        while ((res.ok || res.status === 202) && body.status === 'pending' && Date.now() - started < 120_000) {
           await new Promise((r) => setTimeout(r, 3000))
           res = await fetch(`/api/summarize?url=${encodeURIComponent(url)}`)
           body = await res.json().catch(() => ({}))
+          if (!drafted && body.draft) {
+            drafted = true
+            show(box, body.draft, '')
+            button.hidden = true
+          }
         }
         if (body.status === 'done') {
           show(box, body.summary, '')
           button.hidden = true
           return
         }
+        if (drafted) return
         // 402 is the same limit with an x402 offer attached for agents; people get the same links.
         if ((res.status === 429 || res.status === 402) && (body.signIn || body.pass)) {
           show(box, `${body.error} `, 'err')
@@ -482,10 +495,11 @@
           a.textContent = body.signIn ? 'Sign in' : body.pass === '/pass' ? 'Get the $1 weekly pass' : 'Your pass'
           box.append(a)
         } else {
-          show(box, body.error || 'Summary unavailable. Try again.', 'err')
+          show(box, body.error || 'That took too long. Try again.', 'err')
         }
       } catch {
-        show(box, 'Summary unavailable. Try again.', 'err')
+        if (drafted) return
+        show(box, 'Could not reach pit.world. Try again.', 'err')
       }
       button.disabled = false
       button.textContent = 'Try again'
