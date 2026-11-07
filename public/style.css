@@ -268,6 +268,8 @@ ol.books .url { font: 13px var(--mono); color: var(--muted); margin: 3px 0 4px; 
 .listing-form input, .listing-form textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 12px; }
 .listing-form .btn { justify-self: start; margin-top: 12px; border: 0; cursor: pointer; }
 .card.listing { border-color: var(--line); }
+.card.lookup { overflow: hidden; }
+.card.lookup .thumb { float: right; width: 96px; height: auto; margin: 0 0 8px 14px; border-radius: 6px; }
 .listing-form select { width: 100%; box-sizing: border-box; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); color: var(--text); font: 15px/1.5 var(--sans); padding: 10px 12px; }
 .listing-form h2 { margin: 22px 0 0; font-size: 18px; }
 .listing-form .check { font-weight: 400; display: flex; gap: 8px; align-items: center; }

@@ -10,7 +10,8 @@ import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { lookupSearchTerms, parseLookup, runLookup } from './lookups.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
@@ -601,7 +602,9 @@ export function createApp(deps: Deps) {
       if (frameHosts.length) c.header('x-frame-hosts', frameHosts.join(' '))
       return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
-    const [{ result, error }, resolution] = await Promise.all([runSearch(query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const lookup = parseLookup(query)
+    const lookupDone = lookup ? runLookup(lookup, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(process.env.NICHEDB_API_KEY ? { key: process.env.NICHEDB_API_KEY } : {}) }) : null
+    const [{ result, error }, resolution] = await Promise.all([runSearch(lookup ? lookupSearchTerms(lookup) : query), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
     // Votes nudge the order a bounded number of places; the featured network site leading the results keeps its place.
     if (result) result.hits = votes.rerank(result.hits, query, (h) => Boolean(h.featured))
     const claimed = deps.listings?.claimedOnly(query)
@@ -619,7 +622,9 @@ export function createApp(deps: Deps) {
       back,
       query,
     )
-    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, ...(backfill ? { backfill } : {}), ...(claimed ? { card: listingCard(claimed, view) } : {}) }), result || resolution || claimed || featured.length ? 200 : 503)
+    const answered = lookupDone ? await lookupDone : null
+    const lookupHtml = answered ? lookupCard(answered, answered.image ? (thumbAllowed(answered.image) ? `/img?u=${encodeURIComponent(answered.image)}` : signedThumb(answered.image)) : undefined) : ''
+    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
   })
 
   // --- votes -------------------------------------------------------------------
@@ -692,10 +697,13 @@ export function createApp(deps: Deps) {
       result.hits = votes.rerank(result.hits, query)
       return c.json({ query, type: vertical, provider: result.provider, featured, results: result.hits, promoted: promos })
     }
-    const [{ result, error }, resolution] = await Promise.all([runSearch(query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
-    if (!result) return c.json({ query, error, featured, moshpit: resolution }, 503)
+    const lookup = parseLookup(query)
+    const lookupDone = lookup ? runLookup(lookup, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(process.env.NICHEDB_API_KEY ? { key: process.env.NICHEDB_API_KEY } : {}) }) : null
+    const [{ result, error }, resolution] = await Promise.all([runSearch(lookup ? lookupSearchTerms(lookup) : query, n), looksLikeName(query) ? registry.resolve(query) : Promise.resolve(null)])
+    const answered = lookupDone ? await lookupDone : null
+    if (!result) return c.json({ query, error, featured, moshpit: resolution, ...(answered ? { lookup: answered } : {}) }, answered ? 200 : 503)
     result.hits = votes.rerank(result.hits, query, (h) => Boolean(h.featured))
-    return c.json({ query, provider: result.provider, featured, results: result.hits, moshpit: resolution })
+    return c.json({ query, provider: result.provider, featured, results: result.hits, moshpit: resolution, ...(answered ? { lookup: answered } : {}) })
   })
 
   app.get('/api/resolve', async (c) => {
