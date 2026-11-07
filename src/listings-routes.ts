@@ -1,4 +1,5 @@
 /** Routes for business listings (/b, /pros, /api/listing, /api/pros). Mounted by createApp when a Listings store is given. */
+import type { RowTools } from './html.js'
 import type { Context, Hono } from 'hono'
 import {
   claimPage, contactConfirmedPage, hasOpenProfile, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, siteUrl, verifiedPage, verifyFailedPage, type QuoteState,
@@ -12,6 +13,10 @@ import type { VoteView } from './vote-html.js'
 type Env = { Bindings: { ip?: string } }
 
 export type ListingHooks = {
+  /** Summarize, Listen and pictures for directory rows (see RowTools). */
+  rowTools?: () => RowTools
+  /** Tell the summarizer these sites were just listed, so they can be summarized. */
+  remember?: (rows: Array<{ url: string; title: string; host: string; description: string }>) => void
   /** Something about ring membership may have changed (a claim, an edit). */
   ringChanged?: () => void
   /** A listing page was served (promotion measurement; src/promotion-routes.ts decides what counts). */
@@ -220,7 +225,8 @@ export function mountListings(
     const near = (c.req.query('near') ?? '').trim().slice(0, 120)
     const { total, listings: found } = listings.directory({ category, q, near, limit: perPage, offset: (page - 1) * perPage })
     const votes = views(found.map((l) => l.domain), c.req.path)
-    return c.html(prosPage({ listings: found, total, category: category ?? '', q, near, page, perPage, counts: listings.categoryCounts(), ...(votes ? { votes } : {}) }))
+    hooks.remember?.(found.map((l) => ({ url: siteUrl(l), title: l.name || l.domain, host: l.domain, description: l.description ?? '' })))
+    return c.html(prosPage({ listings: found, total, category: category ?? '', q, near, page, perPage, counts: listings.categoryCounts(), ...(votes ? { votes } : {}), ...(hooks.rowTools ? { tools: hooks.rowTools() } : {}) }))
   }
   app.get('/pros', (c) => {
     const cat = categoryOf(c.req.query('c') ?? c.req.query('category'))

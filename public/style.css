@@ -115,7 +115,11 @@ pre code { background: none; padding: 0; }
 .bar .search input { padding: 11px 18px; font-size: 16px; }
 .results { max-width: 760px; padding: 18px clamp(16px, 4vw, 40px) 60px; margin-left: clamp(0px, 8vw, 168px); }
 .hits { list-style: none; padding: 0; margin: 0; }
-.hits li { padding: 14px 0; }
+.hits li { padding: 14px 0; display: flow-root; }
+.hit-thumb { float: right; width: 96px; margin: 2px 0 6px 12px; }
+.hit-thumb .thumb { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); }
+li.no-image .hit-thumb, ol.videos li.no-image > a:first-child, ol.books li.no-image > a:first-child { display: none; }
+ol.videos li.no-image, ol.books li.no-image { grid-template-columns: 1fr; }
 .hits .title { font-size: 19px; line-height: 1.3; text-decoration: none; }
 .hits .title:hover { text-decoration: underline; }
 .hits .url { font: 13px var(--mono); color: var(--muted); margin: 3px 0 4px; overflow-wrap: anywhere; }
@@ -353,12 +357,12 @@ form .btn { border: 0; cursor: pointer; }
 .submit .rejected code { overflow-wrap: anywhere; }
 
 /* Summarize (src/summarize.ts): a quiet button under a result, the summary below it. */
-.hits .summary-row { margin-top: 4px; }
-.hits .summarize { padding: 0; border: 0; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; text-decoration: underline dotted; }
-.hits .summarize:hover, .hits .summarize:focus-visible { color: var(--accent); }
-.hits .summarize[disabled] { cursor: progress; text-decoration: none; }
-.hits .summary { margin: 6px 0 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); font-size: 14px; }
-.hits .summary.wait, .hits .summary.err { border-left-color: var(--line); background: none; color: var(--muted); }
+.summary-row { margin-top: 4px; }
+.summary-row .summarize { padding: 0; border: 0; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; text-decoration: underline dotted; }
+.summary-row .summarize:hover, .summary-row .summarize:focus-visible { color: var(--accent); }
+.summary-row .summarize[disabled] { cursor: progress; text-decoration: none; }
+.summary-row .summary { margin: 6px 0 0; padding: 8px 10px; border-left: 3px solid var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); font-size: 14px; }
+.summary-row .summary.wait, .summary-row .summary.err { border-left-color: var(--line); background: none; color: var(--muted); }
 /* ▲ ▼ votes on every listing */
 .vote { display: inline-flex; align-items: center; gap: 2px; margin: 6px 0 0; font: 12px var(--mono); color: var(--muted); vertical-align: middle; }
 .vote button { appearance: none; border: 1px solid var(--line); background: transparent; color: var(--muted); font: 11px/1 var(--mono); width: 26px; height: 22px; border-radius: 6px; cursor: pointer; padding: 0; }
@@ -445,10 +449,10 @@ body.has-mini-player { padding-bottom: 72px; }
 .mini-player .mp-lines li { padding: 2px 0; }
 .mini-player .mp-lines li[aria-current] { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .mini-player .mp-at { font: 11px var(--mono); color: var(--muted); padding: 0 4px 0 0; }
-.hits .listen { padding: 0; margin-left: 12px; border: 0; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; text-decoration: underline dotted; }
-.hits .listen::before { content: "♪ "; }
-.hits .listen:hover, .hits .listen:focus-visible { color: var(--accent); }
-.hits .listen[disabled] { cursor: progress; text-decoration: none; }
+.summary-row .listen { padding: 0; margin-left: 12px; border: 0; background: none; color: var(--muted); font: 12px var(--mono); cursor: pointer; text-decoration: underline dotted; }
+.summary-row .listen::before { content: "♪ "; }
+.summary-row .listen:hover, .summary-row .listen:focus-visible { color: var(--accent); }
+.summary-row .listen[disabled] { cursor: progress; text-decoration: none; }
 @media (max-width: 640px) {
   .mini-player .mp-row { flex-wrap: wrap; gap: 6px 8px; }
   .mini-player .mp-meta { flex: 1 1 0; }

@@ -39,6 +39,10 @@
   // The mini player: one slim bar at the bottom for everything that is only sound (song previews, podcast
   // episodes, read-alouds), so it keeps playing while you scroll. Built on first use; nothing loads before.
   const speechOn = document.querySelector('main[data-speech]') !== null
+  // A picture read from the result's own page (src/page-image.ts) can fail: the row closes up rather than show a hole.
+  const noPicture = (img) => img.closest('li')?.classList.add('no-image')
+  document.addEventListener('error', (e) => e.target.matches?.('img.page-image') && noPicture(e.target), true)
+  for (const img of document.querySelectorAll('img.page-image')) if (img.complete && !img.naturalWidth) noPicture(img)
   const clock = (s) => {
     s = Math.max(0, Math.floor(s || 0))
     const h = Math.floor(s / 3600)
@@ -355,7 +359,7 @@
   }
 
   // Listen (src/speech.ts): c0mpute reads the result aloud (its summary, or the start of the page) into the mini player.
-  for (const button of document.querySelectorAll('.hits .listen')) {
+  for (const button of document.querySelectorAll('.summary-row .listen')) {
     button.hidden = false
     button.addEventListener('click', async () => {
       const url = button.dataset.url
@@ -399,7 +403,7 @@
     box.className = `summary${kind ? ` ${kind}` : ''}`
     box.textContent = text
   }
-  for (const button of document.querySelectorAll('.hits .summarize')) {
+  for (const button of document.querySelectorAll('.summary-row .summarize')) {
     button.hidden = false
     button.addEventListener('click', async () => {
       const url = button.dataset.url

@@ -10,7 +10,7 @@ import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { type RowTools, lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { lookupSearchTerms, parseLookup, runLookup } from './lookups.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
@@ -27,6 +27,7 @@ import { listingCard } from './listings-html.js'
 import { FeaturedBusinesses } from './business-featured.js'
 import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
+import { PageImages } from './page-image.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
@@ -283,14 +284,21 @@ export function createApp(deps: Deps) {
 
   const thumbSignature = (raw: string) => createHmac('sha256', fpSecret).update(`img|${raw}`).digest('base64url').slice(0, 32)
   const signedThumb = (raw: string) => `/img?u=${encodeURIComponent(raw)}&s=${thumbSignature(raw)}`
+  // Signed, so /page-image reads only pages pit.world listed and is nobody's open fetcher.
+  const pageImageSignature = (page: string) => createHmac('sha256', fpSecret).update(`page-image|${page}`).digest('base64url').slice(0, 32)
+  const pageImage = (page: string) => `/page-image?u=${encodeURIComponent(page)}&s=${pageImageSignature(page)}`
+  const pageImages = new PageImages({ ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(deps.resolve ? { resolve: deps.resolve } : {}) })
+  /** What every listing offers, on every tab and in the /pros directory. */
+  const rowTools = (): RowTools => ({ pageImage, ...(deps.summarizer?.enabled ? { summaries: true } : {}), ...(deps.speech?.enabled ? { listen: true } : {}) })
   const safeEqual = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b))
 
   async function runMedia(vertical: Exclude<Vertical, 'web'>, query: string, limit?: number): Promise<{ result: MediaResult | null; error: string | null }> {
     try {
       const result = await searchMedia(vertical, query, deps.keys, { cache, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
-      // A shop's own picture comes from any host, so it needs our signature to pass /img.
-      if (result.provider !== 'pit') return { result, error: null }
-      return { result: { ...result, hits: result.hits.map((h) => (h.thumbnail && !thumbAllowed(h.thumbnail) ? { ...h, thumbnail: signedThumb(h.thumbnail) } : h)) }, error: null }
+      // Every tab's rows can be summarized and read aloud, so each is a "recent result" (on a cached search too).
+      deps.summarizer?.remember(result.hits.map((h) => ({ url: h.url, title: h.title, host: h.host, description: h.description ?? '' })))
+      // A shop's or a newsroom's own picture comes from any host, so it needs our signature to pass /img.
+      return { result: { ...result, hits: result.hits.map((h) => (/^https:/i.test(h.thumbnail ?? '') && !thumbAllowed(h.thumbnail!) ? { ...h, thumbnail: signedThumb(h.thumbnail!) } : h)) }, error: null }
     } catch (error) {
       // No query in the message, and nothing logged.
       return { result: null, error: error instanceof SearchUnavailable ? 'These results are unavailable for a moment. Try again shortly.' : 'Something went wrong fetching results.' }
@@ -600,7 +608,7 @@ export function createApp(deps: Deps) {
       )
       const frameHosts = embedHosts(result?.hits.map((h) => h.player) ?? [])
       if (frameHosts.length) c.header('x-frame-hosts', frameHosts.join(' '))
-      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, tools: rowTools(), ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const lookup = parseLookup(query)
     const lookupDone = lookup ? runLookup(lookup, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(process.env.NICHEDB_API_KEY ? { key: process.env.NICHEDB_API_KEY } : {}) }) : null
@@ -624,7 +632,7 @@ export function createApp(deps: Deps) {
     )
     const answered = lookupDone ? await lookupDone : null
     const lookupHtml = answered ? lookupCard(answered, answered.image ? (thumbAllowed(answered.image) ? `/img?u=${encodeURIComponent(answered.image)}` : signedThumb(answered.image)) : undefined) : ''
-    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
+    return c.html(resultsPage({ query, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, pageImage, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
   })
 
   // --- votes -------------------------------------------------------------------
@@ -918,6 +926,15 @@ export function createApp(deps: Deps) {
   // hop must pass the same allowlist, so a redirect can never lead the proxy anywhere else.
   // A URL we signed ourselves, from a card we put on a page, may be on any public host. Nothing
   // a visitor types can get a signature, so this is not an open proxy.
+  // The picture a listing's own page names (src/page-image.ts), handed to /img. A miss is a plain 404 the row closes up over.
+  app.get('/page-image', async (c) => {
+    const page = c.req.query('u') ?? ''
+    if (!safeEqual(c.req.query('s') ?? '', pageImageSignature(page))) return c.body(null, 400)
+    const image = await pageImages.find(page)
+    if (!image) return c.body(null, 404, { 'cache-control': 'public, max-age=3600' })
+    return c.redirect(thumbAllowed(image) ? `/img?u=${encodeURIComponent(image)}` : signedThumb(image), 302)
+  })
+
   app.get('/img', async (c) => {
     const raw = c.req.query('u') ?? ''
     const signed = safeEqual(c.req.query('s') ?? '', thumbSignature(raw))
@@ -1173,6 +1190,8 @@ export function createApp(deps: Deps) {
       ringChanged: () => deps.ringSync?.soon(ringSites),
       writeLimited: (c, action, body, fallback) => writeLimited(c, action, body, fallback),
       voteView: (domains, back) => voteView(domains.map((d) => ['listing', d]), back),
+      rowTools,
+      ...(deps.summarizer ? { remember: (rows: Array<{ url: string; title: string; host: string; description: string }>) => deps.summarizer!.remember(rows) } : {}),
       ...(promoHooks ?? {}),
     })
 

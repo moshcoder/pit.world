@@ -17,7 +17,7 @@ const NOMINATIM = [
 
 describe('more open fallbacks: parsing', () => {
   it('GDELT: articles with day and domain, no non-web links', () => {
-    expect(parseGdelt(GDELT)).toEqual([{ url: 'https://news.example/swift', title: 'Taylor Swift inducted into Hall of Fame', host: 'news.example', date: '2026-10-27', channel: 'news.example' }])
+    expect(parseGdelt(GDELT)).toEqual([{ url: 'https://news.example/swift', title: 'Taylor Swift inducted into Hall of Fame', host: 'news.example', thumbnail: 'https://img.example/x.jpg', date: '2026-10-27', channel: 'news.example' }])
   })
   it('iTunes: song · artist, album and genre, duration, artwork /img may fetch, no repeats', () => {
     const hits = parseItunes(ITUNES)

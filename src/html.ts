@@ -331,10 +331,33 @@ function promoStrip(promos: Promo[], vertical: Vertical, view?: VoteView): strin
 </section>`
 }
 
-function thumb(m: Media, cls = 'thumb'): string {
+/** What every listing can offer, on every tab: Summarize and Listen when c0mpute is on, a picture from its own page when its index sent none. */
+export type RowTools = { summaries?: boolean; listen?: boolean; pageImage?: (url: string) => string }
+
+function thumb(m: Media, tools: RowTools = {}, cls = 'thumb'): string {
   const src = thumbSrc(m.thumbnail)
-  return src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : `<span class="${cls} none" aria-hidden="true"></span>`
+  if (src) return `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+  return tools.pageImage ? pageThumb(m.url, tools, cls) : `<span class="${cls} none" aria-hidden="true"></span>`
 }
+
+function pageThumb(url: string, tools: RowTools, cls = 'thumb'): string {
+  return `<img class="${cls} page-image" src="${esc(tools.pageImage!(url))}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">`
+}
+
+/** The small picture beside a row of words. Beside the title link for the mouse; a screen reader already has the title. */
+export function sideThumb(m: Pick<Media, 'url' | 'thumbnail'> & { title?: string; host?: string }, tools: RowTools, rel = 'noreferrer noopener'): string {
+  if (!thumbSrc(m.thumbnail) && !tools.pageImage) return ''
+  return `<a class="hit-thumb" href="${esc(m.url)}" rel="${rel}" tabindex="-1" aria-hidden="true">${thumb(m as Media, tools)}</a>`
+}
+
+/** Summarize and Listen: hidden until app.js shows them (they need script), and only when the server has c0mpute. */
+export function rowActions(m: { url: string; title: string; host: string }, tools: RowTools, listenLabel = 'Listen'): string {
+  if (!tools.summaries && !tools.listen) return ''
+  return `<div class="summary-row">${tools.summaries ? `<button type="button" class="summarize" data-url="${esc(m.url)}" hidden>Summarize</button>` : ''}${tools.listen ? `<button type="button" class="listen" data-url="${esc(m.url)}" data-title="${esc(m.title)}" data-host="${esc(m.host)}" hidden>${listenLabel}</button>` : ''}<p class="summary" hidden aria-live="polite"></p></div>`
+}
+
+/** A row that already has "Listen here" for its song or show gets "Read aloud", so the two do not read the same. */
+const mediaActions = (m: Media, tools: RowTools) => rowActions(m, tools, m.player && (m.player.kind !== 'embed' || m.player.shape === 'audio') ? 'Read aloud' : 'Listen')
 
 /** "★ 4.6 (1,234)", or nothing. */
 function stars(m: Media): string {
@@ -364,21 +387,22 @@ export function playButton(p: Player | undefined | null): string {
   return `<div class="play-row" hidden><button type="button" class="play" ${data}>${label}</button> <small class="play-note">${note}</small></div>`
 }
 
-function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: VoteView): string {
+function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: VoteView, tools: RowTools = {}): string {
   const vote = (m: Media) => voteBox('result', m.url, view, m.title)
   if (vertical === 'images') {
     return `<ul class="images">${hits
-      .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m)}<span>${esc(m.host)}</span></a>${vote(m)}</li>`)
+      .map((m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener" title="${esc(m.title)}">${thumb(m, tools)}<span>${esc(m.host)}</span></a>${mediaActions(m, tools)}${vote(m)}</li>`)
       .join('')}</ul>`
   }
   if (vertical === 'social') {
     return `<ol class="hits">${hits
       .map(
         (m) => `<li>
-      <a class="title" href="${esc(m.url)}" rel="noreferrer noopener nofollow">${esc(m.title)}</a>
+      ${sideThumb(m, tools, 'noreferrer noopener nofollow')}<a class="title" href="${esc(m.url)}" rel="noreferrer noopener nofollow">${esc(m.title)}</a>
       <div class="url">${metaLine(m)}</div>
       ${m.description ? `<p>${esc(m.description)}</p>` : ''}
       <div class="url"><a href="${esc(m.url)}" rel="noreferrer noopener nofollow">Reply on ${esc(m.host)}</a></div>
+      ${mediaActions(m, tools)}
       ${vote(m)}
     </li>`,
       )
@@ -389,11 +413,12 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
 <ol class="hits">${hits
       .map(
         (m) => `<li>
-      <a class="title" href="${esc(m.url)}" rel="noreferrer noopener nofollow">${esc(m.title)}</a>
+      ${sideThumb(m, tools, 'noreferrer noopener nofollow')}<a class="title" href="${esc(m.url)}" rel="noreferrer noopener nofollow">${esc(m.title)}</a>
       <div class="url"><code>${esc(m.endpoint ?? '')}</code></div>
       ${m.description ? `<p>${esc(m.description)}</p>` : ''}
       <div class="url">${esc(m.extra ?? '')}</div>
       <pre><code>${esc(mcpAddLine(m.title, m.endpoint ?? ''))}</code></pre>
+      ${mediaActions(m, tools)}
       ${vote(m)}
     </li>`,
       )
@@ -402,27 +427,28 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
   if (vertical === 'shopping') {
     return `<ul class="shop">${hits
       .map(
-        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}<b>${esc(m.title)}</b>${m.price ? `<span class="price">${esc(m.price)}</span>` : ''}<small>${esc([m.host, stars(m)].filter(Boolean).join(' · '))}</small></a>${vote(m)}</li>`,
+        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m, tools)}<b>${esc(m.title)}</b>${m.price ? `<span class="price">${esc(m.price)}</span>` : ''}<small>${esc([m.host, stars(m)].filter(Boolean).join(' · '))}</small></a>${mediaActions(m, tools)}${vote(m)}</li>`,
       )
       .join('')}</ul>`
   }
   if (vertical === 'books') {
     return `<ol class="books">${hits
       .map(
-        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}</a>
+        (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m, tools)}</a>
     <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
-    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div>${m.player ? `<div class="url">Public domain: free to read</div>` : ''}${playButton(m.player)}${vote(m)}</div></li>`,
+    <div class="url">${esc([m.author, m.date, m.extra].filter(Boolean).join(' · '))}</div>${m.player ? `<div class="url">Public domain: free to read</div>` : ''}${playButton(m.player)}${mediaActions(m, tools)}${vote(m)}</div></li>`,
       )
       .join('')}</ol>`
   }
   if (vertical !== 'videos' && vertical !== 'live' && vertical !== 'news') {
-    // Music, podcasts, blogs, places, scholar: words, no pictures.
+    // Music, podcasts, blogs, places, scholar: mostly words, with a small picture beside them.
     return `<ol class="hits">${hits
       .map(
         (m) => `<li>
-      <a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
+      ${sideThumb(m, tools)}<a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
       <div class="url">${metaLine(m)}</div>
       ${m.description ? `<p>${esc(m.description)}</p>` : ''}
+      ${mediaActions(m, tools)}
       ${playButton(m.player)}
       ${vote(m)}
     </li>`,
@@ -431,10 +457,10 @@ function mediaList(vertical: Exclude<Vertical, 'web'>, hits: Media[], view?: Vot
   }
   return `<ol class="videos">${hits
     .map(
-      (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m)}${m.duration ? `<span class="dur">${esc(m.duration)}</span>` : ''}</a>
+      (m) => `<li><a href="${esc(m.url)}" rel="noreferrer noopener">${thumb(m, tools)}${m.duration ? `<span class="dur">${esc(m.duration)}</span>` : ''}</a>
     <div><a class="title" href="${esc(m.url)}" rel="noreferrer noopener">${esc(m.title)}</a>
     <div class="url">${esc([m.host, m.channel, m.date].filter(Boolean).join(' · '))}</div>
-    ${m.description ? `<p>${esc(m.description)}</p>` : ''}${playButton(m.player)}${vote(m)}</div></li>`,
+    ${m.description ? `<p>${esc(m.description)}</p>` : ''}${mediaActions(m, tools)}${playButton(m.player)}${vote(m)}</div></li>`,
     )
     .join('')}</ol>`
 }
@@ -468,7 +494,7 @@ function viaLine(label: string, result: MediaResult): string {
   }
 }
 
-export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView; speech?: boolean }): string {
+export function mediaPage(options: { query: string; vertical: Exclude<Vertical, 'web'>; result: MediaResult | null; promos: Promo[]; error: string | null; featured?: RingSite[]; backfill?: RingSite; votes?: VoteView; speech?: boolean; tools?: RowTools }): string {
   const { query, vertical, result, promos, error, votes: view } = options
   const hits = result?.hits ?? []
   const label = VERTICALS.find((v) => v.id === vertical)!.label
@@ -483,7 +509,7 @@ ${tabs(query, vertical)}
   ${error ? `<p class="notice">${esc(error)}</p>` : ''}
   ${blogSites(result?.sites, view)}
   ${hits.length ? sponsoredTop(vertical, view) : ''}
-  ${hits.length ? mediaList(vertical, hits, view) : ''}
+  ${hits.length ? mediaList(vertical, hits, view, options.tools) : ''}
   ${hits.length ? adUnit(vertical, view) : ''}
   ${featuredBox(options.backfill ? [options.backfill] : undefined, view)}
   ${!error && hits.length === 0 ? `<p class="notice">No ${label.toLowerCase()} found. Try other words.</p>` : ''}
@@ -500,25 +526,20 @@ function shareLink(href: string, title: string): string {
 /** Web results before the one ad line: in the content, never at the top, never by the footer. */
 const AD_AFTER = 3
 
-function hitItem(h: SearchResult['hits'][number], summaries = false, view?: VoteView, listen = false, share?: (h: SearchResult['hits'][number]) => string): string {
-  // Summarize and Listen: hidden until app.js shows them (they need script), and only when the server has c0mpute.
-  const summarize =
-    summaries || listen
-      ? `<div class="summary-row">${summaries ? `<button type="button" class="summarize" data-url="${esc(h.url)}" hidden>Summarize</button>` : ''}${listen ? `<button type="button" class="listen" data-url="${esc(h.url)}" data-title="${esc(h.title)}" data-host="${esc(h.host)}" hidden>Listen</button>` : ''}<p class="summary" hidden aria-live="polite"></p></div>`
-      : ''
+function hitItem(h: SearchResult['hits'][number], tools: RowTools = {}, view?: VoteView, share?: (h: SearchResult['hits'][number]) => string): string {
   return `<li${h.featured ? ' class="featured-hit"' : ''}>
-      <a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
+      ${sideThumb(h, tools)}<a class="title" href="${esc(h.url)}" rel="noreferrer noopener">${esc(h.title)}</a>
       <div class="url">${esc(h.host)}${h.featured ? '<span class="src featured" title="A W3BS network site, featured on pit.world. Not an ad.">Featured</span>' : ''}${(h.sources ?? []).map((src) => `<span class="src">${esc(LABELS[src] ?? src)}</span>`).join('')}</div>
       ${h.description ? `<p>${esc(h.description)}</p>` : ''}
-      ${summarize}
+      ${rowActions(h, tools)}
       ${playButton(embedFor(h.url))}
       <div class="hit-actions">${voteBox('result', h.url, view, h.title)}${share ? shareLink(share(h), h.title) : ''}</div>
     </li>`
 }
 
-export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; listen?: boolean; votes?: VoteView; share?: (h: SearchResult['hits'][number]) => string }): string {
+export function resultsPage(options: { query: string; result: SearchResult | null; resolution: Resolution | null; error: string | null; card?: string; featured?: RingSite[]; backfill?: RingSite; summaries?: boolean; listen?: boolean; pageImage?: (url: string) => string; votes?: VoteView; share?: (h: SearchResult['hits'][number]) => string }): string {
   const { query, result, resolution, error, votes: view } = options
-  const item = (h: SearchResult['hits'][number]) => hitItem(h, options.summaries, view, options.listen, options.share)
+  const item = (h: SearchResult['hits'][number]) => hitItem(h, { ...(options.summaries ? { summaries: true } : {}), ...(options.listen ? { listen: true } : {}), ...(options.pageImage ? { pageImage: options.pageImage } : {}) }, view, options.share)
   const hits = result?.hits ?? []
   const domain = !resolution?.registered && /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(query) ? query.toLowerCase() : null
   const body = `<header class="bar">
@@ -658,6 +679,7 @@ export function privacyPage(): string {
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
 <li><b>Summarize</b> under a result asks <a href="https://c0mpute.com/">c0mpute</a>, a peer network of inference nodes, for two or three sentences about that page. pit.world reads the page itself first, through <a href="https://tronbrowser.dev/">TronBrowser</a>'s page reader (the same one c0mpute's chat uses for web search), which is sent the page address only. The node is then sent the page's text and address only: never your search words, your IP address or your account. Summaries are kept by page address so the next person gets the same one instantly. Without an account you get a few an hour; signed in, more; with the <a href="/pass">$1 weekly pass</a>, up to 1,000 a week. The pass keeps only a count of summaries per account and time, never which pages.</li>
+<li id="pictures"><b>Pictures beside results.</b> When a result comes without a picture, pit.world reads the top of that page itself for the picture it names for link previews, keeps only the address of that picture for a day, and loads it through its own proxy. The site sees our server, never your IP address, your browser or your search.</li>
 <li id="players"><b>Play here, Listen here, Read here</b> under a video, song, podcast or book plays it on the results page. Nothing loads until you press the button. Videos, Spotify, SoundCloud and Internet Archive books then load in the site's own player (YouTube through youtube-nocookie.com, Vimeo with do-not-track), and that site sees your IP address and pit.world as the page you came from, never your search. Song previews and podcast episodes are streamed through pit.world, so the publisher sees our server, not you.</li>
 <li id="speech"><b>Listen and Transcript</b> are written by <a href="https://c0mpute.com/">c0mpute</a>'s speech workers. Listen sends a page's text (its summary, or the start of the page pit.world read) to be read aloud; Transcript sends a podcast episode's audio, which pit.world fetches itself, to be written down. Neither is sent your search or who you are. Both are kept by page or episode address only, so the next person to ask gets them instantly; nothing records who asked. The pass counts uses per account and time, the same way it counts summaries.</li>
 </ol>
