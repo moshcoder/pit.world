@@ -32,6 +32,7 @@ const HELP = `pit: private search, and the Moshpit network (https://pit.world)
                                full page text from pit.world's own index, for training (opt-outs excluded);
                                free: 20 short pages a day; PIT_CORPUS_KEY (a credit key or pit login token)
                                for full text at $1 per 1,000 pages. pit corpus --stats for its size
+  pit mcps [WORDS]             MCP servers pitbot found on the web and proved
   pit submit URL... [--file F] put sites, pages, feeds, sitemaps or OPML into pit.world's index (up to 1,000)
   pit listing DOMAIN           a business listing (pit.world/b)
   pit claim DOMAIN             claim your business listing
@@ -120,6 +121,13 @@ export async function main(argv: string[], out: Out = { log: (t) => console.log(
         if (json) out.log(JSON.stringify(r, null, 2))
         else out.log(r.status === 'done' ? (r.summary ?? '') : r.status === 'pending' ? 'Still being written; run it again in a minute.' : (r.error ?? `No summary (${r.status}).`))
         return r.status === 'done' || r.status === 'pending' ? 0 : 1
+      }
+      case 'mcps': {
+        const r = await client.mcps(words.join(' '))
+        if (json) out.log(JSON.stringify(r, null, 2))
+        else if (!r.items.length) out.log('No MCP server matches that yet.')
+        else for (const m of r.items) out.log(`${m.name}  ${m.mcp}  ${m.auth === 'required' ? 'needs sign-in' : `${m.tools?.length ?? 0} tools`}`)
+        return 0
       }
       case 'submit': {
         const fileAt = words.indexOf('--file')

@@ -169,6 +169,11 @@ export class PitClient {
   }
 
   /** The pit.world web ring. */
+  /** MCP servers pitbot found on the web and proved with a handshake. Their text is the operators' own. */
+  mcps(query = '', limit = 20): Promise<{ items: Array<{ mcp: string; name: string; description?: string; auth?: string; foundOn?: string; tools?: Array<{ name: string; description?: string | null }> }>; total: number }> {
+    return this.get(`/api/mcps?${new URLSearchParams({ q: query, limit: String(limit) })}`)
+  }
+
   ring(): Promise<{ name: string; home: string; mirror: string; count: number; sites: Array<{ name: string; about: string; moshpit: boolean; listing: boolean; feed?: string; url: string; proxyUrl: string }> }> {
     return this.get('/api/ring')
   }
