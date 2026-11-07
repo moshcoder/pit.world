@@ -807,6 +807,37 @@ const SUBMIT_ERRORS: Record<string, string> = {
 const explainSubmitError = (code: string) => SUBMIT_ERRORS[code] ?? code
 
 /** pitbot: who reads your site for pit.world's own index, and how to say no. */
+export type FoundMcp = { mcp: string; name: string; description?: string; auth?: string; descriptor?: boolean; foundOn?: string; seenAt?: string; tools?: Array<{ name: string; description?: string | null }> }
+
+/** The MCP servers pitbot found and proved. Everything in a row was written by whoever runs that server: it is escaped and shown as what it is. */
+export function mcpsPage(o: { query: string; items: FoundMcp[]; total: number; error?: string | null }): string {
+  const row = (m: FoundMcp) => {
+    const tools = m.tools ?? []
+    const slug = m.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'server'
+    const found = m.foundOn && /^https:\/\//.test(m.foundOn) ? `<a href="${esc(m.foundOn)}" rel="noreferrer noopener nofollow">where we found it</a>` : ''
+    return `<li><h2>${esc(m.name)}</h2>
+<p><code>${esc(m.mcp)}</code></p>
+${m.description ? `<p>${esc(m.description)}</p>` : ''}
+<p class="muted">${m.auth === 'required' ? 'Needs sign-in' : `${tools.length.toLocaleString('en-US')} ${tools.length === 1 ? 'tool' : 'tools'}`}${m.descriptor ? ' · publishes its own descriptor' : ''}${found ? ` · ${found}` : ''}</p>
+${tools.length ? `<details><summary>Tools</summary><ul>${tools.slice(0, 50).map((t) => `<li><code>${esc(t.name)}</code>${t.description ? ` ${esc(t.description)}` : ''}</li>`).join('')}</ul></details>` : ''}
+<pre><code>claude mcp add --transport http ${esc(slug)} ${esc(m.mcp)}</code></pre></li>`
+  }
+  const form = `<form method="get" action="/mcps" role="search"><input type="search" name="q" value="${esc(o.query)}" placeholder="Search by name or tool" aria-label="Search MCP servers"> <button type="submit">Search</button></form>`
+  return layout({
+    title: o.query ? `${o.query}: MCP servers` : 'MCP servers found on the web',
+    description: `MCP servers pitbot found while reading the web, each proved by a live handshake. ${o.total.toLocaleString('en-US')} so far.`,
+    path: '/mcps',
+    bodyClass: 'doc',
+    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
+<main class="prose">
+<h1>MCP servers</h1>
+<p>${o.total.toLocaleString('en-US')} servers <a href="/bot">pitbot</a> found on the open web. Each one answered MCP's own handshake when we asked; we only ever list its tools and never call one. They are not reviewed: names and descriptions are the operators' own words, so read a server before you connect an agent to it. The same list is at <a href="/api/mcps">/api/mcps</a> and in <a href="https://nichedb.dev/c/mcp">nichedb's MCP collection</a>.</p>
+${form}
+${o.error ? `<p>${esc(o.error)}</p>` : o.items.length ? `<ol class="plain">${o.items.map(row).join('')}</ol>` : `<p>${o.query ? 'No server matches that yet.' : 'None found yet: the crawl adds them as it reads.'}</p>`}
+</main>`,
+  })
+}
+
 export function botPage(): string {
   return layout({
     title: 'pitbot: the pit.world crawler',

@@ -10,7 +10,7 @@ import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
@@ -413,6 +413,30 @@ export function createApp(deps: Deps) {
     return c.html(sharedResultPage(shared, view, listing))
   })
   app.get('/bot', (c) => c.html(botPage()))
+  // MCP servers pitbot found and proved (services/crawler/src/mcp.ts). Read from the crawler over loopback.
+  const foundMcps = async (query: string, limit: number): Promise<{ items: FoundMcp[]; total: number } | null> => {
+    try {
+      const base = deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807'
+      // threatcrush-disable-next-line js-ssrf-outbound-request  fixed loopback address from configuration, never from a request
+      const response = await (deps.fetch ?? fetch)(`${base.replace(/\/+$/, '')}/api/v1/mcp?${new URLSearchParams({ q: query, limit: String(limit) })}`, { signal: AbortSignal.timeout(3_000) })
+      if (!response.ok) return null
+      const body = (await response.json()) as { items?: FoundMcp[]; total?: number }
+      return { items: body.items ?? [], total: body.total ?? 0 }
+    } catch {
+      return null
+    }
+  }
+  app.get('/api/mcps', async (c) => {
+    const n = Number(c.req.query('limit'))
+    const found = await foundMcps((c.req.query('q') ?? '').slice(0, 200), Number.isFinite(n) && n > 0 ? Math.min(n, 100) : 20)
+    if (!found) return c.json({ error: 'The crawler did not answer. Try again shortly.' }, 503)
+    return c.json(found)
+  })
+  app.get('/mcps', async (c) => {
+    const query = (c.req.query('q') ?? '').slice(0, 200)
+    const found = await foundMcps(query, 50)
+    return c.html(mcpsPage({ query, items: found?.items ?? [], total: found?.total ?? 0, error: found ? null : 'The list is unavailable for a moment. Try again shortly.' }), found ? 200 : 503)
+  })
   // Sites, pages, feeds, sitemaps and OPML into our own index (src/submit-routes.ts).
   mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', limited, writeLimited: (c, body) => writeLimited(c, 'submit', body), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
   // pitbot's live status: the crawler is its own service, read over loopback.
@@ -508,7 +532,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : []), ...shares.slugs().map(resultPath)]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', '/mcps', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : []), ...shares.slugs().map(resultPath)]
         .map((p) => `<url><loc>https://pit.world${esc(p)}</loc></url>`)
         .join('')}</urlset>`,
       200,
