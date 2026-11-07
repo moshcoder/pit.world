@@ -24,6 +24,50 @@ function site(answer: () => Response) {
   return { asked, request: (path: string) => app.request(path, {}, { ip: '203.0.113.7' }) }
 }
 
+describe('the MCPs tab', () => {
+  const tab = (answer: () => Response) => {
+    const asked: string[] = []
+    const app = createApp({
+      keys: { pit: 'http://index.test' },
+      fingerprintSecret: 'a-test-secret-long-enough',
+      fetch: (async (url: string | URL | Request) => {
+        asked.push(String(url))
+        return answer()
+      }) as typeof fetch,
+    } as never)
+    return { asked, request: (path: string) => app.request(path, {}, { ip: '203.0.113.7' }) }
+  }
+
+  it('sits with the other tabs and searches the proved list', async () => {
+    const { request, asked } = tab(() => Response.json({ items: [{ ...SERVER, foundOn: 'https://acme.example/docs' }], total: 1 }))
+    const html = await (await request('/search?q=acme&t=mcps')).text()
+    expect(html).toContain('aria-current="page">MCPs</a>')
+    expect(asked.some((u) => u.startsWith('http://index.test/api/v1/mcp?q=acme'))).toBe(true)
+    expect(html).toContain('href="https://acme.example/docs"')
+    expect(html).toContain('https://mcp.acme.example/')
+    expect(html).toContain('1 tool')
+    expect(html).toContain('Not reviewed')
+  })
+
+  it("keeps an operator's words out of the markup and the command", async () => {
+    const { request } = tab(() => Response.json({ items: [{ ...SERVER, name: 'x; rm -rf <b>~</b>' }], total: 1 }))
+    const html = await (await request('/search?q=acme&t=mcps')).text()
+    expect(html).not.toContain('<b>~</b>')
+    expect(html).not.toContain('<script>alert(1)')
+    expect(html).toContain('claude mcp add --transport http x-rm-rf-b-b https://mcp.acme.example/')
+    // Its javascript: "found on" is never a link: the title goes to our own page instead.
+    expect(html).not.toContain('href="javascript:')
+    expect(html).toContain('href="/mcps?q=')
+  })
+
+  it('an index that has no match says so, and one that is down says that', async () => {
+    const empty = await (await tab(() => Response.json({ items: [], total: 0 })).request('/search?q=nothing&t=mcps')).text()
+    expect(empty).toContain('aria-current="page">MCPs</a>')
+    const down = await tab(() => new Response('', { status: 500 })).request('/search?q=acme&t=mcps')
+    expect(await down.text()).toContain('unavailable')
+  })
+})
+
 describe('found MCP servers', () => {
   it('the API passes the search to the crawler', async () => {
     const { request, asked } = site(() => Response.json({ items: [SERVER], total: 7 }))
