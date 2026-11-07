@@ -1,5 +1,5 @@
 /** Pages for business listings (/b) and the pro directory (/pros). Every value is escaped; links carry no referrer. */
-import { docPage, esc } from './html.js'
+import { docPage, esc, rowActions, sideThumb, type RowTools } from './html.js'
 import type { ClaimStart, ContactStatus, Listing } from './listings.js'
 import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel, ringEligible } from './pros.js'
 import { proxyUrl, ringSnippet, RSS_RING } from './ring.js'
@@ -345,8 +345,9 @@ export function listingsIndexPage(): string {
   })
 }
 
-export function prosPage(options: { listings: Listing[]; total: number; category: string; near: string; q: string; page: number; perPage: number; counts: Record<string, number>; votes?: VoteView }): string {
+export function prosPage(options: { listings: Listing[]; total: number; category: string; near: string; q: string; page: number; perPage: number; counts: Record<string, number>; votes?: VoteView; tools?: RowTools }): string {
   const cat = categoryOf(options.category)
+  const tools = options.tools ?? {}
   const heading = cat ? cat.label : 'Find a pro'
   const qs = (page: number) => {
     const params = new URLSearchParams()
@@ -360,7 +361,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
     .map((l) => {
       const where = [l.area, place(l)].filter(Boolean).join(' · ')
       return `<li class="pro">
-  ${l.sponsoredUntil ? '<p class="paid-label">Featured · Paid placement</p>' : ''}<h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> ${l.claimed ? '<span class="verified" title="Verified owner">✓</span>' : '<span class="small">unclaimed</span>'}</h3>
+  ${sideThumb({ url: siteUrl(l) }, tools)}${l.sponsoredUntil ? '<p class="paid-label">Featured · Paid placement</p>' : ''}<h3><a href="/b/${p(l.domain)}">${esc(l.name || l.domain)}</a> ${l.claimed ? '<span class="verified" title="Verified owner">✓</span>' : '<span class="small">unclaimed</span>'}</h3>
   ${l.category ? `<p><a class="chip" href="/pros/${p(l.category)}">${esc(categoryOf(l.category)?.label ?? l.category)}</a></p>` : ''}
   <p class="small">${[where ? esc(where) : '', l.price ? esc(priceLabel(l.price)) : ''].filter(Boolean).join(' · ') || esc(l.domain)}</p>
   ${l.description ? `<p>${esc(l.description.length > 220 ? `${l.description.slice(0, 217)}…` : l.description)}</p>` : ''}
@@ -368,6 +369,7 @@ export function prosPage(options: { listings: Listing[]; total: number; category
   ${l.license ? `<p class="small">${esc(l.license)}</p>` : ''}
   ${l.researchTopics.length ? `<p class="small">${esc(l.researchTopics.slice(0, 4).join(' · '))}${l.researchUrl ? ` · ${ext(l.researchUrl, 'Source')}` : ''}</p>` : ''}
   ${l.imported ? `<p class="small">Unclaimed listing, data from ${l.researchUrl ? ext(l.researchUrl, 'nichedb.dev') : 'nichedb.dev'}</p>` : ''}
+  ${rowActions({ url: siteUrl(l), title: l.name || l.domain, host: l.domain }, tools)}
   <p class="row"><a href="${esc(siteUrl(l))}" rel="noreferrer noopener">Website ↗</a>${l.publicMetadata?.contactUrl ? ` <a href="${esc(l.publicMetadata.contactUrl)}" rel="noreferrer noopener">Contact ↗</a>` : ''}${l.phone ? ` <a href="tel:${esc(l.phone.replace(/[^\d+]/g, ''))}">Call</a>` : ''} <a href="/b/${p(l.domain)}">Listing →</a>${l.quotes ? ` <a href="/b/${p(l.domain)}#quote">Request a quote</a>` : ''}${l.seeded || l.imported ? ` <a href="/b/${p(l.domain)}#claim">Yours? Claim it</a>` : ''}${voteBox('listing', l.domain, options.votes, l.name || l.domain)}</p>
 </li>`
     })

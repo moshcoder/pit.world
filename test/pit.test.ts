@@ -662,13 +662,14 @@ describe('categories: shopping, news, books, podcasts, blogs, places, scholar', 
     expect(evil.status).toBe(502)
   })
 
-  it('shows podcasts from p0dcasters, with no picture from a host we do not proxy', async () => {
+  it('shows podcasts from p0dcasters, its picture through /img, never straight from the host', async () => {
     const { request, calls } = app()
     const html = await (await request('/search?q=cats&t=podcasts')).text()
     expect(outside(calls)).toContain('p0dcasters.com')
     expect(html).toContain('href="https://p0dcasters.com/podcast/cat-talk"')
     expect(html).toContain('41 episodes · weekly')
-    expect(html).not.toContain('podigee-cdn')
+    expect(html).not.toContain('src="https://images.podigee-cdn')
+    expect(html).toContain(`src="/img?u=${encodeURIComponent('https://images.podigee-cdn.net/cat.jpg')}&amp;s=`)
     expect(html).toContain('Podcasts from the p0dcasters.com directory')
     noCrossOrigin(html)
   })
@@ -677,7 +678,7 @@ describe('categories: shopping, news, books, podcasts, blogs, places, scholar', 
     const { request, calls } = app()
     const html = await (await request('/search?q=cats&t=blogs')).text()
     expect(calls.some((c) => c.url.startsWith('https://rssamplifier.com/api/search?') && c.url.includes('kind=blogs'))).toBe(true)
-    expect(html.match(/href="https:\/\/blog\.example\/blogs\/cats"/g)).toHaveLength(1)
+    expect(html.match(/class="title" href="https:\/\/blog\.example\/blogs\/cats"/g)).toHaveLength(1)
     expect(html).toContain('Cats &amp; me')
     expect(html).not.toContain('&amp;amp;')
     expect(html).toContain('Cats &#39;n&#39; more')

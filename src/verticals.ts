@@ -547,7 +547,7 @@ export function parseGdelt(body: any): Media[] {
     const title = str(a?.title)
     if (!url || !title) return []
     const seen = /^(\d{4})(\d{2})(\d{2})T/.exec(str(a?.seendate))
-    return [{ url, title, host: str(a?.domain) || host(url), date: seen ? `${seen[1]}-${seen[2]}-${seen[3]}` : undefined, channel: str(a?.domain) || undefined }]
+    return [{ url, title, host: str(a?.domain) || host(url), thumbnail: httpUrl(a?.socialimage) || undefined, date: seen ? `${seen[1]}-${seen[2]}-${seen[3]}` : undefined, channel: str(a?.domain) || undefined }]
   })
 }
 
