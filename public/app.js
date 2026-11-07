@@ -45,8 +45,8 @@
   if (picker) {
     if (language && [...picker.options].some((o) => o.value === language)) picker.value = language
     picker.addEventListener('change', () => {
-      saveLanguage(LANG, picker.value === 'en' ? undefined : picker.value)
-      language = picker.value
+      language = picker.value === 'browser' ? null : picker.value
+      saveLanguage(LANG, language ?? undefined)
       addLanguage()
       const saved = document.querySelector('.settings .saved')
       if (saved) saved.hidden = false
@@ -55,7 +55,7 @@
   function addLanguage() {
     for (const form of document.querySelectorAll('form.search')) {
       form.querySelector('input[name=lang]')?.remove()
-      if (!language || language === 'en') continue
+      if (!language) continue
       const field = document.createElement('input')
       field.type = 'hidden'
       field.name = 'lang'
@@ -63,7 +63,7 @@
       form.append(field)
     }
   }
-  if (language && language !== 'en') {
+  if (language) {
     // A search from the address bar or a bookmark arrives without it.
     const here = new URL(location.href)
     if (here.pathname === '/search' && here.searchParams.has('q') && !here.searchParams.has('lang')) {

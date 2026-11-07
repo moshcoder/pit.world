@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { createApp } from '../src/server.ts'
-import { ALL_LANGUAGES, LANGUAGES, detectLanguage, inLanguage, parseLanguage } from '../src/language.ts'
+import { ALL_LANGUAGES, LANGUAGES, browserLanguage, detectLanguage, inLanguage, parseLanguage } from '../src/language.ts'
 import { search } from '../src/search.ts'
 
 const EN = { title: 'Trump says the Iran war will be over very soon', summary: 'The president told reporters that the conflict would end after the election.' }
@@ -53,6 +53,19 @@ it('parseLanguage refuses what we do not offer', () => {
   expect(parseLanguage('<script>')).toBe('en')
 })
 
+describe('browserLanguage', () => {
+  it('takes the first language we offer, by preference', () => {
+    expect(browserLanguage('fr-CA,fr;q=0.9,en;q=0.8')).toBe('fr')
+    expect(browserLanguage('pt-BR')).toBe('pt')
+    expect(browserLanguage('sv-SE,sv;q=0.9,de;q=0.7,en;q=0.5')).toBe('de')
+    expect(browserLanguage('en;q=0.3,tr;q=0.9')).toBe('tr')
+    expect(browserLanguage('fr;q=0,de')).toBe('de')
+  })
+  it('falls back to English', () => {
+    for (const none of [undefined, null, '', '*', 'sv,fi', '<script>']) expect(browserLanguage(none)).toBe('en')
+  })
+})
+
 function pit(posts = [EN, TR].map((p, i) => ({ ...p, url: `https://n${i}.example/story`, blog: 'A paper' }))) {
   const asked: string[] = []
   const fake = (async (url: string | URL | Request) => {
@@ -62,7 +75,7 @@ function pit(posts = [EN, TR].map((p, i) => ({ ...p, url: `https://n${i}.example
     return Response.json({})
   }) as typeof fetch
   const app = createApp({ keys: { pit: 'http://index.test' }, fetch: fake, fingerprintSecret: 'a-test-secret-long-enough', resolve: async () => ['93.184.216.34'] } as never)
-  return { request: (path: string) => app.request(path, {}, { ip: '203.0.113.7' }), asked }
+  return { request: (path: string, headers: Record<string, string> = {}) => app.request(path, { headers }, { ip: '203.0.113.7' }), asked }
 }
 
 describe('results', () => {
@@ -91,9 +104,23 @@ describe('results', () => {
     expect(html).toContain('n1.example/story')
     expect(html).toContain('Nothing in English for this search')
   })
-  it('the API filters only when asked', async () => {
+  it('follow the browser, without putting it on links', async () => {
+    const html = await (await pit().request('/search?q=iran&t=news', { 'accept-language': 'tr-TR,tr;q=0.9' })).text()
+    expect(html).toContain('n1.example/story')
+    expect(html).not.toContain('n0.example/story')
+    expect(html).not.toContain('name="lang"')
+    expect(html).toContain('href="/search?q=iran&t=blogs"')
+  })
+  it('a setting overrides the browser, English included', async () => {
+    const html = await (await pit().request('/search?q=iran&t=news&lang=en', { 'accept-language': 'tr-TR' })).text()
+    expect(html).toContain('n0.example/story')
+    expect(html).not.toContain('n1.example/story')
+    expect(html).toContain('<input type="hidden" name="lang" value="en">')
+    expect(html).toContain('/search?q=iran&t=blogs&lang=en')
+  })
+  it('the API ignores the browser and filters only when asked', async () => {
     const { request } = pit()
-    expect((await (await request('/api/search?q=iran&t=news')).json()).results).toHaveLength(2)
+    expect((await (await request('/api/search?q=iran&t=news', { 'accept-language': 'tr' })).json()).results).toHaveLength(2)
     expect((await (await request('/api/search?q=iran&t=news&lang=en')).json()).results).toHaveLength(1)
   })
 })
@@ -114,6 +141,8 @@ it('/settings offers every language and sets no cookie', async () => {
   const html = await res.text()
   for (const l of LANGUAGES) expect(html).toContain(`value="${l.code}"`)
   expect(html).toContain('All languages')
+  expect(html).toContain('Same as my browser (English)')
+  expect(await (await pit().request('/settings', { 'accept-language': 'de' })).text()).toContain('Same as my browser (Deutsch)')
   expect(res.headers.get('set-cookie')).toBeNull()
 })
 

@@ -1,6 +1,6 @@
 /**
- * Which language results come in. Pages default to English; /settings keeps a visitor's choice in their own
- * browser and sends it as `?lang=`, so the choice needs no cookie and no account.
+ * Which language results come in. Pages follow the browser's Accept-Language, then English; /settings can
+ * override that, kept in the visitor's own browser and sent as `?lang=`, so it needs no cookie and no account.
  *
  * Most sources cannot be asked for a language (feeds, ours included), so rows are also read: franc scores a
  * row's title and snippet against only the languages we offer, which is what keeps it accurate on short text.
@@ -31,9 +31,11 @@ export const LANGUAGES: Language[] = [
   { code: 'ko', label: '한국어', franc: 'kor', gdelt: 'korean' },
 ]
 
-/** Pages. The API and MCP default to ALL_LANGUAGES: an agent that asked for nothing should not lose rows. */
+/** Pages, when the browser names nothing we offer. The API and MCP default to ALL_LANGUAGES: an agent that asked for nothing should not lose rows. */
 export const DEFAULT_LANGUAGE = 'en'
 export const ALL_LANGUAGES = 'any'
+/** The /settings choice that means no override. Never sent to the server. */
+export const BROWSER_DEFAULT = 'browser'
 
 const CANDIDATES = LANGUAGES.map((l) => l.franc)
 const BY_FRANC = new Map(LANGUAGES.map((l) => [l.franc, l.code]))
@@ -45,6 +47,21 @@ export const languageOf = (code: string): Language | undefined => LANGUAGES.find
 /** A language code we offer, `any`, or the fallback for anything else. */
 export function parseLanguage(value: string | undefined | null, fallback = DEFAULT_LANGUAGE): string {
   return value === ALL_LANGUAGES || languageOf(value ?? '') ? value! : fallback
+}
+
+/** The first language in an Accept-Language header that we offer, by the browser's own preference ("pt-BR,en;q=0.8" is pt). */
+export function browserLanguage(header: string | undefined | null): string {
+  const wanted = (header ?? '')
+    .slice(0, 300)
+    .split(',')
+    .map((part, index) => {
+      const [tag = '', ...params] = part.trim().toLowerCase().split(';')
+      const q = params.map((p) => /^\s*q=([\d.]+)\s*$/.exec(p)?.[1]).find(Boolean)
+      return { code: tag.trim().split('-')[0]!, q: q === undefined ? 1 : Number(q), index }
+    })
+    .filter((w) => w.q > 0)
+    .sort((a, b) => b.q - a.q || a.index - b.index)
+  return wanted.find((w) => languageOf(w.code))?.code ?? DEFAULT_LANGUAGE
 }
 
 /** Our code for a piece of text's language, or null when it cannot be told. */
