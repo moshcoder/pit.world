@@ -13,6 +13,7 @@ import type { Promo } from './promoted.js'
 import { ringFooter, ringFooterCssUrl, ringFooterOptions, setRingFooterOptions } from './ring-footer.js'
 import { proxyUrl, ringBar, ringSites, RSS_RING, siteHref, type RingSite } from './ring.js'
 import { LABELS, type Provider, type SearchResult } from './search.js'
+import type { LookupCard } from './lookups.js'
 import { MEDIA_SOURCES, thumbSrc, VERTICALS, type Media, type MediaResult, type Vertical } from './verticals.js'
 import { voteBox, type VoteView } from './vote-html.js'
 import { nichedbRecord, resultPath, type SharedResult } from './shares.js'
@@ -255,6 +256,19 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
   ${options.newsletter ? newsletterForm() : ''}
 </main>`,
   })
+}
+
+/** An `isbn:` or `vin:` search answered: nichedb's facts, escaped, and a link to the whole record there. */
+export function lookupCard(card: LookupCard, imageSrc?: string): string {
+  const label = card.kind === 'isbn' ? 'Book' : 'Vehicle'
+  const more = card.kind === 'isbn' ? 'Sellers and details on NicheDB' : 'Full report on NicheDB'
+  return `<aside class="card lookup">
+  <p class="kicker">${label}</p>
+  ${imageSrc ? `<img class="thumb" src="${esc(imageSrc)}" alt="" loading="lazy" decoding="async" referrerpolicy="no-referrer">` : ''}
+  <h2>${esc(card.title)}</h2>
+  ${card.invalid ? `<p>${esc(card.invalid)}</p>` : card.lines.map((l) => `<p>${esc(l)}</p>`).join('')}
+  <p class="row"><a href="${esc(card.url)}" rel="noreferrer noopener">${more}</a></p>
+</aside>`
 }
 
 function moshpitCard(resolution: Resolution): string {
@@ -639,6 +653,7 @@ export function privacyPage(): string {
 <li>Your browser sends the words to pit.world over HTTPS.</li>
 <li>pit.world asks several indexes at once (Google through Serper, Bing through DataForSEO, Brave, Tavily, Ceramic, Exa, Linkup, our own SearXNG, which asks Bing, Brave, Mojeek, Startpage and Yahoo, and <a href="/bot">our own index</a>, kept at nichedb.dev), takes the top results from each and merges them. Perplexity is asked only when all of those fail. The providers receive the words from our server: not your IP, browser, cookies or referrer.</li>
 <li>The tabs above the results work the same way. Shopping reads <a href="/bot">our own index</a>: pages shops themselves mark as products. Images, Videos, Live, Music, News, Places and Scholar ask Google through Serper. When Google does not answer, Music asks the <a href="https://performance-partners.apple.com/search-api">iTunes Search API</a>, Places asks <a href="https://nominatim.openstreetmap.org/">OpenStreetMap's Nominatim</a> (© OpenStreetMap contributors), News asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a> and the <a href="https://www.gdeltproject.org/">GDELT Project</a>, Images asks <a href="https://commons.wikimedia.org/">Wikimedia Commons</a>, Videos and Live ask PeerTube's <a href="https://sepiasearch.org/">Sepia Search</a> (Videos also the <a href="https://archive.org/">Internet Archive</a>), and Scholar asks <a href="https://openalex.org/">OpenAlex</a>; Books asks <a href="https://openlibrary.org/">Open Library</a>; Podcasts asks our own <a href="https://p0dcasters.com/">p0dcasters.com</a>; Blogs asks our own <a href="https://rssamplifier.com/">rssamplifier.com</a>. Pictures and book covers are fetched by pit.world and handed to you, so none of them sees your IP address either.</li>
+<li>Type <code>isbn:9780140328721</code> or <code>vin:1HGCM82633A004352</code> to look one up: a book or vehicle card from <a href="https://nichedb.dev">NicheDB</a> above the usual results. pit.world asks NicheDB for you.</li>
 <li>The Social tab reads any network pitbot can recognise: Bluesky, Hacker News, fediverse servers, AT Protocol servers and tsbb boards, plus forum threads in our own index. pit.world asks them, so they see our address and not yours. Your search words do reach those networks. Reply links open the post on its own network, and we post nothing.</li>
 <li>To avoid paying twice for a popular search, identical searches are answered from memory for up to ten minutes. That cache holds the words and the results, nothing about who asked, never touches disk, and empties on restart.</li>
 <li>Result links go straight to the site, with no redirect through us and <code>no-referrer</code>, so the site does not learn what you searched for.</li>
