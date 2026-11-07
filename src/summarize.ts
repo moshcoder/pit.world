@@ -67,7 +67,7 @@ export async function c0mputeChat(system: string, user: string, options: C0mpute
   const overall = AbortSignal.timeout(total)
   const started = Date.now()
   // A node that takes the job and never answers must not eat the whole budget: the first try gets
-  // a bit over half of it, then one retry on whichever node takes it next gets the rest.
+  // a bit over half of it, then one retry on another model gets the rest (see `stalled`).
   const firstTry = Math.round(total * (options.firstTryShare ?? 0.55))
   let lastError: unknown
   for (let attempt = 0; attempt < 2; attempt++) {
@@ -89,11 +89,27 @@ export async function c0mputeChat(system: string, user: string, options: C0mpute
 /** General models to fall back to, best first, when a node for the preferred one is not live. Never a fine-tune or an "abliterated" model. */
 export const FALLBACK_MODELS = ['qwen2.5:7b', 'qwen3:4b', 'gemma3:4b', 'qwen2.5:3b', 'qwen2.5:1.5b']
 
-/** The best general model from Infernet's list of live ones, other than the one just refused. */
-export function pickModel(available: unknown, refused?: string): string | undefined {
+/** The best general model from Infernet's list of live ones, other than those already ruled out. */
+export function pickModel(available: unknown, refused?: string | Set<string>): string | undefined {
   if (!Array.isArray(available)) return undefined
-  return FALLBACK_MODELS.find((m) => m !== refused && available.includes(m))
+  const out = refused instanceof Set ? refused : new Set(refused ? [refused] : [])
+  return FALLBACK_MODELS.find((m) => !out.has(m) && available.includes(m))
 }
+
+/**
+ * Models whose node took a job and went silent, until when. Infernet still assigns jobs to such a node, so
+ * asking again lands on the same one: without this, one wedged node fails every summary, slowly.
+ */
+const stalled = new Map<string, number>()
+const STALL_MS = 10 * 60_000
+
+function stalledModels(): Set<string> {
+  const now = Date.now()
+  for (const [model, until] of stalled) if (until <= now) stalled.delete(model)
+  return new Set(stalled.keys())
+}
+
+export const forgetStalledModels = () => stalled.clear()
 
 async function c0mputeAttempt(
   base: string,
@@ -119,25 +135,30 @@ async function c0mputeAttempt(
       }),
       signal,
     })
+  let taken: string | undefined
   try {
-    let submitted = await submit(options.model)
-    // No live node serves the preferred model right now: the best general model Infernet lists as
-    // live, then any free node.
-    if (submitted.status === 503 && options.model) {
+    const skip = stalledModels()
+    let model = options.model && skip.has(options.model) ? FALLBACK_MODELS.find((m) => !skip.has(m)) : options.model
+    let submitted = await submit(model)
+    // No live node serves that model right now: on down Infernet's list, which also names models with no
+    // live node, then any free node.
+    while (submitted.status === 503 && model) {
+      skip.add(model)
       const refusal = (await submitted.json().catch(() => ({}))) as { detail?: { availableModels?: unknown } }
-      const next = pickModel(refusal.detail?.availableModels, options.model)
-      submitted = await submit(next)
-      if (submitted.status === 503 && next) submitted = await submit(undefined)
+      model = pickModel(refusal.detail?.availableModels, skip)
+      submitted = await submit(model)
     }
     const job = (await submitted.json().catch(() => ({}))) as { jobId?: string; source?: string; model?: string | null; error?: string }
     if (!submitted.ok || !job.jobId) throw new C0mputeError(submitted.status, job.error ?? 'no job was created')
     if (job.source !== 'p2p') throw new C0mputeError(429, `no c0mpute node took the job (source ${job.source ?? 'unknown'})`)
+    taken = job.model ?? model
     const stream = await fetchImpl(`${base}/api/chat/stream/${encodeURIComponent(job.jobId)}`, { headers: { accept: 'text/event-stream' }, signal })
     if (!stream.ok || !stream.body) throw new C0mputeError(stream.status, 'could not read the job stream')
-    const { text, model } = await readStream(stream.body)
-    return { text, model: model ?? job.model ?? 'p2p' }
+    const answer = await readStream(stream.body)
+    return { text: answer.text, model: answer.model ?? job.model ?? 'p2p' }
   } catch (error) {
     if (error instanceof C0mputeError) throw error
+    if (taken) stalled.set(taken, Date.now() + STALL_MS)
     throw new C0mputeError(0, error instanceof Error ? error.message : String(error))
   }
 }
