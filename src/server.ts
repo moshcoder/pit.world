@@ -63,6 +63,7 @@ import { randomBytes } from 'node:crypto'
 import { clientSource, CLIENT_HEADERS } from '@profullstack/browser-fingerprint/source'
 import { itemFor, KINDS, Votes, type VoteKind } from './votes.js'
 import { ReaderHealth } from './reader-health.js'
+import { Engagement } from './engagement.js'
 import { VoteRewards } from './vote-rewards.js'
 import { playerCss, playerJs } from './player-bundle.js'
 import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-routes.js'
@@ -210,6 +211,26 @@ export function createApp(deps: Deps) {
   const votes = deps.votes ?? new Votes(deps.listings?.db ?? new Database(':memory:'), fpSecret)
   const readerHealth = deps.readerHealth ?? votes.health ?? new ReaderHealth(votes.db)
   votes.health = readerHealth
+  votes.engagement = votes.engagement ?? new Engagement(votes.db, fpSecret)
+  /**
+   * A person just used Summarize or Listen on a recent result: teach the ranking (src/engagement.ts).
+   * Signed-in accounts and fingerprinted browsers only, and never a pass token: an agent buying
+   * summaries in bulk says nothing about what people like. Never fails the request it rode in on.
+   */
+  const noteReaderUse = async (c: Context<Env>, url: string, body?: Record<string, unknown> | null) => {
+    try {
+      if (c.req.header(PASS_HEADER)) return
+      const me = summaryAccount(c)
+      if (me) {
+        votes.engagement!.record(url, `acct:${me.id}`)
+        return
+      }
+      const v = await visitors.guard.verify({ payload: fpOf(c, body), ip: c.env?.ip || 'unknown', userAgent: c.req.header('user-agent') ?? '' })
+      if (v.ok) votes.engagement!.record(url, `fp:${v.visitorKey}`)
+    } catch (error) {
+      console.warn(`reader use: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
   const voteRewards = deps.voteRewards ?? new VoteRewards(votes.db)
   // Shared results (src/shares.ts): written only when someone clicks Share, in the votes database.
   const shares = new Shares(votes.db, fpSecret)
@@ -743,6 +764,7 @@ export function createApp(deps: Deps) {
     const url = summaryUrl(body?.url ?? c.req.query('url'))
     if (!url) return c.json({ error: 'url must be an http(s) address' }, 400)
     const now = summarizer.status(url)
+    if (summarizer.known(url)) await noteReaderUse(c, url, body)
     // Already written or being written: free.
     if (now.status === 'done') return c.json(now)
     if (now.status === 'pending') return c.json(now, 202)
@@ -939,6 +961,7 @@ export function createApp(deps: Deps) {
     if (!url) return c.json({ error: 'url must be an http(s) address' }, 400)
     const key = summaryKey(url)
     const now = speech.listenStatus(url, key)
+    if (summarizer?.known(url)) await noteReaderUse(c, url, body)
     if (now.status === 'done') return c.json(now)
     if (now.status === 'pending') return c.json(now, 202)
     if (!summarizer?.known(url)) return c.json({ status: 'refused', url, error: 'Only a page from a recent pit.world result can be read aloud. Search for it first.' }, 404)
