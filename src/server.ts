@@ -28,7 +28,7 @@ import { FeaturedBusinesses } from './business-featured.js'
 import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
 import { PageImages } from './page-image.js'
-import { ALL_LANGUAGES, DEFAULT_LANGUAGE, inLanguage, parseLanguage } from './language.js'
+import { ALL_LANGUAGES, browserLanguage, inLanguage, parseLanguage } from './language.js'
 import { liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
@@ -408,7 +408,7 @@ export function createApp(deps: Deps) {
     return c.body(newsletter.csv(normalizeSource(c.req.query('site')) ?? undefined), 200, { 'content-type': 'text/csv; charset=utf-8', 'cache-control': 'no-store' })
   })
   app.get('/privacy', (c) => c.html(privacyPage()))
-  app.get('/settings', (c) => c.html(settingsPage()))
+  app.get('/settings', (c) => c.html(settingsPage(browserLanguage(c.req.header('accept-language')))))
   app.get('/about', (c) => c.html(aboutPage()))
   app.get('/why', (c) => c.html(whyPage()))
   // Share: check the signed result, keep it, and send the reader to its own page.
@@ -597,8 +597,10 @@ export function createApp(deps: Deps) {
     }
     const vertical = parseVertical(c.req.query('t'))
     c.header('cache-control', 'no-store')
-    const lang = parseLanguage(c.req.query('lang'))
-    const back = `/search?q=${encodeURIComponent(query)}${vertical === 'web' ? '' : `&t=${vertical}`}${lang === DEFAULT_LANGUAGE ? '' : `&lang=${lang}`}`
+    // An explicit ?lang= (a setting, or Show all languages) wins, and only that is carried on links: the browser's says it again itself.
+    const lang = parseLanguage(c.req.query('lang'), browserLanguage(c.req.header('accept-language')))
+    const pinned = c.req.query('lang') === lang ? lang : undefined
+    const back = `/search?q=${encodeURIComponent(query)}${vertical === 'web' ? '' : `&t=${vertical}`}${pinned ? `&lang=${pinned}` : ''}`
     if (vertical !== 'web') {
       const [{ result, error }, promos] = await Promise.all([runMedia(vertical, query, undefined, lang), promoted.for(query, vertical)])
       if (result) result.hits = votes.rerank(result.hits, query)
@@ -617,7 +619,7 @@ export function createApp(deps: Deps) {
       )
       const frameHosts = embedHosts(result?.hits.map((h) => h.player) ?? [])
       if (frameHosts.length) c.header('x-frame-hosts', frameHosts.join(' '))
-      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, tools: rowTools(), lang, ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
+      return c.html(mediaPage({ query, vertical, result, promos, error, featured: mediaFeatured, votes: view, speech: !!deps.speech?.enabled, tools: rowTools(), lang, ...(pinned ? { pinned } : {}), ...(mediaBackfill ? { backfill: mediaBackfill } : {}) }), result || promos.length ? 200 : 503)
     }
     const lookup = parseLookup(query)
     const lookupDone = lookup ? runLookup(lookup, { ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(process.env.NICHEDB_API_KEY ? { key: process.env.NICHEDB_API_KEY } : {}) }) : null
@@ -641,7 +643,7 @@ export function createApp(deps: Deps) {
     )
     const answered = lookupDone ? await lookupDone : null
     const lookupHtml = answered ? lookupCard(answered, answered.image ? (thumbAllowed(answered.image) ? `/img?u=${encodeURIComponent(answered.image)}` : signedThumb(answered.image)) : undefined) : ''
-    return c.html(resultsPage({ query, lang, result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, pageImage, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
+    return c.html(resultsPage({ query, lang, ...(pinned ? { pinned } : {}), result, resolution, error, featured, votes: view, share: (h) => shares.href(h), summaries: !!deps.summarizer?.enabled, listen: !!deps.speech?.enabled, pageImage, ...(backfill ? { backfill } : {}), ...(claimed || lookupHtml ? { card: `${lookupHtml}${claimed ? listingCard(claimed, view) : ''}` } : {}) }), result || resolution || claimed || answered || featured.length ? 200 : 503)
   })
 
   // --- votes -------------------------------------------------------------------
