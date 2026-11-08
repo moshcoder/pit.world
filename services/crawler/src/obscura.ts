@@ -10,7 +10,26 @@
  * and put back together as a document the extractor reads like any other.
  */
 
+import { CRAWL_RENDER_SETTLE_MS, CRAWL_RENDER_TIMEOUT_MS } from './config.ts'
+
 export type Rendered = { url: string; html: string }
+
+/**
+ * Trouble on our side of the render (Obscura unreachable, a dropped session, a JSON-RPC
+ * error): never the target's fault, so never a reason to park it. `ours` tells failureKind.
+ */
+export class ObscuraError extends Error {
+  override name = 'ObscuraError'
+  readonly ours = true
+}
+
+/** A render that ran out of CRAWL_RENDER_TIMEOUT_MS: a failure to record, never a page. */
+export class RenderTimeout extends Error {
+  override name = 'TimeoutError'
+  constructor(url: string, ms: number) {
+    super(`render timed out after ${Math.round(ms / 1000)} s: ${url}`)
+  }
+}
 
 type Fetch = typeof fetch
 
@@ -26,6 +45,10 @@ const EXPRESSION = `(() => {
     links,
   });
 })()`
+
+/** The read back, after a bounded settle: `load` has fired, a late script gets this long, then we read. */
+export const SETTLED_EXPRESSION = (settleMs: number) =>
+  `new Promise((resolve) => setTimeout(resolve, ${Math.max(0, Math.min(2_000, Math.floor(settleMs)))})).then(() => ${EXPRESSION})`
 
 const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 
@@ -55,11 +78,24 @@ export class ObscuraClient {
     readonly endpoint: string,
     private readonly token: string,
     private readonly fetchImpl: Fetch = fetch,
-    private readonly timeoutMs = 45_000,
+    /** The whole render: navigation, settle and read back (CRAWL_RENDER_TIMEOUT_MS). */
+    private readonly budgetMs = CRAWL_RENDER_TIMEOUT_MS,
+    private readonly settleMs = CRAWL_RENDER_SETTLE_MS,
   ) {}
 
+  /** When the render in progress must be done by; every call inside it gets only what is left. */
+  private deadline = 0
+
+  private left(): number {
+    return this.deadline ? this.deadline - Date.now() : this.budgetMs
+  }
+
   private async rpc(method: string, params: unknown, notify = false): Promise<any> {
-    const response = await this.fetchImpl(this.endpoint, {
+    const left = this.left()
+    if (left <= 0) throw new Error('render budget spent')
+    let response: Response
+    try {
+      response = await this.fetchImpl(this.endpoint, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -68,16 +104,21 @@ export class ObscuraClient {
         ...(this.session ? { 'mcp-session-id': this.session } : {}),
       },
       body: JSON.stringify(notify ? { jsonrpc: '2.0', method, params } : { jsonrpc: '2.0', id: ++this.id, method, params }),
-      signal: AbortSignal.timeout(this.timeoutMs),
-    })
+      signal: AbortSignal.timeout(left),
+      })
+    } catch (error) {
+      const name = (error as Error)?.name
+      if (name === 'TimeoutError' || name === 'AbortError') throw error
+      throw new ObscuraError(`obscura unreachable: ${(error as Error)?.message ?? error}`)
+    }
     this.session = response.headers.get('mcp-session-id') ?? this.session
     const text = await response.text()
     if (response.status === 404 || response.status === 400) {
       // A restarted server forgot the session.
       this.session = ''
-      throw new Error(`obscura HTTP ${response.status}`)
+      throw new ObscuraError(`obscura HTTP ${response.status}`)
     }
-    if (!response.ok) throw new Error(`obscura HTTP ${response.status}`)
+    if (!response.ok) throw new ObscuraError(`obscura HTTP ${response.status}`)
     if (notify) return null
     const line = text.includes('data:')
       ? text
@@ -86,8 +127,13 @@ export class ObscuraClient {
           .pop()!
           .slice(5)
       : text
-    const json = JSON.parse(line)
-    if (json.error) throw new Error(`obscura ${json.error.message ?? 'error'}`)
+    let json: any
+    try {
+      json = JSON.parse(line)
+    } catch {
+      throw new ObscuraError('obscura sent a reply that is not JSON')
+    }
+    if (json.error) throw new ObscuraError(`obscura ${json.error.message ?? 'error'}`)
     return json.result
   }
 
@@ -113,13 +159,27 @@ export class ObscuraClient {
     return text
   }
 
-  /** Navigate, let the page settle, read it back. Serialised: one page per server. */
+  /**
+   * Navigate to `load` (never networkidle: a page that keeps a socket open never goes idle),
+   * settle briefly, read it back, all inside one budget. Out of budget it rejects with
+   * RenderTimeout, which the crawler records as a slow target. Serialised: one page per
+   * server, and the budget starts when this page's turn does, not while it queues.
+   */
   render(url: string): Promise<Rendered> {
     const run = this.busy.then(async () => {
-      await this.call('browser_navigate', { url, waitUntil: 'networkidle0' })
-      const raw = await this.call('browser_evaluate', { expression: EXPRESSION, timeoutMs: 15_000 })
-      const parts = JSON.parse(raw)
-      return { url: String(parts.url || url), html: documentFrom(parts) }
+      this.deadline = Date.now() + this.budgetMs
+      try {
+        await this.call('browser_navigate', { url, waitUntil: 'load' })
+        const timeoutMs = Math.max(1, this.left() - 500)
+        const raw = await this.call('browser_evaluate', { expression: SETTLED_EXPRESSION(Math.min(this.settleMs, timeoutMs / 2)), timeoutMs })
+        const parts = JSON.parse(raw)
+        return { url: String(parts.url || url), html: documentFrom(parts) }
+      } catch (error) {
+        if (this.left() <= 0 || (error as Error)?.name === 'TimeoutError' || (error as Error)?.name === 'AbortError') throw new RenderTimeout(url, this.budgetMs)
+        throw error
+      } finally {
+        this.deadline = 0
+      }
     })
     this.busy = run.catch(() => undefined)
     return run

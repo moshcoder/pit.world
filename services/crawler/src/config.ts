@@ -12,6 +12,22 @@ export const VERSION = '0.1.0'
 export const BOT = 'pitbot'
 export const USER_AGENT = `Mozilla/5.0 (compatible; ${BOT}/${VERSION}; +https://pit.world/bot)`
 
+/**
+ * The fleet crawler rule (Anthony, 2026-11-08): "crawlers should timeout after 10 seconds for
+ * fetch, 30 for browser ... We don't want broken slow shit. Flag to recheck later in a month."
+ *
+ * One plain GET of a third-party address (page, robots.txt, sitemap, card read): 10 s for all
+ * of it, DNS, every redirect hop and the body. Calls to our own services (nichedb, Obscura's
+ * MCP transport, rssamplifier OPML) keep their own budgets.
+ */
+export const CRAWL_FETCH_TIMEOUT_MS = 10_000
+/** One browser render through Obscura: navigation to `load`, a short settle, the read back. */
+export const CRAWL_RENDER_TIMEOUT_MS = 30_000
+/** The bounded settle after `load`, for scripts that paint just after it. Never networkidle. */
+export const CRAWL_RENDER_SETTLE_MS = 1_500
+/** A host or page that timed out, would not connect or answered 5xx is left alone this long, then read once more. */
+export const CRAWL_RECHECK_MS = 30 * 86_400_000
+
 export type Role = 'site' | 'page' | 'render' | 'publish'
 
 export type Config = {

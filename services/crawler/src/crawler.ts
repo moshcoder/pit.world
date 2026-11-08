@@ -4,7 +4,8 @@
  * The BullMQ wiring (queues.ts) calls these; the tests call them directly
  * with an in-memory frontier and a fake web.
  */
-import type { Config } from './config.ts'
+import { CRAWL_RECHECK_MS, type Config } from './config.ts'
+import { failureKind, HOST_KINDS, HOST_PAGE_FAILURE_WINDOW_MS, HOST_PAGE_FAILURES, parkFor, statusKind, type FailureKind } from './failures.ts'
 import { extract, needsRender, type Extracted } from './extract.ts'
 import { politeGet, readSitemapXml } from './fetcher.ts'
 import { endpointsIn, handshake, mcpRecord, type McpJob, WELL_KNOWN } from './mcp.ts'
@@ -135,17 +136,64 @@ export function createCrawler(deps: Deps) {
     }
   }
 
-  async function robotsFor(site: string): Promise<Robots | 'unavailable'> {
-    const kept = await frontier.getRobots(site)
+  const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error)).slice(0, 200)
+
+  /**
+   * Park a host: nothing reads from it until `ms` from now (Redis, which every worker asks
+   * before a fetch), and the site row carries the flag, so the recrawl skips it until then
+   * and gives it exactly one recheck after (Postgres).
+   */
+  async function flagHost(site: string, kind: FailureKind, detail: string, ms = CRAWL_RECHECK_MS): Promise<void> {
+    await frontier.markDown(site, ms)
+    await siteStore.flag(site, `${kind}: ${detail}`, Date.now() + ms).catch((error) => log(`flag ${site}: ${errorText(error)}`))
+    await frontier.bump('sites_flagged')
+    await frontier.log({ kind: 'fail', site, note: `parked ${ms >= 86_400_000 ? `${Math.round(ms / 86_400_000)} d` : `${Math.round(ms / 60_000)} min`}: ${kind}, ${detail}`.slice(0, 200) })
+  }
+
+  /**
+   * Park one page for 30 days (a timeout or a 5xx may be that page alone). Enough of them
+   * from one site inside the hour and the host is parked too: a dead host is not read page
+   * by page for a thousand pages.
+   */
+  async function flagPage(job: PageJob, kind: FailureKind, detail: string, retryAfter?: string): Promise<string> {
+    if (HOST_KINDS.has(kind)) {
+      await flagHost(job.site, kind, `${detail} (${job.url})`, parkFor(kind, retryAfter))
+      return `host parked: ${kind}`
+    }
+    await frontier.markPageDown(job.url, CRAWL_RECHECK_MS)
+    await frontier.bump('pages_flagged')
+    await frontier.log({ kind: 'fail', site: job.site, url: job.url, note: `parked 30 d: ${kind}, ${detail}`.slice(0, 200) })
+    const n = await frontier.noteFailure(job.site, HOST_PAGE_FAILURE_WINDOW_MS)
+    if (n === HOST_PAGE_FAILURES) await flagHost(job.site, kind, `${n} pages failed within the hour, last ${detail}`)
+    return `page parked: ${kind}`
+  }
+
+  /** `state`: a siteState() the caller already has, saving the round trip. */
+  async function robotsFor(site: string, given?: { robots: Robots | null; downMs: number }): Promise<Robots | 'unavailable'> {
+    const state = given ?? (await frontier.siteState(site))
+    if (state.downMs > 0) return 'unavailable'
+    const kept = state.robots
     // Cached before AI-crawler rules were kept: read again, so a training opt-out is never missed.
     if (kept && kept.ai) return kept
     let robots: Robots = EMPTY
     try {
       const r = await get(`https://${site}/robots.txt`, site, 'text/plain,*/*;q=0.5')
-      // 5xx: the site cannot say, so it is read another day (Google's reading). 4xx: no rules.
-      if (r.status >= 500) return 'unavailable'
+      // 5xx: the site cannot say (Google's reading), so it is parked and asked again in 30 days.
+      // 429: parked for its Retry-After (capped). Any other 4xx: no rules.
+      const failed = statusKind(r.status)
+      if (failed) {
+        await flagHost(site, failed, `robots.txt answered HTTP ${r.status}`, parkFor(failed, r.retryAfter))
+        return 'unavailable'
+      }
       if (r.status < 400 && !/html/.test(r.contentType)) robots = parseRobots(r.body)
-    } catch {
+    } catch (error) {
+      // A host that times out or will not connect on robots.txt would do the same for every
+      // page: it was read as "no rules" and each page then timed out three times.
+      const kind = failureKind(error)
+      if (kind) {
+        await flagHost(site, kind, `robots.txt: ${errorText(error)}`)
+        return 'unavailable'
+      }
       robots = { ...EMPTY, read: 'error' }
     }
     // TDMRep's site-wide file: rarely there, read with robots.txt once a day.
@@ -334,16 +382,19 @@ export function createCrawler(deps: Deps) {
     // Once per cycle per site, however many jobs for it are queued.
     if (!(await frontier.claimStart(site, config.recrawlDays * 86_400_000))) return { admitted: 0, outcome: 'already started this cycle' }
     if (!(await resolver(site))) {
+      // No public address (often no address at all): parked and asked again in 30 days.
       await frontier.bump('sites_refused')
-      await frontier.log({ kind: 'skip', site, note: 'not on the public internet' })
+      await flagHost(site, 'dns', 'no public address')
       return { admitted: 0, outcome: 'not public' }
     }
     const robots = await robotsFor(site)
     if (robots === 'unavailable') {
       await frontier.bump('sites_unavailable')
-      await frontier.log({ kind: 'skip', site, note: 'robots.txt answered 5xx; trying another day' })
       return { admitted: 0, outcome: 'robots.txt unavailable' }
     }
+    // Read fine: a flag from an earlier cycle (this was its recheck) is cleared.
+    await frontier.clearDown(site)
+    await siteStore.clearFlag(site).catch((error) => log(`unflag ${site}: ${errorText(error)}`))
     if (!allows(robots, '/')) {
       await frontier.bump('sites_disallowed')
       await frontier.log({ kind: 'skip', site, note: 'robots.txt disallows pitbot' })
@@ -415,7 +466,10 @@ export function createCrawler(deps: Deps) {
     if ((await frontier.outboxLength()) > config.outboxHigh) {
       return { delayMs: 20_000 + Math.floor(Math.random() * 20_000), outcome: 'waiting for publishing to catch up' }
     }
-    const robots = await robotsFor(job.site)
+    const state = await frontier.siteState(job.site, job.url)
+    const parked = parkedOutcome(state)
+    if (parked) return parked
+    const robots = await robotsFor(job.site, state)
     if (robots === 'unavailable') return { outcome: 'robots.txt unavailable' }
     const gap = gapFor(robots)
     const slot = await frontier.lease(job.site, gap)
@@ -424,10 +478,24 @@ export function createCrawler(deps: Deps) {
       await frontier.bump('pages_disallowed')
       return { outcome: 'disallowed' }
     }
-    const r = await get(job.url, job.site)
+    let r: Awaited<ReturnType<typeof get>>
+    try {
+      r = await get(job.url, job.site)
+    } catch (error) {
+      // Not thrown on to BullMQ: a retry in 30 s of a page that just timed out is the slow
+      // broken read the rule is about. Anything else (a bug, Redis) still throws and retries.
+      const kind = failureKind(error)
+      if (!kind) throw error
+      return { outcome: await flagPage(job, kind, errorText(error)) }
+    }
     if (r.offsite) {
       if (config.discover) await scheduleSites([r.offsite], 'redirect')
       return { outcome: `redirects to ${r.offsite}` }
+    }
+    const failed = statusKind(r.status)
+    if (failed) {
+      await frontier.bump('pages_failed')
+      return { outcome: await flagPage(job, failed, `HTTP ${r.status}`, r.retryAfter) }
     }
     if (r.status >= 400) {
       await frontier.bump('pages_failed')
@@ -446,14 +514,38 @@ export function createCrawler(deps: Deps) {
     return { outcome: await accept(doc, optOut ? { ...job, optOut } : job, robots) }
   }
 
+  /**
+   * A parked host or page is not read. A short park (a 429's Retry-After) is waited out;
+   * a long one drops the job, and the site's recheck queues the page again in 30 days.
+   */
+  function parkedOutcome(state: { downMs: number; pageDown: boolean }): PageOutcome | null {
+    if (state.pageDown) return { outcome: 'page parked' }
+    if (state.downMs <= 0) return null
+    if (state.downMs <= MAX_SPREAD_MS) return { delayMs: state.downMs, outcome: 'waiting out a parked host' }
+    return { outcome: 'host parked' }
+  }
+
   async function renderPage(job: PageJob): Promise<PageOutcome> {
     if (!deps.renderer?.size) return { outcome: 'no renderer' }
-    const robots = await robotsFor(job.site)
+    const state = await frontier.siteState(job.site, job.url)
+    const parked = parkedOutcome(state)
+    if (parked) return parked
+    const robots = await robotsFor(job.site, state)
     if (robots === 'unavailable') return { outcome: 'robots.txt unavailable' }
     const gap = gapFor(robots)
     const slot = await frontier.lease(job.site, gap)
     if (slot.waitMs > 0) return { delayMs: spreadDelay(slot.waitMs, slot.pending, gap), outcome: 'waiting for the site' }
-    const rendered = await deps.renderer.render(job.url)
+    let rendered: Rendered
+    try {
+      rendered = await deps.renderer.render(job.url)
+    } catch (error) {
+      // Out of the 30 s budget, or the browser could not reach the page: flagged, not retried.
+      // Obscura's own trouble (HTTP errors from our container) still throws and retries.
+      const kind = failureKind(error)
+      if (!kind) throw error
+      await frontier.bump('renders_failed')
+      return { outcome: await flagPage(job, kind, `render: ${errorText(error)}`) }
+    }
     const landed = normalizeUrl(rendered.url) ?? job.url
     if (!sameSite(landed, job.site)) return { outcome: `rendered onto ${siteOf(landed)}` }
     const doc = extract(rendered.html, landed, { depth: job.depth, rendered: true, crawler: config.userAgent })

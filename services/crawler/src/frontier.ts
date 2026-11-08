@@ -6,6 +6,9 @@
  *   pitcrawl:count:<site>   pages admitted this cycle; admission stops at maxPages
  *   pitcrawl:robots:<site>  the parsed robots.txt, for a day
  *   pitcrawl:lease:<site>   held for the gap between two requests to one site
+ *   pitcrawl:down:<site>    a parked host (timeout, no connection, 5xx, 429), expires when it may be read again
+ *   pitcrawl:pdown:<urlid>  a parked page (timed out or 5xx), 30 days
+ *   pitcrawl:fails:<site>   page failures this hour; past HOST_PAGE_FAILURES the host is parked
  *   pitcrawl:sites          sorted set: site -> when it was last scheduled
  *   pitcrawl:outbox         records waiting for nichedb, oldest first
  *   pitcrawl:stats          counters
@@ -57,6 +60,19 @@ export interface Frontier {
   lease(site: string, gapMs: number): Promise<{ waitMs: number; pending: number }>
   getRobots(site: string): Promise<Robots | null>
   setRobots(site: string, robots: Robots): Promise<void>
+  /**
+   * One round trip for what a page read needs first: the cached robots.txt, how long the
+   * host stays parked (0 = not), and whether this page is parked.
+   */
+  siteState(site: string, url?: string): Promise<{ robots: Robots | null; downMs: number; pageDown: boolean }>
+  /** Park a host for ms: nothing reads from it until then. */
+  markDown(site: string, ms: number): Promise<void>
+  /** Park one page for ms. */
+  markPageDown(url: string, ms: number): Promise<void>
+  /** Count a page failure in a fixed window; returns the count so far in it. */
+  noteFailure(site: string, windowMs: number): Promise<number>
+  /** The host read fine: forget its failures. */
+  clearDown(site: string): Promise<void>
   /** The first start of a site in a cycle claims it; every later one is told no. */
   claimStart(site: string, cycleMs: number): Promise<boolean>
   /** The first sighting of an MCP address in a cycle claims its probe; every later one is told no. */
@@ -104,6 +120,9 @@ const K = {
   robots: (s: string) => `pitcrawl:robots:${s}`,
   lease: (s: string) => `pitcrawl:lease:${s}`,
   started: (s: string) => `pitcrawl:started:${s}`,
+  down: (s: string) => `pitcrawl:down:${s}`,
+  pageDown: (id: string) => `pitcrawl:pdown:${id}`,
+  fails: (s: string) => `pitcrawl:fails:${s}`,
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
   mcp: 'pitcrawl:mcp',
@@ -197,6 +216,37 @@ export class RedisFrontier implements Frontier {
 
   async setRobots(site: string, robots: Robots) {
     await this.redis.set(K.robots(site), JSON.stringify(robots), 'EX', 86_400)
+  }
+
+  async siteState(site: string, url?: string) {
+    const pipe = this.redis.pipeline().get(K.robots(site)).pttl(K.down(site))
+    if (url) pipe.exists(K.pageDown(urlId(url)))
+    const results = ((await pipe.exec()) ?? []) as [unknown, unknown][]
+    const raw = results[0]?.[1]
+    const ttl = results[1]?.[1]
+    const page = results[2]
+    let robots: Robots | null = null
+    if (typeof raw === 'string') {
+      try {
+        robots = JSON.parse(raw) as Robots
+      } catch {
+        robots = EMPTY
+      }
+    }
+    return { robots, downMs: Math.max(0, Number(ttl ?? 0)), pageDown: Number(page?.[1] ?? 0) > 0 }
+  }
+  async markDown(site: string, ms: number) {
+    await this.redis.set(K.down(site), String(Date.now()), 'PX', Math.max(1_000, Math.floor(ms)))
+  }
+  async markPageDown(url: string, ms: number) {
+    await this.redis.set(K.pageDown(urlId(url)), '1', 'PX', Math.max(1_000, Math.floor(ms)))
+  }
+  async noteFailure(site: string, windowMs: number) {
+    const results = ((await this.redis.multi().incr(K.fails(site)).pexpire(K.fails(site), windowMs, 'NX').exec()) ?? []) as [unknown, unknown][]
+    return Number(results[0]?.[1] ?? 0)
+  }
+  async clearDown(site: string) {
+    await this.redis.unlink(K.down(site), K.fails(site))
   }
 
   async claimMcp(endpoint: string, cycleMs: number) {
@@ -387,6 +437,29 @@ export class MemoryFrontier implements Frontier {
   }
   async setRobots(site: string, robots: Robots) {
     this.robots.set(site, robots)
+  }
+  down = new Map<string, number>()
+  pageDown = new Map<string, number>()
+  fails = new Map<string, { n: number; until: number }>()
+  async siteState(site: string, url?: string) {
+    const until = this.down.get(site) ?? 0
+    return { robots: this.robots.get(site) ?? null, downMs: Math.max(0, until - Date.now()), pageDown: url ? (this.pageDown.get(urlId(url)) ?? 0) > Date.now() : false }
+  }
+  async markDown(site: string, ms: number) {
+    this.down.set(site, Date.now() + ms)
+  }
+  async markPageDown(url: string, ms: number) {
+    this.pageDown.set(urlId(url), Date.now() + ms)
+  }
+  async noteFailure(site: string, windowMs: number) {
+    const f = this.fails.get(site)
+    const next = f && f.until > Date.now() ? { n: f.n + 1, until: f.until } : { n: 1, until: Date.now() + windowMs }
+    this.fails.set(site, next)
+    return next.n
+  }
+  async clearDown(site: string) {
+    this.down.delete(site)
+    this.fails.delete(site)
   }
   started = new Set<string>()
   async claimStart(site: string) {

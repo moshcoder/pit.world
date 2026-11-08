@@ -37,6 +37,28 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     expect(await redis.pttl('pitcrawl:seen:race.example')).toBeGreaterThan(50_000)
   })
 
+  test('parking: robots, host park and page park in one round trip; failures count in a fixed window', async () => {
+    await redis.flushdb()
+    const frontier = new RedisFrontier(redis, 5, 60_000)
+    expect(await frontier.siteState('p.example', 'https://p.example/a')).toEqual({ robots: null, downMs: 0, pageDown: false })
+    await frontier.setRobots('p.example', { rules: [], crawlDelayMs: null, sitemaps: [], ai: [], tdm: [] })
+    await frontier.markDown('p.example', 30 * 86_400_000)
+    await frontier.markPageDown('https://p.example/a', 30 * 86_400_000)
+    const state = await frontier.siteState('p.example', 'https://p.example/a')
+    expect(state.robots?.rules).toEqual([])
+    expect(state.downMs).toBeGreaterThan(29 * 86_400_000)
+    expect(state.pageDown).toBe(true)
+    expect((await frontier.siteState('p.example', 'https://p.example/b')).pageDown).toBe(false)
+    expect(await frontier.noteFailure('p.example', 60_000)).toBe(1)
+    expect(await frontier.noteFailure('p.example', 60_000)).toBe(2)
+    // Fixed window: a later failure does not push the expiry out.
+    await redis.pexpire('pitcrawl:fails:p.example', 1_000)
+    await frontier.noteFailure('p.example', 60_000)
+    expect(await redis.pttl('pitcrawl:fails:p.example')).toBeLessThanOrEqual(1_000)
+    await frontier.clearDown('p.example')
+    expect((await frontier.siteState('p.example')).downMs).toBe(0)
+  })
+
   test('admitMany: one call per list, same verdicts as one at a time, and the cap is exact under a race', async () => {
     await redis.flushdb()
     const frontier = new RedisFrontier(redis, 5, 60_000)
@@ -203,6 +225,34 @@ describe.skipIf(!PG)('on a real Postgres', () => {
       expect(await store.counts()).toEqual(exact)
       expect(await store.takeDue(60_000, 10)).toEqual([])
       expect((await store.takeDue(0, 100)).length).toBe(6)
+    } finally {
+      await store.close()
+    }
+  })
+
+  test('the 30-day flag: columns added once, skipped by the recrawl until retry_after, one recheck, cleared', async () => {
+    const store = new PgSiteStore(PG!)
+    const sql = (store as unknown as { sql: { unsafe(q: string): Promise<any[]> } }).sql
+    try {
+      await store.add([{ site: 'warm.example', source: 'x' }], false)
+      await sql.unsafe('truncate sites; update counts set n = 0')
+      await store.add([{ site: 'dead.example', source: 'x' }, { site: 'fine.example', source: 'x' }], true)
+      await sql.unsafe(`update sites set scheduled_at = now() - interval '31 days'`)
+      await store.flag('dead.example', 'timeout: robots.txt: The operation timed out.', Date.now() + 30 * 86_400_000)
+      // Flagging a site never recorded records it, started now.
+      await store.flag('new.example', 'connection: refused', Date.now() + 30 * 86_400_000)
+      expect((await store.resync()).known).toBe(3)
+      const flag = await store.flagOf('dead.example')
+      expect(flag?.status).toBe('down')
+      expect(flag?.lastError).toBe('timeout: robots.txt: The operation timed out.')
+      expect(flag!.retryAfter - Date.now()).toBeGreaterThan(29 * 86_400_000)
+      expect(await store.takeDue(30 * 86_400_000, 10)).toEqual(['fine.example'])
+      await sql.unsafe(`update sites set retry_after = now() - interval '1 second', scheduled_at = now() - interval '31 days' where site = 'dead.example'`)
+      expect(await store.takeDue(30 * 86_400_000, 10)).toEqual(['dead.example'])
+      expect(await store.takeDue(30 * 86_400_000, 10)).toEqual([])
+      await store.clearFlag('dead.example')
+      expect(await store.flagOf('dead.example')).toBeNull()
+      expect(await store.flagOf('fine.example')).toBeNull()
     } finally {
       await store.close()
     }

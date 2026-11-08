@@ -10,6 +10,7 @@
  * statements, and recomputed by resync(), since count(*) over 100M rows is seconds.
  */
 import { SQL } from 'bun'
+import { flagFor, isDue, type SiteFlag } from './failures.ts'
 
 export type SiteRow = { site: string; source: string }
 export type SiteCounts = { known: number; parked: number }
@@ -21,8 +22,14 @@ export interface SiteStore {
   force(rows: SiteRow[]): Promise<void>
   /** The oldest parked sites, now marked started. */
   takeParked(count: number): Promise<SiteRow[]>
-  /** Started sites last scheduled more than olderThanMs ago, now rescheduled. */
+  /** Started sites last scheduled more than olderThanMs ago and not flagged into the future, now rescheduled. */
   takeDue(olderThanMs: number, count: number): Promise<string[]>
+  /** Park a site: it timed out, would not connect or answered 5xx/429. Not due again before `untilMs`. */
+  flag(site: string, error: string, untilMs: number): Promise<void>
+  /** A flagged site read fine again: drop the flag. A no-op on an unflagged site. */
+  clearFlag(site: string): Promise<void>
+  /** The flag a site carries, or null. */
+  flagOf(site: string): Promise<SiteFlag | null>
   /** From the counters: cheap, slightly behind under concurrent writes until resync(). */
   counts(): Promise<SiteCounts>
   /** Recompute the counters exactly. */
@@ -55,6 +62,16 @@ const SCHEMA = [
   `create index if not exists sites_due on sites (scheduled_at) where scheduled_at is not null`,
   `create table if not exists counts (k text primary key, n bigint not null)`,
   `insert into counts (k, n) values ('known', 0), ('parked', 0) on conflict do nothing`,
+  // 2026-11-08, the 30-day recheck flag (src/failures.ts): status 'down' while parked, why,
+  // when, and when it may be read again. Added only when missing: ALTER TABLE takes an
+  // ACCESS EXCLUSIVE lock even with IF NOT EXISTS, and every worker runs this at start.
+  // Nullable with no default, so adding them rewrites nothing.
+  `do $$ begin
+    if not exists (select 1 from information_schema.columns where table_schema = current_schema() and table_name = 'sites' and column_name = 'retry_after') then
+      alter table sites add column if not exists status text, add column if not exists last_error text,
+        add column if not exists failed_at timestamptz, add column if not exists retry_after timestamptz;
+    end if;
+  end $$`,
 ]
 
 export class PgSiteStore implements SiteStore {
@@ -138,10 +155,40 @@ export class PgSiteStore implements SiteStore {
       with picked as (
         select site from sites
         where scheduled_at is not null and scheduled_at < now() - make_interval(secs => ${olderThanMs / 1000}::float8)
+          and (retry_after is null or retry_after <= now())
         order by scheduled_at limit ${count} for update skip locked
       )
       update sites s set scheduled_at = now() from picked where s.site = picked.site returning s.site`
     return (out as { site: string }[]).map((r) => r.site)
+  }
+
+  async flag(site: string, error: string, untilMs: number) {
+    await this.init()
+    const f = flagFor(error, untilMs)
+    // A site flagged before it was ever recorded (a card read, an MCP probe) is recorded as
+    // started now, so the recheck finds it in sites_due.
+    const out = await this.sql`
+      insert into sites (site, source, scheduled_at, status, last_error, failed_at, retry_after)
+      values (${site}, 'flag', now(), ${f.status}, ${f.lastError}, now(), to_timestamp(${untilMs / 1000}::float8))
+      on conflict (site) do update set status = excluded.status, last_error = excluded.last_error,
+        failed_at = excluded.failed_at, retry_after = excluded.retry_after,
+        scheduled_at = coalesce(sites.scheduled_at, excluded.scheduled_at)
+      returning (xmax = 0) as inserted`
+    if ((out as { inserted: boolean }[])[0]?.inserted) await this.sql`update counts set n = n + 1 where k = 'known'`
+  }
+
+  async clearFlag(site: string) {
+    await this.init()
+    await this.sql`update sites set status = null, last_error = null, failed_at = null, retry_after = null where site = ${site} and status is not null`
+  }
+
+  async flagOf(site: string) {
+    await this.init()
+    const out = (await this.sql`
+      select status, last_error, extract(epoch from failed_at) * 1000 as failed_at, extract(epoch from retry_after) * 1000 as retry_after
+      from sites where site = ${site} and status is not null`) as { status: 'down'; last_error: string; failed_at: string | number; retry_after: string | number }[]
+    const r = out[0]
+    return r ? { status: r.status, lastError: r.last_error, failedAt: Number(r.failed_at), retryAfter: Number(r.retry_after) } : null
   }
 
   async counts() {
@@ -183,7 +230,7 @@ export class PgSiteStore implements SiteStore {
 
 /** For tests and a laptop without Postgres. Nothing survives a restart. */
 export class MemorySiteStore implements SiteStore {
-  rows = new Map<string, { source: string; scheduledAt: number | null; id: number }>()
+  rows = new Map<string, { source: string; scheduledAt: number | null; id: number; flag?: SiteFlag | null }>()
   private next = 1
 
   async add(rows: SiteRow[], queueNow: boolean) {
@@ -211,12 +258,27 @@ export class MemorySiteStore implements SiteStore {
     return picked.map(([site, r]) => ({ site, source: r.source }))
   }
   async takeDue(olderThanMs: number, count: number) {
+    const now = Date.now()
     const due = [...this.rows.entries()]
-      .filter(([, r]) => r.scheduledAt !== null && r.scheduledAt <= Date.now() - olderThanMs)
+      .filter(([, r]) => isDue({ scheduledAt: r.scheduledAt, retryAfter: r.flag?.retryAfter ?? null }, olderThanMs, now))
       .sort((a, b) => a[1].scheduledAt! - b[1].scheduledAt!)
       .slice(0, count)
     for (const [, r] of due) r.scheduledAt = Date.now()
     return due.map(([site]) => site)
+  }
+  async flag(site: string, error: string, untilMs: number) {
+    const row = this.rows.get(site)
+    if (row) {
+      row.flag = flagFor(error, untilMs)
+      row.scheduledAt ??= Date.now()
+    } else this.rows.set(site, { source: 'flag', scheduledAt: Date.now(), id: this.next++, flag: flagFor(error, untilMs) })
+  }
+  async clearFlag(site: string) {
+    const row = this.rows.get(site)
+    if (row) row.flag = null
+  }
+  async flagOf(site: string) {
+    return this.rows.get(site)?.flag ?? null
   }
   async counts() {
     let parked = 0
