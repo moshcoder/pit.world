@@ -106,9 +106,102 @@ export type CorpusPage = {
 
 export type PolicyRow = { id: number; url: string }
 
-const TOTAL_CAP = 10_000
+export const TOTAL_CAP = 10_000
 
-export class IndexStore {
+export type TrimOptions = { batch?: number; maxBatches?: number; keepMin?: number; sleep?: (ms: number) => Promise<void> }
+export type TrimResult = {
+  deleted: number
+  bytesBefore: number
+  bytesAfter: number
+  done: boolean
+  reclaims: boolean
+  /** Postgres only: what the live pages are estimated to take (its files do not shrink, freed space is reused). */
+  liveBytes?: number
+}
+
+type Awaitable<T> = T | Promise<T>
+
+/**
+ * The local search mirror, whichever store holds it: SQLite (IndexStore, synchronous, one
+ * writer) or Postgres (PgIndexStore, many writers). Callers await every method, so either fits.
+ */
+export interface SearchIndex {
+  /** Bytes the index may use before trim() drops its oldest pages. 0: no budget. */
+  readonly maxBytes: number
+  readonly reclaims: boolean
+  lastAddAt: string | null
+  add(entries: Array<IndexedRecord | string>): Awaitable<number>
+  sizeBytes(maxAgeMs?: number): Awaitable<number>
+  trim(options?: TrimOptions): Promise<TrimResult>
+  corpus(query: CorpusQuery): Awaitable<CorpusPage>
+  corpusStats(now?: number): Awaitable<Record<string, unknown>>
+  mapLegacy(n?: number): Awaitable<number>
+  unknownSites(n?: number, now?: number): Awaitable<string[]>
+  unknownPagesOf(site: string): Awaitable<PolicyRow[]>
+  setPolicies(site: string, verdicts: Array<{ id: number; allowed: boolean; reason: string }>, now?: number): Awaitable<void>
+  setCard(url: string, image: string | null, price: string | null): Awaitable<void>
+  cards(urls: string[]): Awaitable<Map<string, { image: string | null; price: string | null }>>
+  search(query: string, limit?: number, kind?: string): Awaitable<IndexHit[]>
+  count(): Awaitable<number>
+  importCursor(): Awaitable<number | null>
+  setImportCursor(cursor: number | null): Awaitable<void>
+  tables(): Awaitable<string[]>
+  highWaterMark(): Awaitable<number>
+  close(): Awaitable<void>
+}
+
+/** What a page record becomes in the index: shared by both stores so they keep the same thing. */
+export type PageRow = {
+  url: string
+  site: string
+  kind: string
+  title: string
+  description: string
+  keywords: string
+  body: string
+  language: string | null
+  fetched: string
+  train: number | null
+  reason: string | null
+  source: 'crawl' | 'legacy'
+  card: { image: string | null; price: string | null } | null
+}
+
+/** An outbox line (or object) as the row both stores write. Null when it cannot be keyed. */
+export function pageRowOf(raw: IndexedRecord | string): PageRow | null {
+  let entry: IndexedRecord
+  try {
+    entry = typeof raw === 'string' ? (JSON.parse(raw) as IndexedRecord) : raw
+  } catch {
+    return null
+  }
+  const r = entry?.record
+  if (!r?.canonical) return null
+  let site = ''
+  try {
+    site = new URL(r.canonical).hostname.replace(/^www\./, '')
+  } catch {
+    return null
+  }
+  const training = entry.enrichment?.training
+  return {
+    url: r.canonical,
+    site,
+    kind: r.kind ?? 'page',
+    title: r.title ?? site,
+    description: r.description ?? '',
+    keywords: (entry.enrichment?.keywords ?? []).join(' '),
+    body: entry.enrichment?.text || entry.enrichment?.excerpt || '',
+    language: entry.enrichment?.language ?? r.language ?? null,
+    fetched: r.fetched_at ?? new Date().toISOString(),
+    train: training ? (training.allowed ? 1 : 0) : null,
+    reason: training ? String(training.reason ?? '').slice(0, 120) : null,
+    source: training ? 'crawl' : 'legacy',
+    card: r.kind === 'product' ? { image: entry.record.image?.url ?? entry.enrichment?.images?.[0]?.url ?? null, price: entry.enrichment?.price ?? null } : null,
+  }
+}
+
+export class IndexStore implements SearchIndex {
   private db: Database
   private statsCache: { at: number; value: Record<string, unknown> } | null = null
   /** Bytes the file may use before trim() drops its oldest pages. 0: no budget. */
@@ -264,45 +357,30 @@ export class IndexStore {
     this.write(() =>
       this.db.transaction(() => {
       for (const raw of entries) {
-        let entry: IndexedRecord
-        try {
-          entry = typeof raw === 'string' ? (JSON.parse(raw) as IndexedRecord) : raw
-        } catch {
-          continue
-        }
-        const r = entry?.record
-        if (!r?.canonical) continue
-        let site = ''
-        try {
-          site = new URL(r.canonical).hostname.replace(/^www\./, '')
-        } catch {
-          continue
-        }
-        if (r.kind === 'product') this.setCard(r.canonical, entry.record.image?.url ?? entry.enrichment?.images?.[0]?.url ?? null, entry.enrichment?.price ?? null)
-        const language = entry.enrichment?.language ?? r.language ?? null
-        const fetched = r.fetched_at ?? new Date().toISOString()
+        const page = pageRowOf(raw)
+        if (!page) continue
+        if (page.card) this.setCard(page.url, page.card.image, page.card.price)
         const row = upsert.get({
-          $url: r.canonical,
-          $site: site,
-          $kind: r.kind ?? 'page',
-          $title: r.title ?? site,
-          $description: r.description ?? '',
-          $keywords: (entry.enrichment?.keywords ?? []).join(' '),
-          $body: entry.enrichment?.text || entry.enrichment?.excerpt || '',
-          $language: language,
-          $fetched: fetched,
+          $url: page.url,
+          $site: page.site,
+          $kind: page.kind,
+          $title: page.title,
+          $description: page.description,
+          $keywords: page.keywords,
+          $body: page.body,
+          $language: page.language,
+          $fetched: page.fetched,
         }) as { id: number } | null
-        const training = entry.enrichment?.training
         if (row)
           policy.run({
             $id: row.id,
-            $site: site,
-            $kind: r.kind ?? 'page',
-            $language: language,
-            $fetched: fetched,
-            $train: training ? (training.allowed ? 1 : 0) : null,
-            $reason: training ? String(training.reason ?? '').slice(0, 120) : null,
-            $source: training ? 'crawl' : 'legacy',
+            $site: page.site,
+            $kind: page.kind,
+            $language: page.language,
+            $fetched: page.fetched,
+            $train: page.train,
+            $reason: page.reason,
+            $source: page.source,
           })
         // A new row always takes an id above every id ever used, so this tells an
         // insert from an upsert without asking the database to count anything.
@@ -351,7 +429,7 @@ export class IndexStore {
    * crawl, false the moment a bulk import from nichedb inserts newest-first, which
    * would have made the newest records the first to be evicted.
    */
-  async trim(options: { batch?: number; maxBatches?: number; keepMin?: number; sleep?: (ms: number) => Promise<void> } = {}): Promise<{ deleted: number; bytesBefore: number; bytesAfter: number; done: boolean; reclaims: boolean }> {
+  async trim(options: TrimOptions = {}): Promise<TrimResult> {
     const batch = Math.max(1, Math.trunc(options.batch ?? 2_000))
     const maxBatches = Math.max(1, Math.trunc(options.maxBatches ?? 50))
     // A budget too small for the index's own overhead must leave a working mirror

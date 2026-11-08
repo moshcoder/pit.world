@@ -12,6 +12,7 @@
  *   pit-crawler seed --file <path>           one site per line
  *   pit-crawler stats                        queue depths and counters, as JSON
  *   pit-crawler read <url> [--render]        read one page now and print its record (no Redis)
+ *   pit-crawler migrate-index --from-sqlite <path>   copy a SQLite index into CRAWL_INDEX_DATABASE_URL (resumable)
  */
 import { readFileSync } from 'node:fs'
 import { searchMcps } from './mcp.ts'
@@ -22,7 +23,8 @@ import { ObscuraClient } from './obscura.ts'
 import { createRuntime, migrateSitesFromRedis, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
 import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
 import { importFromNichedb } from './import-nichedb.ts'
-import { IndexStore } from './index-store.ts'
+import { openIndex, PgIndexStore } from './pg-index-store.ts'
+import { migrateIndexFromSqlite } from './migrate-index.ts'
 import { normalizeUrl, resolvesPublic, siteOf } from './url.ts'
 import { trainingFor } from './crawler.ts'
 import { pathOf } from './robots.ts'
@@ -65,14 +67,14 @@ async function worker() {
             const q = (url.searchParams.get('q') ?? '').slice(0, 512)
             const limit = Number(url.searchParams.get('limit')) || 10
             const kind = url.searchParams.get('kind')?.slice(0, 40) || undefined
-            const items = q ? runtime.index.search(q, limit, kind) : []
+            const items = q ? await runtime.index.search(q, limit, kind) : []
             if (kind === 'product' && items.length) {
               const urls = items.map((i) => i.url)
-              const known = runtime.index.cards(urls)
+              const known = await runtime.index.cards(urls)
               const unread = urls.filter((u) => !known.has(u))
               // A shopper waits a moment for pictures, never long: the reads finish and are kept either way.
               if (unread.length) await Promise.race([runtime.crawler.fillCards(unread), new Promise((done) => setTimeout(done, 2_500))])
-              const cards = unread.length ? runtime.index.cards(urls) : known
+              const cards = unread.length ? await runtime.index.cards(urls) : known
               return Response.json({ q, count: items.length, items: items.map((i) => ({ ...i, ...cards.get(i.url) })) })
             }
             return Response.json({ q, count: items.length, items })
@@ -82,7 +84,7 @@ async function worker() {
             const q = (url.searchParams.get('q') ?? '').slice(0, 200)
             const limit = Math.min(50, Number(url.searchParams.get('limit')) || 20)
             if (!q) return Response.json({ items: [], unavailable: false })
-            return Response.json(await runtime.crawler.searchSocial(q, limit, runtime.index.search(q, limit, 'post')))
+            return Response.json(await runtime.crawler.searchSocial(q, limit, await runtime.index.search(q, limit, 'post')))
           }
           if (path === '/api/v1/mcp') {
             // Proved servers, from Redis: no SQLite in this path.
@@ -104,7 +106,7 @@ async function worker() {
             if (!Number.isFinite(cursor) || cursor < 0) return Response.json({ error: 'cursor must be a cursor this API returned' }, { status: 400 })
             const since = p.get('since') ?? ''
             if (since && Number.isNaN(Date.parse(since))) return Response.json({ error: 'since must be an ISO date, e.g. 2026-11-01' }, { status: 400 })
-            const page = runtime.index.corpus({
+            const page = await runtime.index.corpus({
               q: (p.get('q') ?? '').slice(0, 512),
               site: (p.get('site') ?? '').slice(0, 253),
               kind: (p.get('kind') ?? '').slice(0, 40),
@@ -117,7 +119,7 @@ async function worker() {
             return Response.json(page)
           }
           if (path === '/api/v1/corpus/stats') {
-            return Response.json(runtime.index.corpusStats())
+            return Response.json(await runtime.index.corpusStats())
           }
           if (path !== '/healthz' && path !== '/stats') return new Response('not found', { status: 404 })
           try {
@@ -133,7 +135,7 @@ async function worker() {
 
   // Pages indexed before training verdicts were recorded: give each a row, then judge each site's
   // pages on its robots.txt and tdmrep.json (re-crawls add the page's own headers and meta).
-  const backfill = config.roles.includes('publish') ? startPolicyBackfill(runtime, log, config.indexPath) : null
+  const backfill = config.roles.includes('publish') ? startPolicyBackfill(runtime, log, config) : null
 
   // The mirror inside its byte budget. The publish role is the only writer, so it is the
   // only one that may delete; a page dropped here is still on nichedb, and comes back on
@@ -171,7 +173,9 @@ function startIndexTrim(runtime: Runtime, log: (line: string) => void, config: C
             'so deleting rows cannot give the space back. Rebuild it (the records are on nichedb) or give it its own disk.',
         )
       }
-      if (result.deleted) log(`index trim: dropped ${result.deleted} pages, ${gb(result.bytesBefore)} -> ${gb(result.bytesAfter)} (budget ${gb(config.indexMaxBytes)})${result.done ? '' : ', more next sweep'}`)
+      // Postgres keeps its files and reuses the space, so it reports what the live pages take.
+      const after = result.liveBytes !== undefined ? `${gb(result.liveBytes)} live in ${gb(result.bytesAfter)} of files` : gb(result.bytesAfter)
+      if (result.deleted) log(`index trim: dropped ${result.deleted} pages, ${gb(result.bytesBefore)} -> ${after} (budget ${gb(config.indexMaxBytes)})${result.done ? '' : ', more next sweep'}`)
     } catch (error) {
       log(`index trim: ${(error as Error).message}`)
     } finally {
@@ -188,16 +192,37 @@ function startIndexTrim(runtime: Runtime, log: (line: string) => void, config: C
   }
 }
 
-function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, indexPath: string) {
+function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, config: Config) {
   let stopped = false
   let mapping = true
-  const mapper = new Worker(new URL('./policy-map-worker.ts', import.meta.url).href, { env: { ...process.env, CRAWL_INDEX_PATH: indexPath } } as WorkerOptions)
-  mapper.onmessage = (event: MessageEvent) => {
-    const data = event.data as { done?: number; error?: string }
-    if (data.error) log(`policy map: ${data.error}`)
-    if (data.done !== undefined) {
+  let mapper: Worker | null = null
+  if (config.indexDatabaseUrl) {
+    // Postgres does not block this thread, so the mapping runs here, a batch at a time.
+    void (async () => {
+      let total = 0
+      while (!stopped) {
+        try {
+          const n = await runtime.index.mapLegacy(2_000)
+          total += n
+          if (!n) break
+        } catch (error) {
+          log(`policy map: ${(error as Error).message}`)
+          await Bun.sleep(5_000)
+        }
+        await Bun.sleep(50)
+      }
       mapping = false
-      log(`policy map: ${data.done} legacy pages given a row`)
+      if (total) log(`policy map: ${total} legacy pages given a row`)
+    })()
+  } else {
+    mapper = new Worker(new URL('./policy-map-worker.ts', import.meta.url).href, { env: { ...process.env, CRAWL_INDEX_PATH: config.indexPath } } as WorkerOptions)
+    mapper.onmessage = (event: MessageEvent) => {
+      const data = event.data as { done?: number; error?: string }
+      if (data.error) log(`policy map: ${data.error}`)
+      if (data.done !== undefined) {
+        mapping = false
+        log(`policy map: ${data.done} legacy pages given a row`)
+      }
     }
   }
   let timer: ReturnType<typeof setTimeout> | null = null
@@ -207,14 +232,14 @@ function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, inde
   const run = async () => {
     try {
       // Sites are judged as their pages are mapped; the mapper runs on its own thread.
-      const sites = runtime.index.unknownSites(8)
+      const sites = await runtime.index.unknownSites(8)
       if (!sites.length) return next(mapping ? 30_000 : 10 * 60_000)
       await Promise.all(
         sites.map(async (site) => {
           const robots = await runtime.crawler.robotsFor(site).catch(() => 'unavailable' as const)
-          const pages = runtime.index.unknownPagesOf(site)
+          const pages = await runtime.index.unknownPagesOf(site)
           if (robots === 'unavailable' || robots.read === 'error') return runtime.index.setPolicies(site, [])
-          runtime.index.setPolicies(
+          await runtime.index.setPolicies(
             site,
             pages.map((p) => {
               const verdict = trainingFor({ robots, path: pathOf(p.url), noai: false, tdmMeta: false })
@@ -234,7 +259,7 @@ function startPolicyBackfill(runtime: Runtime, log: (line: string) => void, inde
     stop() {
       stopped = true
       if (timer) clearTimeout(timer)
-      mapper.terminate()
+      mapper?.terminate()
     },
   }
 }
@@ -287,8 +312,8 @@ async function importCmd(args: string[]) {
   const limit = Number(flag(args, '--limit')) || undefined
   const maxGb = Number(flag(args, '--max-gb')) || undefined
   const restart = args.includes('--restart')
-  const index = new IndexStore(config.indexPath, config.indexMaxBytes)
-  if (restart) index.setImportCursor(null)
+  const index = openIndex(config)
+  if (restart) await index.setImportCursor(null)
   const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`
   let lastSaid = 0
   try {
@@ -307,9 +332,9 @@ async function importCmd(args: string[]) {
         log(`import: the index is busy at cursor ${cursor} (${message}); waiting 5 s and reading that page again`)
       },
     })
-    console.log(JSON.stringify({ ...result, bytes: undefined, size: gb(result.bytes), pages: index.count() }))
+    console.log(JSON.stringify({ ...result, bytes: undefined, size: gb(result.bytes), pages: await index.count() }))
   } finally {
-    index.close()
+    await index.close()
   }
 }
 
@@ -354,12 +379,32 @@ async function migrateSites(args: string[]) {
   }
 }
 
+/**
+ * One-off: every page of an old SQLite index into Postgres (CRAWL_INDEX_DATABASE_URL), ids and
+ * read times kept so trim stays oldest-first. Resumable: the cursor is kept in Postgres, so a
+ * stopped run carries on where it left off; --restart begins again (pages already there stay).
+ */
+async function migrateIndex(args: string[]) {
+  const config = configFromEnv()
+  if (!config.indexDatabaseUrl) throw new Error('CRAWL_INDEX_DATABASE_URL is not set')
+  const from = flag(args, '--from-sqlite')
+  if (!from) throw new Error('migrate-index --from-sqlite <path> [--batch n] [--restart]')
+  const batch = Number(flag(args, '--batch')) || undefined
+  const index = new PgIndexStore(config.indexDatabaseUrl, config.indexMaxBytes)
+  try {
+    const result = await migrateIndexFromSqlite(from, index, { ...(batch ? { batch } : {}), restart: args.includes('--restart'), log })
+    console.log(JSON.stringify(result))
+  } finally {
+    await index.close()
+  }
+}
+
 const [command, ...rest] = process.argv.slice(2)
-const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read, 'migrate-sites': migrateSites }
+const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read, 'migrate-sites': migrateSites, 'migrate-index': migrateIndex }
 const run = command ? commands[command] : undefined
 if (!run) {
   console.log(
-    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop]',
+    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop] | migrate-index --from-sqlite <path> [--batch n] [--restart]',
   )
   process.exit(command ? 1 : 0)
 }
