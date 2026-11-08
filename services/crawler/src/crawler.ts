@@ -310,13 +310,11 @@ export function createCrawler(deps: Deps) {
   const gapFor = (robots: Robots) => Math.max(config.hostDelayMs, Math.min(robots.crawlDelayMs ?? 0, config.maxDelayMs))
 
   async function admitAll(site: string, urls: string[], depth: number, robots: Robots): Promise<PageJob[]> {
+    const ok = urls.filter((url) => crawlable(url) && allows(robots, pathOf(url)))
+    // One round trip for the whole list: a remote worker is ~100 ms from Redis.
+    const verdicts = await frontier.admitMany(site, ok)
     const jobs: PageJob[] = []
-    for (const url of urls) {
-      if (!crawlable(url) || !allows(robots, pathOf(url))) continue
-      const verdict = await frontier.admit(site, url)
-      if (verdict === 'full') break
-      if (verdict === 'new') jobs.push({ url, site, depth })
-    }
+    for (let i = 0; i < verdicts.length; i++) if (verdicts[i] === 'new') jobs.push({ url: ok[i]!, site, depth })
     return jobs
   }
 
