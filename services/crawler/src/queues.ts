@@ -330,7 +330,7 @@ export async function startWorkers(config: Config, log: (line: string) => void =
     })
     w.on('error', (error) => log(`${w.name} error: ${error.message}`))
   }
-  log(`pit-crawler up: roles ${config.roles.join(',')}, ${config.concurrency} pages at once, ${config.obscuraUrls.length} Obscura, max ${config.maxPages} pages/site, nichedb ${config.nichedbKey ? config.nichedbUrl : 'off (outbox only)'}`)
+  log(`pit-crawler up: roles ${config.roles.join(',')}, ${config.concurrency} pages at once, ${config.obscuraUrls.length} Obscura, max ${config.maxPages} pages/site, nichedb ${config.nichedbKey && config.publishPages ? config.nichedbUrl : 'off (local index only)'}`)
 
   return {
     runtime,
@@ -390,7 +390,7 @@ export async function report(runtime: Runtime, config: Config) {
       renderers: config.obscuraUrls.length,
       discover: config.discover,
       maxSites: config.maxSites,
-      publishing: Boolean(config.nichedbKey),
+      publishing: Boolean(config.nichedbKey) && config.publishPages,
     },
     generatedAt: new Date().toISOString(),
   }

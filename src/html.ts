@@ -809,7 +809,7 @@ ${stat('Images', fmt(st.totals.images), 'found on those pages, by reference')}
 ${stat('Videos', fmt(st.totals.videos), 'embedded or linked, by reference')}
 ${stat('MCP servers', fmt(st.totals.mcps), 'found on the web, each proved by a live handshake')}
 ${stat('Published', fmt(st.totals.published), `${fmt(st.lastHour.published)} in the last hour`)}
-${stat('Waiting to publish', fmt(st.totals.outbox), set?.publishing ? 'records for nichedb' : 'publishing is off')}
+${stat('Waiting to publish', fmt(st.totals.outbox), set?.publishing ? 'records for nichedb' : 'for the local index; nichedb publishing is off')}
 ${stat('Failed (24h)', fmt(st.lastDay.failed), `${fmt(st.totals.failed)} all time`)}
 </div>
 ${chart}

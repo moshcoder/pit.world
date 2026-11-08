@@ -112,6 +112,7 @@ curl 127.0.0.1:8807/api/v1/corpus/stats
 | `CRAWL_HOST_DELAY_MS` | 1500 | gap between two requests to one site |
 | `CRAWL_RECRAWL_DAYS` | 30 | a site is read again this often |
 | `CRAWL_DISCOVER` | 0 | 1: crawl linked sites too, up to `CRAWL_MAX_SITES` (100,000,000; at the limit links to new sites are dropped and /status says so) |
+| `CRAWL_PUBLISH_PAGES` | 1 | 0: pages go to the local index only, not nichedb /c/sites (dev2 since 2026-11-08: 10-15 GB a day in nichedb filled the disk). MCP records still publish |
 | `CRAWL_SITE_QUEUE_HIGH` | 50000 | past this many waiting site jobs, new sites stay parked in Postgres and are fed in as the queue drains |
 | `CRAWL_DATABASE_URL` | (none) | Postgres for the site frontier: table `pitcrawl.sites` (known, parked, recrawl schedule). pit.world's own Supabase on dev2. Unset, the frontier is in memory (tests only). `pit-crawler migrate-sites [--drop]` moves an older Redis frontier in |
 | `CRAWL_MAX_PAGE_BACKLOG` | 50000 | site starts wait while more page jobs than this are queued |

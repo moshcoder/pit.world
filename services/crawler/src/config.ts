@@ -33,6 +33,12 @@ export type Config = {
   /** Where records go. Without a key they wait in the Redis outbox (bounded). */
   nichedbUrl: string
   nichedbKey: string
+  /**
+   * Send every page read to nichedb /c/sites. Off on dev2 since 2026-11-08: those rows were
+   * 10-15 GB a day in nichedb's items table (410 GB) and filled the box. The local index
+   * still gets every page; MCP records and seeds still use the key.
+   */
+  publishPages: boolean
   /** How long a site's seen-set outlives its last new page (sliding). */
   seenTtlMs: number
   /** Site starts wait while more page jobs than this are queued: backpressure for big seeds. */
@@ -90,6 +96,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     obscuraToken: env.OBSCURA_MCP_TOKEN ?? '',
     nichedbUrl: (env.NICHEDB_URL ?? 'https://nichedb.dev').replace(/\/+$/, ''),
     nichedbKey: env.NICHEDB_API_KEY ?? '',
+    publishPages: env.CRAWL_PUBLISH_PAGES !== '0',
     discover: env.CRAWL_DISCOVER === '1',
     // 1M filled Redis on 2026-11-08 and discovery stopped dead; the frontier is in
     // Postgres now, at ~100 B of disk a site.
