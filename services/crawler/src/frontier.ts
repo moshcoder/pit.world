@@ -47,6 +47,8 @@ const add = (into: Record<string, number>, from: Record<string, string | number>
 export interface Frontier {
   /** Admit a page to this cycle: 'new', 'seen', or 'full' (the site has had its maxPages). */
   admit(site: string, url: string): Promise<'new' | 'seen' | 'full'>
+  /** admit() over a list in one call; stops after the first 'full' (shorter result). */
+  admitMany(site: string, urls: string[]): Promise<('new' | 'seen' | 'full')[]>
   /**
    * Take the site's request slot for gapMs. Taken: { waitMs: 0 } and the fetch is
    * counted. Busy: how long until it frees, and how many of the site's admitted pages
@@ -125,8 +127,32 @@ if n > tonumber(ARGV[2]) then return -1 end
 return n
 `
 
+// ADMIT over a page's whole link list in one call, stopping at the cap exactly as the
+// one-at-a-time loop did. One round trip instead of up to 300: from a worker 112 ms from
+// Redis (vienna, 2026-11-08) the loop alone cost ~30 s a page.
+const ADMIT_MANY = `
+local max = tonumber(ARGV[1])
+local out = {}
+for i = 3, #ARGV do
+  if redis.call('SADD', KEYS[1], ARGV[i]) == 0 then
+    out[#out + 1] = 0
+  else
+    local n = redis.call('INCR', KEYS[2])
+    if n > max then
+      out[#out + 1] = -1
+      break
+    end
+    out[#out + 1] = n
+  end
+end
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+redis.call('PEXPIRE', KEYS[2], ARGV[2])
+return out
+`
+
 type WithAdmit = Redis & {
   pitcrawlAdmit(seen: string, count: string, id: string, max: number, cycleMs: number): Promise<number>
+  pitcrawlAdmitMany(seen: string, count: string, max: number, cycleMs: number, ...ids: string[]): Promise<number[]>
   pitcrawlLease(lease: string, count: string, done: string, gapMs: number, ttlMs: number, max: number): Promise<[number, number]>
 }
 
@@ -139,6 +165,7 @@ export class RedisFrontier implements Frontier {
   ) {
     // A fixed script registered once (EVALSHA after the first call), never built from input.
     if (!('pitcrawlAdmit' in redis)) redis.defineCommand('pitcrawlAdmit', { numberOfKeys: 2, lua: ADMIT })
+    if (!('pitcrawlAdmitMany' in redis)) redis.defineCommand('pitcrawlAdmitMany', { numberOfKeys: 2, lua: ADMIT_MANY })
     if (!('pitcrawlLease' in redis)) redis.defineCommand('pitcrawlLease', { numberOfKeys: 3, lua: LEASE })
     this.redis = redis as WithAdmit
   }
@@ -146,6 +173,11 @@ export class RedisFrontier implements Frontier {
   async admit(site: string, url: string) {
     const n = Number(await this.redis.pitcrawlAdmit(K.seen(site), K.count(site), urlId(url), this.maxPages, this.seenTtlMs))
     return n === 0 ? 'seen' : n < 0 ? 'full' : 'new'
+  }
+  async admitMany(site: string, urls: string[]) {
+    if (!urls.length) return []
+    const out = await this.redis.pitcrawlAdmitMany(K.seen(site), K.count(site), this.maxPages, this.seenTtlMs, ...urls.map(urlId))
+    return out.map((n) => (Number(n) === 0 ? 'seen' : Number(n) < 0 ? 'full' : 'new') as 'new' | 'seen' | 'full')
   }
 
   async lease(site: string, gapMs: number) {
@@ -304,6 +336,15 @@ export class MemoryFrontier implements Frontier {
     if (set.has(id)) return 'seen' as const
     set.add(id)
     return set.size > this.maxPages ? ('full' as const) : ('new' as const)
+  }
+  async admitMany(site: string, urls: string[]) {
+    const out: ('new' | 'seen' | 'full')[] = []
+    for (const url of urls) {
+      const v = await this.admit(site, url)
+      out.push(v)
+      if (v === 'full') break
+    }
+    return out
   }
   fetched = new Map<string, number>()
   async lease(site: string, gapMs: number) {

@@ -37,6 +37,22 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     expect(await redis.pttl('pitcrawl:seen:race.example')).toBeGreaterThan(50_000)
   })
 
+  test('admitMany: one call per list, same verdicts as one at a time, and the cap is exact under a race', async () => {
+    await redis.flushdb()
+    const frontier = new RedisFrontier(redis, 5, 60_000)
+    const urls = ['a', 'b', 'a', 'c'].map((p) => `https://many.example/${p}`)
+    expect(await frontier.admitMany('many.example', urls)).toEqual(['new', 'new', 'seen', 'new'])
+    // Two more fit, then 'full' and it stops (the rest are left unadmitted).
+    const more = ['d', 'e', 'f', 'g'].map((p) => `https://many.example/${p}`)
+    expect(await frontier.admitMany('many.example', more)).toEqual(['new', 'new', 'full'])
+    expect(await frontier.admit('many.example', 'https://many.example/g')).toBe('full')
+    // Concurrent lists on a fresh site still admit exactly the cap.
+    const lists = Array.from({ length: 6 }, (_, k) => Array.from({ length: 4 }, (_, i) => `https://race2.example/${k}-${i}`))
+    const verdicts = (await Promise.all(lists.map((l) => frontier.admitMany('race2.example', l)))).flat()
+    expect(verdicts.filter((v) => v === 'new').length).toBe(5)
+    expect(await frontier.admitMany('race2.example', [])).toEqual([])
+  })
+
   test('the site lease spaces requests', async () => {
     const frontier = new RedisFrontier(redis, 5, 60_000)
     for (let i = 0; i < 4; i++) await frontier.admit('slow.example', `https://slow.example/${i}`)
