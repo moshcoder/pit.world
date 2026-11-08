@@ -179,6 +179,8 @@ export class PgSiteStore implements SiteStore {
 
   async clearFlag(site: string) {
     await this.init()
+    // A Bun tagged template: ${site} is a bound parameter, not text.
+    // threatcrush-disable-next-line sql-template-interpolation  Bun's sql`` binds every interpolation as a parameter
     await this.sql`update sites set status = null, last_error = null, failed_at = null, retry_after = null where site = ${site} and status is not null`
   }
 
