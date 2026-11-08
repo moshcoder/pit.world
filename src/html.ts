@@ -797,7 +797,7 @@ export function statusPage(st: CrawlStatus): string {
 ${
   st.reachable
     ? `<div class="stat-grid">
-${stat('Sites', fmt(st.totals.sites), 'known to the crawler')}
+${stat('Sites', fmt(st.totals.sites), set?.maxSites && st.totals.sites >= set.maxSites ? `known: the limit, new sites not followed` : `known to the crawler${st.totals.sitesParked ? `, ${fmt(st.totals.sitesParked)} parked to start` : ''}`)}
 ${stat('Pages read', fmt(st.totals.pagesIndexed), `${fmt(st.totals.pagesRendered)} through a browser`)}
 ${stat('Read (1h)', fmt(st.lastHour.pages), `${fmt(st.lastHour.rendered)} rendered`)}
 ${stat('Read (24h)', fmt(st.lastDay.pages), `${fmt(st.lastDay.sitesStarted)} sites started`)}

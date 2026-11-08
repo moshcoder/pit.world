@@ -19,7 +19,7 @@ export type CrawlerReport = {
   queues: Record<string, Record<string, number>>
   activity: { lastHour: Record<string, number>; lastDay: Record<string, number>; hours: Array<{ at: string; counts: Record<string, number> }> }
   log: CrawlEvent[]
-  settings: { maxPages: number; maxDepth: number; concurrency: number; hostDelayMs: number; recrawlDays: number; renderers: number; discover: boolean; publishing: boolean }
+  settings: { maxPages: number; maxDepth: number; concurrency: number; hostDelayMs: number; recrawlDays: number; renderers: number; discover: boolean; publishing: boolean; maxSites?: number }
   generatedAt: string
 }
 
@@ -40,7 +40,7 @@ export type CrawlStatus = {
   health: Health
   summary: string
   reachable: boolean
-  totals: { sites: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number; images: number; videos: number; mcps: number }
+  totals: { sites: number; sitesParked: number; pagesIndexed: number; pagesRendered: number; published: number; outbox: number; failed: number; searchable: number; images: number; videos: number; mcps: number }
   /** The local mirror against its byte budget. The index filling the disk is what took the box down on 2026-11-04, so it is on the page. */
   index: { bytes: number; maxBytes: number } | null
   lastHour: { pages: number; rendered: number; failed: number; published: number; sitesStarted: number }
@@ -77,7 +77,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
       health: 'offline',
       summary: 'The crawler did not answer. Searches still work; the index just is not growing right now.',
       reachable: false,
-      totals: { sites: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0, images: 0, videos: 0, mcps: 0 },
+      totals: { sites: 0, sitesParked: 0, pagesIndexed: 0, pagesRendered: 0, published: 0, outbox: 0, failed: 0, searchable: 0, images: 0, videos: 0, mcps: 0 },
       index: null,
       lastHour: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
       lastDay: { pages: 0, rendered: 0, failed: 0, published: 0, sitesStarted: 0 },
@@ -102,7 +102,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
   const fetchedLastHour = n(h, 'pages_indexed', 'pages_failed', 'pages_noindex', 'pages_disallowed', 'render_queued', 'pages_errored')
 
   const jobs: Job[] = [
-    job('sites', 'Site starts', 'robots.txt, sitemaps and the home page of each site', depth(queues.site), n(h, 'sites_started', 'sites_refused', 'sites_disallowed', 'sites_unavailable'), 0),
+    job('sites', 'Site starts', 'robots.txt, sitemaps and the home page of each site', depth(queues.site) + n(stats, 'sites_parked'), n(h, 'sites_started', 'sites_refused', 'sites_disallowed', 'sites_unavailable'), 0),
     job('pages', 'Page reads', 'fetch, read and follow same-site links, one request per site at a time', depth(queues.page), fetchedLastHour, n(h, 'pages_failed', 'pages_errored')),
     job('render', 'Browser renders', 'pages that are an empty shell until JavaScript runs, read again in Obscura', depth(queues.render), n(h, 'pages_rendered'), n(h, 'renders_errored'), report.settings.renderers > 0),
     job('submit', 'Submissions', 'addresses sent to pit.world/submit: read, sorted (site, page, feed, sitemap, OPML) and queued', depth(queues.submit), n(h, 'submitted_site', 'submitted_page', 'submitted_feed', 'submitted_sitemap', 'submitted_opml'), n(h, 'submitted_refused', 'submitted_unreadable')),
@@ -132,6 +132,10 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
   // The index at its budget is normal (it drops its oldest pages and carries on), but say so:
   // the one time it had no budget it filled the box's disk.
   const maxBytes = n(stats, 'index_max_bytes')
+  // The frontier at its cap stops discovery outright, which reads as the crawler "finding
+  // nothing new" (1,000,000 on 2026-11-08). Say it, since the page cannot show a refusal.
+  const maxSites = report.settings.maxSites ?? 0
+  if (maxSites && n(stats, 'sites') >= maxSites) summary += ` The crawler knows its limit of ${fmt(maxSites)} sites, so links to new sites are not being followed.`
   if (maxBytes && n(stats, 'index_bytes') >= maxBytes * 0.95) summary += ' The index is at its size budget, so its oldest pages are making room for new ones.'
 
   return {
@@ -140,6 +144,7 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
     reachable: true,
     totals: {
       sites: n(stats, 'sites'),
+      sitesParked: n(stats, 'sites_parked'),
       pagesIndexed: n(stats, 'pages_indexed', 'pages_rendered'),
       pagesRendered: n(stats, 'pages_rendered'),
       published: n(stats, 'published'),

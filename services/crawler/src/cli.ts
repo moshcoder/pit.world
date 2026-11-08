@@ -19,7 +19,7 @@ import { type Config, configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
-import { createRuntime, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
+import { compactSites, createRuntime, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
 import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
 import { importFromNichedb } from './import-nichedb.ts'
 import { IndexStore } from './index-store.ts'
@@ -342,12 +342,26 @@ async function read(args: string[]) {
   )
 }
 
+/** Park waiting site jobs past the queue cap (a queue grown before parking existed). */
+async function compact(args: string[]) {
+  const config = configFromEnv()
+  const at = args.indexOf('--keep')
+  const keep = at >= 0 ? Number(args[at + 1]) : config.siteQueueHigh
+  if (!Number.isFinite(keep) || keep < 0) throw new Error('--keep wants a number')
+  const runtime = createRuntime(config)
+  try {
+    console.log(`compact: ${await compactSites(runtime, keep)} site jobs parked, ${keep} kept as jobs`)
+  } finally {
+    await runtime.close()
+  }
+}
+
 const [command, ...rest] = process.argv.slice(2)
-const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read }
+const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read, compact }
 const run = command ? commands[command] : undefined
 if (!run) {
   console.log(
-    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render]',
+    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | compact [--keep n]',
   )
   process.exit(command ? 1 : 0)
 }
