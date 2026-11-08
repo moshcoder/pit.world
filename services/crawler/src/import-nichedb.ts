@@ -15,7 +15,7 @@
  * of /api/corpus until the policy backfill judges their site: an opt-out is respected
  * by staying closed, which is the right way round to be wrong.
  */
-import type { IndexedRecord, IndexStore } from './index-store.ts'
+import type { IndexedRecord, SearchIndex } from './index-store.ts'
 
 type Fetch = typeof fetch
 
@@ -81,7 +81,7 @@ export function recordOf(item: NichedbItem): IndexedRecord | null {
  * returns (and keeps in the index) lets a later run carry on rather than restart.
  */
 export async function importFromNichedb(
-  index: IndexStore,
+  index: SearchIndex,
   options: {
     nichedbUrl: string
     key?: string
@@ -106,8 +106,8 @@ export async function importFromNichedb(
   const ceiling = options.maxBytes ?? index.maxBytes ?? 0
   const pause = Math.max(0, Math.trunc(options.pauseMs ?? 50))
   const base = options.nichedbUrl.replace(/\/+$/, '')
-  let cursor = options.cursor ?? Number(index.importCursor() ?? 0)
-  const progress: ImportProgress = { read: 0, kept: 0, skipped: 0, locked: 0, cursor: cursor || null, bytes: index.sizeBytes(0) }
+  let cursor = options.cursor ?? Number((await index.importCursor()) ?? 0)
+  const progress: ImportProgress = { read: 0, kept: 0, skipped: 0, locked: 0, cursor: cursor || null, bytes: await index.sizeBytes(0) }
 
   while (progress.read < limit) {
     const url = `${base}/api/v1/items?collection=sites&limit=${pageSize}${cursor ? `&before=${cursor}` : ''}`
@@ -125,7 +125,7 @@ export async function importFromNichedb(
     const items = body.items ?? []
     if (!items.length) {
       progress.cursor = null
-      index.setImportCursor(null)
+      await index.setImportCursor(null)
       break
     }
     const batch: IndexedRecord[] = []
@@ -140,7 +140,7 @@ export async function importFromNichedb(
       // write lock even after IndexStore's retries must not end a run of millions: the
       // cursor only moves on a batch that landed, so the page is simply read again.
       try {
-        progress.kept += index.add(batch)
+        progress.kept += await index.add(batch)
       } catch (error) {
         const message = String((error as Error)?.message ?? error)
         if (!/database is locked|SQLITE_BUSY|database table is locked/i.test(message)) throw error
@@ -153,13 +153,13 @@ export async function importFromNichedb(
     }
     cursor = items[items.length - 1]!.id
     progress.cursor = cursor
-    index.setImportCursor(cursor)
-    progress.bytes = index.sizeBytes(0)
+    await index.setImportCursor(cursor)
+    progress.bytes = await index.sizeBytes(0)
     options.onProgress?.({ ...progress })
     if (ceiling && progress.bytes >= ceiling) break
     if (items.length < pageSize) {
       progress.cursor = null
-      index.setImportCursor(null)
+      await index.setImportCursor(null)
       break
     }
     if (pause) await new Promise<void>((resolve) => setTimeout(resolve, pause))

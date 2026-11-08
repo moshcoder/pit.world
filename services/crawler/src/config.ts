@@ -62,6 +62,11 @@ export type Config = {
   /** The local search mirror (SQLite FTS5) the publish role writes and /api/v1/search reads. */
   indexPath: string
   /**
+   * Postgres for the search mirror instead of the SQLite file (src/pg-index-store.ts): any
+   * number of publishing processes write it at once. Unset: SQLite at indexPath.
+   */
+  indexDatabaseUrl: string
+  /**
    * Bytes the mirror may use. Over it, the publish role drops its oldest pages (they
    * stay on nichedb, and come back on a recrawl). Unbounded it reached 207 GB in 2.7
    * days and filled dev2's root filesystem, taking every other Redis on the box with
@@ -115,6 +120,7 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     // Loopback on a host; 0.0.0.0 inside a container, whose port is published on the host's loopback.
     healthHost: env.CRAWL_HEALTH_HOST ?? '127.0.0.1',
     indexPath: env.CRAWL_INDEX_PATH ?? './data/index.db',
+    indexDatabaseUrl: env.CRAWL_INDEX_DATABASE_URL ?? '',
     indexMaxBytes: num(env.CRAWL_INDEX_MAX_BYTES, 60 * 1024 ** 3, 0),
     indexTrimMs: num(env.CRAWL_INDEX_TRIM_MS, 300_000, 1_000),
     userAgent: env.CRAWL_USER_AGENT ?? USER_AGENT,

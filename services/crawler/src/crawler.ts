@@ -74,7 +74,7 @@ export type Deps = {
   /** Offer a submitted feed to rssamplifier.com too (best effort). */
   forwardFeed?: (feedUrl: string) => Promise<void>
   /** The local search mirror; every published batch lands here first. */
-  index?: { add(entries: string[]): number; setCard?(url: string, image: string | null, price: string | null): void } | null
+  index?: { add(entries: string[]): number | Promise<number>; setCard?(url: string, image: string | null, price: string | null): void | Promise<void> } | null
   /** Every published record, full text included, kept for good (src/archive.ts). */
   archive?: { write(lines: string[]): void } | null
 }
@@ -302,7 +302,11 @@ export function createCrawler(deps: Deps) {
         } catch (error) {
           log(`card ${url}: ${(error as Error).message}`)
         }
-        deps.index?.setCard?.(url, image, price)
+        try {
+          await deps.index?.setCard?.(url, image, price)
+        } catch (error) {
+          log(`card ${url}: ${(error as Error).message}`)
+        }
       }),
     )
   }
@@ -483,7 +487,7 @@ export function createCrawler(deps: Deps) {
         await frontier.bump('archived', raw.length)
       }
       if (deps.index) {
-        const kept = deps.index.add(raw)
+        const kept = await deps.index.add(raw)
         if (kept) await frontier.bump('indexed_local', kept)
       }
       if (!toNichedb) continue

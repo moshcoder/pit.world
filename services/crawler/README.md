@@ -43,6 +43,19 @@ truncated the append-only file of every other Redis on the box (2026-11-04). So:
   An index made before this keeps `auto_vacuum = NONE`: deleting rows still bounds it, but
   the file keeps its high-water mark, so rebuild it rather than expecting it to shrink.
 
+### In Postgres, for many writers
+
+SQLite takes one writer, about 63 pages/s here. With **`CRAWL_INDEX_DATABASE_URL`** set the
+mirror lives in Postgres instead (`src/pg-index-store.ts`) and any number of publishing
+processes write it at once: one `INSERT ... ON CONFLICT (url)` per batch, the page counter
+moved in the same statement. Full text is a stored, weighted `tsvector` (`'simple'` config,
+pages are in every language) under a GIN index. A search ranks the first 3,000 matches with
+`ts_rank` (a product search looks through 8,000) under a ~1 s statement timeout. Postgres files
+do not shrink, so the budget is kept on the live pages (pages x bytes a page) and freed space
+is reused. Move an existing file in with `pit-crawler migrate-index --from-sqlite <path>`
+(resumable; ids and read times kept). Each publishing process writes its own archive file,
+`pages-<hour>-<host>-<pid>.jsonl.gz`.
+
 `/stats` reports `index_bytes` against `index_max_bytes`, so /status shows the headroom.
 Eviction goes by **`fetched_at`**, not by id: a bulk import arrives newest-first, so id order
 and crawl order are not the same thing.
@@ -123,6 +136,7 @@ curl 127.0.0.1:8807/api/v1/corpus/stats
 | `CRAWL_HEALTH_PORT` | 8797 | `/healthz` with queue depths and counters |
 | `CRAWL_INDEX_MAX_BYTES` | 64424509440 (60 GB) | the mirror's byte budget; over it the oldest pages go. 0 turns it off, which only a box with its own disk for the index should do |
 | `CRAWL_INDEX_TRIM_MS` | 300000 | how often the publish role checks the budget |
+| `CRAWL_INDEX_DATABASE_URL` | (none) | Postgres for the search mirror instead of the SQLite file at `CRAWL_INDEX_PATH`; tables in the role's default schema. Many publish processes may write it |
 
 ## Deploy (dev2)
 

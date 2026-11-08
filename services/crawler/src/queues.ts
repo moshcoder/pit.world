@@ -24,7 +24,8 @@ import { RedisFrontier } from './frontier.ts'
 import { PageArchive } from './archive.ts'
 import { MemorySiteStore, PgSiteStore, type SiteStore } from './site-store.ts'
 import { submitFeed } from '@profullstack/submit-feed/core'
-import { IndexStore } from './index-store.ts'
+import type { SearchIndex } from './index-store.ts'
+import { openIndex } from './pg-index-store.ts'
 import type { McpJob } from './mcp.ts'
 import { ObscuraPool } from './obscura.ts'
 import { urlId } from './url.ts'
@@ -68,7 +69,7 @@ export type Runtime = {
   frontier: RedisFrontier
   sites: SiteStore
   redis: Redis
-  index: IndexStore
+  index: SearchIndex
   close(): Promise<void>
 }
 
@@ -139,7 +140,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
   }
   const frontier = new RedisFrontier(redis, config.maxPages, Math.min(config.seenTtlMs, config.recrawlDays * 86_400_000))
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
-  const index = new IndexStore(config.indexPath, config.indexMaxBytes)
+  const index = openIndex(config)
   if (!config.databaseUrl) log('CRAWL_DATABASE_URL unset: the site frontier is in memory and forgets every site on restart')
   const sites: SiteStore = config.databaseUrl ? new PgSiteStore(config.databaseUrl) : new MemorySiteStore()
   // Only a publishing process writes the archive; a fetch-only worker never opens it.
@@ -193,7 +194,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     async close() {
       await Promise.all(Object.values(queues).map((q) => q.close()))
       redis.disconnect()
-      index.close()
+      await index.close()
       await sites.close()
     },
   }
@@ -373,8 +374,13 @@ export async function report(runtime: Runtime, config: Config) {
   // Redis, like the media counters: this page must never wait on SQLite for it.
   stats.index_mcps = await runtime.frontier.mcpCount().catch(() => 0)
   try {
-    stats.index_pages = runtime.index.count()
-    stats.index_bytes = runtime.index.sizeBytes()
+    // A second at most: Postgres answers these from a cache, SQLite from a counter and two pragmas.
+    const [pages, bytes] = await Promise.race([
+      Promise.all([Promise.resolve(runtime.index.count()), Promise.resolve(runtime.index.sizeBytes())]),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('index figures timed out')), 1_000)),
+    ])
+    stats.index_pages = pages
+    stats.index_bytes = bytes
     stats.index_max_bytes = runtime.index.maxBytes
   } catch {
     // Leave them out rather than report a wrong zero: /status shows no tile for a figure
