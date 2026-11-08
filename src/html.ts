@@ -48,6 +48,7 @@ setRingFooterOptions(
     { label: 'How it works', href: '/about' },
     { label: 'API · CLI · MCP', href: '/about#api' },
     { label: 'Web ring', href: '/ring' },
+    { label: 'Directory', href: '/directory' },
     { label: 'Submit your site', href: '/submit' },
     { label: 'Crawler status', href: '/status' },
     { label: 'pitbot crawler', href: '/bot' },
@@ -239,6 +240,7 @@ export function homePage(stats: NetworkStats | null, options: { newsletter?: boo
     <p class="pitch"><a href="/why">ICANN doesn't scale for the agentic web.</a> <a href="#moshpit">Meet pit.world.</a></p>
     <p class="tag">Search like nobody's watching. Because nobody is.</p>
     ${searchForm('', true)}
+    <p class="under-search"><a href="/directory">Browse the pit.world Directory →</a> <span>every *.pit.world site, by category</span></p>
     <ol class="howto" aria-label="How pit.world works">
       <li><span>1</span> <b>Search the web</b>: Google, Bing, Brave and more, at once</li>
       <li><span>2</span> <b>Vote ▲ ▼</b> to move results for everyone</li>
