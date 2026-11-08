@@ -75,6 +75,8 @@ export type Deps = {
   forwardFeed?: (feedUrl: string) => Promise<void>
   /** The local search mirror; every published batch lands here first. */
   index?: { add(entries: string[]): number; setCard?(url: string, image: string | null, price: string | null): void } | null
+  /** Every published record, full text included, kept for good (src/archive.ts). */
+  archive?: { write(lines: string[]): void } | null
 }
 
 export type PageOutcome = { delayMs?: number; outcome: string }
@@ -464,7 +466,7 @@ export function createCrawler(deps: Deps) {
    */
   async function publish(): Promise<{ sent: number; added: number; rejected: number; waiting: boolean }> {
     const toNichedb = Boolean(config.nichedbKey) && config.publishPages
-    if (!toNichedb && !deps.index) return { sent: 0, added: 0, rejected: 0, waiting: true }
+    if (!toNichedb && !deps.index && !deps.archive) return { sent: 0, added: 0, rejected: 0, waiting: true }
     const fetchImpl = deps.fetch ?? fetch
     let sent = 0
     let added = 0
@@ -472,6 +474,16 @@ export function createCrawler(deps: Deps) {
     for (let round = 0; round < 20; round++) {
       const raw = await frontier.take(BATCH)
       if (!raw.length) break
+      // Archive first: if it cannot write, the batch goes back and nothing is lost.
+      if (deps.archive) {
+        try {
+          deps.archive.write(raw)
+        } catch (error) {
+          await frontier.giveBack(raw)
+          throw error
+        }
+        await frontier.bump('archived', raw.length)
+      }
       if (deps.index) {
         const kept = deps.index.add(raw)
         if (kept) await frontier.bump('indexed_local', kept)

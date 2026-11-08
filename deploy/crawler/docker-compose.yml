@@ -19,10 +19,11 @@ name: pit-crawler
 services:
   redis:
     image: redis:8-alpine
-    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '2gb', '--maxmemory-policy', 'noeviction']
+    # 4 GB: remote page workers (deploy/crawler-remote) raise the page backlog toward 600k jobs.
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '4gb', '--maxmemory-policy', 'noeviction']
     volumes: ['redis:/data']
     ports: ['127.0.0.1:6396:6379']
-    mem_limit: 2560m
+    mem_limit: 5g
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
@@ -33,7 +34,8 @@ services:
     command: ['mcp', '--http', '--host', '0.0.0.0', '--port', '3000', '--user-agent', 'Mozilla/5.0 (compatible; pitbot/0.1; +https://pit.world/bot)']
     environment:
       OBSCURA_MCP_TOKEN: ${OBSCURA_MCP_TOKEN:?set OBSCURA_MCP_TOKEN in crawler.env}
-    mem_limit: 1g
+    # 1g was OOM-killed every 10-20 min (2026-11-08); a browser on heavy pages wants room.
+    mem_limit: 8g
     restart: unless-stopped
 
   obscura-2: *obscura
@@ -47,6 +49,9 @@ services:
     environment:
       CRAWL_REDIS_URL: redis://redis:6379
       CRAWL_HEALTH_HOST: 0.0.0.0
+      # The publish role (index, archive, API pit.world reads) may live on another box:
+      # deploy/crawler-remote. Then crawler.env sets PIT_CRAWLER_ROLES=site,page,render.
+      CRAWL_ROLES: ${PIT_CRAWLER_ROLES:-site,page,render,publish}
       OBSCURA_MCP_URLS: http://obscura-1:3000/mcp,http://obscura-2:3000/mcp
     depends_on:
       redis: { condition: service_healthy }
