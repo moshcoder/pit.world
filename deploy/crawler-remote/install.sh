@@ -30,7 +30,7 @@ BUN=$(mise which bun 2>/dev/null || command -v bun)
 [ -n "$BUN" ] || { echo "bun is not installed" >&2; exit 1; }
 mkdir -p "$ROOT/data" "$ROOT/archive"
 [ -d "$APP/.git" ] || git clone -q https://github.com/moshcoder/pit.world.git "$APP"
-[ -f "$ROOT/crawler.env" ] || { echo "write $ROOT/crawler.env first (CRAWL_DATABASE_URL=postgres://pitcrawl:...@127.0.0.1:5601/postgres)" >&2; exit 1; }
+[ -f "$ROOT/crawler.env" ] || { echo "write $ROOT/crawler.env first: CRAWL_DATABASE_URL for role pitcrawl at 127.0.0.1 port 5601, database postgres" >&2; exit 1; }
 chmod 600 "$ROOT/crawler.env"
 (cd "$APP" && git fetch -q origin main && git reset -q --hard origin/main && "$BUN" install --frozen-lockfile >/dev/null)
 
