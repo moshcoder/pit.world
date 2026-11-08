@@ -21,6 +21,7 @@ import { Redis } from 'ioredis'
 import type { Config, Role } from './config.ts'
 import { createCrawler, type Crawler, type PageJob, type SiteJob } from './crawler.ts'
 import { RedisFrontier } from './frontier.ts'
+import { PageArchive } from './archive.ts'
 import { MemorySiteStore, PgSiteStore, type SiteStore } from './site-store.ts'
 import { submitFeed } from '@profullstack/submit-feed/core'
 import { IndexStore } from './index-store.ts'
@@ -141,10 +142,13 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
   const index = new IndexStore(config.indexPath, config.indexMaxBytes)
   if (!config.databaseUrl) log('CRAWL_DATABASE_URL unset: the site frontier is in memory and forgets every site on restart')
   const sites: SiteStore = config.databaseUrl ? new PgSiteStore(config.databaseUrl) : new MemorySiteStore()
+  // Only a publishing process writes the archive; a fetch-only worker never opens it.
+  const archive = config.archiveDir && config.roles.includes('publish') ? new PageArchive(config.archiveDir) : null
   const crawler = createCrawler({
     config,
     frontier,
     sites,
+    archive,
     renderer: pool,
     index,
     // A feed submitted at pit.world/submit is offered to the RSS directory as well.
