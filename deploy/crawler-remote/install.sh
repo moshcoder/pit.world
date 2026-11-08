@@ -25,6 +25,8 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+# A non-interactive ssh session has no mise on PATH (dev3): bun lives there.
+export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
 ROOT=$HOME/pitbot
 APP=$ROOT/app
 # systemd has no mise shims on PATH: use the real binary.

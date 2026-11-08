@@ -4,6 +4,8 @@
 set -euo pipefail
 # Cron has no mise shims on PATH (bun lives there).
 export PATH="$HOME/.local/share/mise/shims:$HOME/.local/bin:/usr/local/bin:/usr/bin:/bin"
+# `systemctl --user` from cron needs the user bus.
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 APP=$HOME/pitbot/app
 cd "$APP"
 git fetch -q origin main
