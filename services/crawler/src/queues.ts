@@ -85,28 +85,45 @@ export async function feedParked(runtime: Pick<Runtime, 'queues' | 'frontier'>, 
   return jobs.length
 }
 
+// Moves up to ARGV[2] of the NEWEST waiting site jobs (the wait list's head) to the head of
+// the park, while more than ARGV[1] wait. LTRIM on the head is O(chunk); BullMQ's own
+// job.remove() does an LREM over the whole wait list per job, which at 937k waiting ran
+// ~5k jobs/min and pinned Redis (2026-11-08). A job only waiting has nothing else in Redis
+// but its hash, and it is gone from the list before it is deleted, so no worker can see it.
+const COMPACT = `
+local surplus = redis.call('LLEN', KEYS[1]) - tonumber(ARGV[1])
+if surplus <= 0 then return 0 end
+local n = math.min(surplus, tonumber(ARGV[2]))
+local ids = redis.call('LRANGE', KEYS[1], 0, n - 1)
+redis.call('LTRIM', KEYS[1], n, -1)
+for i = 1, #ids do
+  local key = ARGV[3] .. ids[i]
+  local raw = redis.call('HGET', key, 'data')
+  if raw then
+    local ok, d = pcall(cjson.decode, raw)
+    if ok and type(d) == 'table' and d.site then redis.call('LPUSH', KEYS[2], (d.source or 'link') .. ' ' .. d.site) end
+  end
+  redis.call('DEL', key)
+end
+return #ids
+`
+
 /**
- * One-off: move waiting site jobs past the queue cap into the park, keeping their order
- * (the oldest `keep` stay as jobs, the rest park oldest first). For a queue that grew
- * before parking existed: 978k waiting jobs were ~600 MB of a 2 GB Redis.
+ * One-off: park waiting site jobs past `keep` (a queue grown before parking existed: 978k
+ * waiting jobs were ~600 MB of a 2 GB Redis). The oldest `keep` stay as jobs. Each chunk
+ * is newest first, pushed onto the park's head, so the parked surplus ends up oldest first
+ * and ahead of sites discovered since.
  */
 export async function compactSites(runtime: Runtime, keep: number, log: (line: string) => void = console.log): Promise<number> {
-  const q = runtime.queues.site
+  const redis = runtime.redis as Redis & { pitcrawlCompact?: (...args: (string | number)[]) => Promise<number> }
+  if (!redis.pitcrawlCompact) redis.defineCommand('pitcrawlCompact', { numberOfKeys: 2, lua: COMPACT })
+  const prefix = `bull:${QUEUES.site}:`
   let moved = 0
   for (;;) {
-    const waiting = await q.getWaitingCount()
-    const surplus = waiting - keep
-    if (surplus <= 0) return moved
-    // getWaiting counts from the next job to run (index 0 = oldest), so the surplus starts at
-    // `keep` and comes back oldest first. A job a worker takes meanwhile is parked as well and
-    // skipped later by claimStart: a duplicate, never a loss.
-    const n = Math.min(surplus, 2_000)
-    const jobs = await q.getWaiting(keep, keep + n - 1)
-    if (!jobs.length) return moved
-    await runtime.frontier.park(jobs.filter((j) => j?.data?.site).map((j) => parkEntry(j.data as SiteJob)))
-    await Promise.all(jobs.map((j) => j.remove().catch(() => {})))
-    moved += jobs.length
-    if (moved % 50_000 < n) log(`compact: ${moved} parked, ${waiting - n} still waiting as jobs`)
+    const n = Number(await redis.pitcrawlCompact!(`${prefix}wait`, 'pitcrawl:pending', keep, 5_000, prefix))
+    if (!n) return moved
+    moved += n
+    if (moved % 100_000 < n) log(`compact: ${moved} parked`)
   }
 }
 
