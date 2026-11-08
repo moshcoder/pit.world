@@ -21,6 +21,7 @@ import { RateLimiter } from './ratelimit.js'
 import { snippetFor } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
+import { Directory, directoryCategory, directoryHome, directoryJson, directoryNew, directoryPaths, directorySubcategory, view as directoryView } from './directory.js'
 import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
 import { backfillFor, featuredFor } from './featured.js'
 import { Promoted } from './promoted.js'
@@ -102,6 +103,8 @@ export type Deps = {
   listings?: Listings
   /** Mirrors the ring to rssamplifier.com; unset means no mirror. */
   ringSync?: RingSync
+  /** The *.pit.world directory (/directory), read from the live certs and edge config; unset means off. */
+  directory?: Directory
   /** pit.world accounts (sign in with CoinPay, sign-in for *.pit.world sites); unset means off. */
   accounts?: AccountDeps
   /** Promotion campaigns over the listings (needs listings); unset means off. */
@@ -529,6 +532,24 @@ export function createApp(deps: Deps) {
   // --- the pit.world ring ----------------------------------------------------------
   useListings(deps.listings ? () => deps.listings!.ringMembers() : null)
   app.get('/ring', (c) => c.html(ringPage({ mirror: deps.ringSync?.last ?? null })))
+  if (deps.directory) {
+    const dir = deps.directory
+    const current = () => {
+      dir.touch()
+      return directoryView(dir)
+    }
+    app.get('/directory', (c) => c.html(directoryHome(current(), c.req.query('q') ?? '')))
+    app.get('/directory/new', (c) => c.html(directoryNew(current())))
+    app.get('/directory/:cat', (c) => {
+      const html = directoryCategory(current(), c.req.param('cat'))
+      return html ? c.html(html) : c.notFound()
+    })
+    app.get('/directory/:cat/:sub', (c) => {
+      const html = directorySubcategory(current(), c.req.param('cat'), c.req.param('sub'))
+      return html ? c.html(html) : c.notFound()
+    })
+    app.get('/api/directory', (c) => c.json(directoryJson(current()), 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }))
+  }
   app.get('/api/ring', (c) =>
     // Member sites fetch this server-side; the CORS header lets a browser-only site use it too.
     c.json(ringJson(), 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }),
@@ -551,7 +572,7 @@ export function createApp(deps: Deps) {
   )
   app.get('/sitemap.xml', (c) =>
     c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', '/mcps', ...(deps.promoters ? ['/promote'] : []), '/ring', '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : []), ...shares.slugs().map(resultPath)]
+      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', '/mcps', ...(deps.promoters ? ['/promote'] : []), '/ring', ...(deps.directory ? directoryPaths(directoryView(deps.directory)) : []), '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : []), ...shares.slugs().map(resultPath)]
         .map((p) => `<url><loc>https://pit.world${esc(p)}</loc></url>`)
         .join('')}</urlset>`,
       200,
@@ -1384,7 +1405,14 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     ...(env.PIT_FFMPEG ? { ffmpeg: env.PIT_FFMPEG } : {}),
   })
   const fpSecret = fingerprintSecret(dataDir)
-  const app = createApp({ keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  // The directory reads the relay certs and the edge config itself, so new domains list themselves.
+  const directory = env.PIT_DIRECTORY === 'off' ? undefined : new Directory({ file: `${dataDir}/directory.json` })
+  if (directory && import.meta.main) {
+    const run = () => directory.refresh().catch((e) => console.error(`directory refresh: ${(e as Error).message}`))
+    setTimeout(run, 30_000).unref()
+    setInterval(run, 15 * 60_000).unref()
+  }
+  const app = createApp({ ...(directory ? { directory } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
