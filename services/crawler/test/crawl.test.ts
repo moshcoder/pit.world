@@ -191,6 +191,25 @@ describe('publishing to nichedb', () => {
     expect(frontier.outbox).toEqual([])
     expect(frontier.counters.published).toBe(2)
   })
+
+  test('CRAWL_PUBLISH_PAGES=0: the key is kept but pages go to the local index only', async () => {
+    let calls = 0
+    const nichedb = (async (input: string | URL | Request, init?: RequestInit) => {
+      if (String(input).startsWith('https://nichedb.test')) calls++
+      return fakeFetch(input, init)
+    }) as typeof fetch
+    const config = configFromEnv({ CRAWL_HOST_DELAY_MS: '0', NICHEDB_URL: 'https://nichedb.test', NICHEDB_API_KEY: 'k1', CRAWL_PUBLISH_PAGES: '0' })
+    const frontier = new MemoryFrontier(1000)
+    const kept: string[] = []
+    const index = { add: (entries: string[]) => (kept.push(...entries), entries.length) }
+    const noop = async () => {}
+    const crawler = createCrawler({ config, frontier, index, fetch: nichedb, resolver: async () => true, enqueue: { sites: noop, pages: noop, render: noop } })
+    await crawler.crawlPage({ url: 'https://shop.example/', site: 'shop.example', depth: 0 })
+    expect(await crawler.publish()).toEqual({ sent: 0, added: 0, rejected: 0, waiting: false })
+    expect(calls).toBe(0)
+    expect(kept.length).toBe(1)
+    expect(frontier.outbox).toEqual([])
+  })
 })
 
 import { spreadDelay } from '../src/crawler.ts'

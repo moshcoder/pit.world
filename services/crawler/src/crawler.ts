@@ -463,7 +463,8 @@ export function createCrawler(deps: Deps) {
    * the records go to the mirror only.
    */
   async function publish(): Promise<{ sent: number; added: number; rejected: number; waiting: boolean }> {
-    if (!config.nichedbKey && !deps.index) return { sent: 0, added: 0, rejected: 0, waiting: true }
+    const toNichedb = Boolean(config.nichedbKey) && config.publishPages
+    if (!toNichedb && !deps.index) return { sent: 0, added: 0, rejected: 0, waiting: true }
     const fetchImpl = deps.fetch ?? fetch
     let sent = 0
     let added = 0
@@ -475,7 +476,7 @@ export function createCrawler(deps: Deps) {
         const kept = deps.index.add(raw)
         if (kept) await frontier.bump('indexed_local', kept)
       }
-      if (!config.nichedbKey) continue
+      if (!toNichedb) continue
       // The full text stays in the local index; nichedb keeps the record, excerpt and media.
       const outgoing = raw.map((line) => {
         try {
@@ -510,7 +511,7 @@ export function createCrawler(deps: Deps) {
       added += body.added ?? 0
       rejected += body.rejected?.length ?? 0
     }
-    if (!config.nichedbKey) return { sent: 0, added: 0, rejected: 0, waiting: false }
+    if (!toNichedb) return { sent: 0, added: 0, rejected: 0, waiting: false }
     if (sent) {
       await frontier.bump('published', sent)
       await frontier.bump('published_new', added)
