@@ -56,6 +56,7 @@ describe('filing', () => {
 
   it('parses a title and description', () => {
     expect(parseMeta(page('A &amp; B', 'It&#39;s good'))).toEqual({ title: 'A & B', description: "It's good" })
+    expect(parseMeta(page('x', 'the crowd&#x27;s verdict')).description).toBe("the crowd's verdict")
   })
 })
 
@@ -90,6 +91,12 @@ describe('Directory', () => {
     now += 5000
     await d.refresh()
     expect(d.entries().map((e) => e.about)).toEqual(['Back'])
+  })
+
+  it('drops a description that only repeats the name', async () => {
+    const d = new Directory({ hosts: () => ['alt.2600.pit.world'], fetch: fakeFetch({ 'alt.2600.pit.world': page('alt.2600') }).f })
+    await d.refresh()
+    expect(d.entries()[0]!.about).toBe('')
   })
 
   it('remembers first-seen dates across restarts', async () => {

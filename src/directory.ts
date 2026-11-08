@@ -215,6 +215,7 @@ const decode = (s: string) =>
     .replace(/&quot;/g, '"')
     .replace(/&#0?39;|&apos;/g, "'")
     .replace(/&#(\d+);/g, (_, n) => String.fromCodePoint(Number(n)))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCodePoint(parseInt(n, 16)))
     .replace(/\s+/g, ' ')
     .trim()
 
@@ -330,11 +331,14 @@ export class Directory {
       .map((host) => {
         const meta = this.state.meta[host]
         const ring = ringAbout(host)
-        const about = ring?.about || meta?.description || meta?.title || ''
+        const name = displayName(host, meta?.title ?? '')
+        const raw = ring?.about || meta?.description || meta?.title || ''
+        // A site whose only metadata is its own name has nothing to add after the link.
+        const about = raw.toLowerCase() === name.toLowerCase() || raw.toLowerCase() === host ? '' : raw
         return {
           host,
           url: `https://${host}/`,
-          name: displayName(host, meta?.title ?? ''),
+          name,
           about,
           paths: fileSite(host, `${meta?.title ?? ''} ${about}`),
           added: this.state.seen[host] ?? 0,
@@ -463,7 +467,7 @@ export function directorySubcategory(v: View, slug: string, subSlug: string): st
 ${searchBox()}
 <h2>Site Listings</h2>
 ${siteList(v, list, path)}
-${siblings.length ? `<p class="dir-related">More in ${esc(c.name)}: ${siblings.map((x) => `<a href="${href(`${c.slug}/${x.slug}`)}">${esc(x.name)}</a>@`).join(' · ')}</p>` : ''}
+${siblings.length ? `<p class="dir-related">More in ${esc(c.name)}: ${siblings.map((x) => `<a href="${href(`${c.slug}/${x.slug}`)}">${esc(x.name)}</a>`).join(' · ')}</p>` : ''}
 ${legend(v)}`,
   })
 }
