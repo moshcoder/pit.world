@@ -69,6 +69,18 @@ export function documentFrom(parts: { lang?: string; head?: string; text?: strin
   return `<!doctype html><html lang="${esc(parts.lang ?? '')}"><head>${head}</head><body>${main}${rest}<nav>${anchors}</nav></body></html>`
 }
 
+/**
+ * The JSON-RPC message in a reply: an SSE stream's last `data:` line, or the body as is.
+ * Decided by the content type, never by "data:" appearing in the text: a plain JSON reply
+ * holding a page head with a data: URI was read as SSE, found no data line, and threw.
+ */
+export function sseData(text: string, contentType: string | null): string {
+  const sse = /text\/event-stream/i.test(contentType ?? '') || /^\s*(event|data|id):/m.test(text.slice(0, 200)) && !text.trimStart().startsWith('{')
+  if (!sse) return text
+  const data = text.split('\n').filter((l) => l.startsWith('data:'))
+  return data.length ? data[data.length - 1]!.slice(5) : text
+}
+
 export class ObscuraClient {
   private session = ''
   private id = 0
@@ -120,13 +132,7 @@ export class ObscuraClient {
     }
     if (!response.ok) throw new ObscuraError(`obscura HTTP ${response.status}`)
     if (notify) return null
-    const line = text.includes('data:')
-      ? text
-          .split('\n')
-          .filter((l) => l.startsWith('data:'))
-          .pop()!
-          .slice(5)
-      : text
+    const line = sseData(text, response.headers.get('content-type'))
     let json: any
     try {
       json = JSON.parse(line)

@@ -8,7 +8,7 @@ import { createCrawler, type PageJob, type SiteJob } from '../src/crawler.ts'
 import { failureKind, HOST_PAGE_FAILURES, isDue, parkFor, retryAfterMs, statusKind } from '../src/failures.ts'
 import { politeGet } from '../src/fetcher.ts'
 import { MemoryFrontier } from '../src/frontier.ts'
-import { ObscuraClient, ObscuraError, RenderTimeout, SETTLED_EXPRESSION } from '../src/obscura.ts'
+import { ObscuraClient, ObscuraError, RenderTimeout, SETTLED_EXPRESSION, sseData } from '../src/obscura.ts'
 import { MemorySiteStore } from '../src/site-store.ts'
 
 const DAY = 86_400_000
@@ -284,4 +284,12 @@ describe('the browser budget', () => {
     expect((await crawler.renderPage({ url: 'https://js.example/', site: 'js.example', depth: 0, rendered: true })).outcome).toBe('page parked: timeout')
     expect((await frontier.siteState('js.example', 'https://js.example/')).pageDown).toBe(true)
   })
+})
+
+test('a JSON reply that mentions data: is JSON; an SSE reply is read by its last data line', () => {
+  const json = '{"jsonrpc":"2.0","id":3,"result":{"content":[{"text":"<link href=\\"data:image/png;base64,AA\\">"}]}}'
+  expect(sseData(json, 'application/json')).toBe(json)
+  expect(sseData(json, null)).toBe(json)
+  expect(sseData('event: message\ndata: {"a":1}\n\n', 'text/event-stream')).toBe(' {"a":1}')
+  expect(sseData('event: message\ndata: {"a":1}\n\n', null)).toBe(' {"a":1}')
 })
