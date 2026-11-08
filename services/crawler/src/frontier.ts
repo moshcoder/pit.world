@@ -55,16 +55,6 @@ export interface Frontier {
   lease(site: string, gapMs: number): Promise<{ waitMs: number; pending: number }>
   getRobots(site: string): Promise<Robots | null>
   setRobots(site: string, robots: Robots): Promise<void>
-  /**
-   * Remember a site was scheduled now. False (and nothing changes) when it was
-   * already scheduled within cycleMs, or when the index holds maxSites others.
-   */
-  noteSite(site: string, maxSites: number, cycleMs: number): Promise<boolean>
-  sitesDue(olderThanMs: number, limit: number): Promise<string[]>
-  /** Park scheduled sites outside the job queue, oldest first out. */
-  park(entries: string[]): Promise<void>
-  /** Up to count parked sites, oldest first, removed from the park. */
-  unpark(count: number): Promise<string[]>
   /** The first start of a site in a cycle claims it; every later one is told no. */
   claimStart(site: string, cycleMs: number): Promise<boolean>
   /** The first sighting of an MCP address in a cycle claims its probe; every later one is told no. */
@@ -84,6 +74,8 @@ export interface Frontier {
   /** A counter, kept as a total and in minute and hour buckets for rates. */
   bump(field: string, by?: number): Promise<void>
   stats(): Promise<Record<string, number>>
+  /** Gauges: figures set from elsewhere (the site frontier in Postgres), read back by stats(). */
+  setGauges(values: Record<string, number>): Promise<void>
   log(event: Omit<CrawlEvent, 'at'>): Promise<void>
   recent(count: number): Promise<CrawlEvent[]>
   activity(): Promise<Activity>
@@ -110,10 +102,6 @@ const K = {
   robots: (s: string) => `pitcrawl:robots:${s}`,
   lease: (s: string) => `pitcrawl:lease:${s}`,
   started: (s: string) => `pitcrawl:started:${s}`,
-  sites: 'pitcrawl:sites',
-  // Sites scheduled while the site queue was already deep: "source site" strings, ~40 B
-  // each against ~600 B for a waiting BullMQ job. The site worker's gate feeds them in.
-  pending: 'pitcrawl:pending',
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
   mcp: 'pitcrawl:mcp',
@@ -210,34 +198,10 @@ export class RedisFrontier implements Frontier {
     return this.redis.hlen(K.mcp)
   }
 
-  async noteSite(site: string, maxSites: number, cycleMs: number) {
-    const known = await this.redis.zscore(K.sites, site)
-    if (known !== null && Date.now() - Number(known) < cycleMs) return false
-    if (known === null && (await this.redis.zcard(K.sites)) >= maxSites) return false
-    if (known !== null) {
-      // Due again. Two workers both starting it is harmless: page admission still dedupes.
-      await this.redis.zadd(K.sites, 'XX', Date.now(), site)
-      return true
-    }
-    // Two workers discovering one new site at once: only the write that lands first schedules it.
-    return Number(await this.redis.zadd(K.sites, 'NX', Date.now(), site)) === 1
-  }
-
   async claimStart(site: string, cycleMs: number) {
     // A little under the cycle, so the recrawl that comes due at the cycle's end can claim it.
     const ttl = Math.max(60_000, cycleMs - 3_600_000)
     return (await this.redis.set(K.started(site), String(Date.now()), 'PX', ttl, 'NX')) === 'OK'
-  }
-
-  async sitesDue(olderThanMs: number, limit: number) {
-    return this.redis.zrangebyscore(K.sites, 0, Date.now() - olderThanMs, 'LIMIT', 0, limit)
-  }
-
-  async park(entries: string[]) {
-    for (let i = 0; i < entries.length; i += 1_000) await this.redis.rpush(K.pending, ...entries.slice(i, i + 1_000))
-  }
-  async unpark(count: number) {
-    return ((await this.redis.lpop(K.pending, count)) as string[] | null) ?? []
   }
 
   async push(entries: unknown[], max: number) {
@@ -274,10 +238,15 @@ export class RedisFrontier implements Frontier {
   }
 
   async stats() {
-    const [hash, sites, outbox, parked] = await Promise.all([this.redis.hgetall(K.stats), this.redis.zcard(K.sites), this.redis.llen(K.outbox), this.redis.llen(K.pending)])
-    const out: Record<string, number> = { sites, outbox, sites_parked: parked }
+    // `sites` and `sites_parked` are in the hash: the site gate copies them from Postgres.
+    const [hash, outbox] = await Promise.all([this.redis.hgetall(K.stats), this.redis.llen(K.outbox)])
+    const out: Record<string, number> = { outbox }
     for (const [k, v] of Object.entries(hash)) out[k] = Number(v)
     return out
+  }
+  /** Gauges (set, not counted): the site frontier's size, copied from Postgres. */
+  async setGauges(values: Record<string, number>) {
+    await this.redis.hset(K.stats, values)
   }
 
   async log(event: Omit<CrawlEvent, 'at'>) {
@@ -325,7 +294,6 @@ export class MemoryFrontier implements Frontier {
   seen = new Map<string, Set<string>>()
   leases = new Map<string, number>()
   robots = new Map<string, Robots>()
-  sites = new Map<string, number>()
   outbox: string[] = []
   counters: Record<string, number> = {}
   constructor(private readonly maxPages: number) {}
@@ -379,31 +347,11 @@ export class MemoryFrontier implements Frontier {
   async setRobots(site: string, robots: Robots) {
     this.robots.set(site, robots)
   }
-  async noteSite(site: string, maxSites: number, cycleMs: number) {
-    const known = this.sites.get(site)
-    if (known !== undefined && Date.now() - known < cycleMs) return false
-    if (known === undefined && this.sites.size >= maxSites) return false
-    this.sites.set(site, Date.now())
-    return true
-  }
   started = new Set<string>()
   async claimStart(site: string) {
     if (this.started.has(site)) return false
     this.started.add(site)
     return true
-  }
-  async sitesDue(olderThanMs: number, limit: number) {
-    return [...this.sites.entries()]
-      .filter(([, t]) => t <= Date.now() - olderThanMs)
-      .slice(0, limit)
-      .map(([s]) => s)
-  }
-  parked: string[] = []
-  async park(entries: string[]) {
-    this.parked.push(...entries)
-  }
-  async unpark(count: number) {
-    return this.parked.splice(0, count)
   }
   async push(entries: unknown[], max: number) {
     this.outbox.push(...entries.map((e) => JSON.stringify(e)))
@@ -419,11 +367,15 @@ export class MemoryFrontier implements Frontier {
     this.outbox.unshift(...raw)
   }
   events: CrawlEvent[] = []
+  gauges: Record<string, number> = {}
+  async setGauges(values: Record<string, number>) {
+    Object.assign(this.gauges, values)
+  }
   async bump(field: string, by = 1) {
     this.counters[field] = (this.counters[field] ?? 0) + by
   }
   async stats() {
-    return { ...this.counters, sites: this.sites.size, outbox: this.outbox.length, sites_parked: this.parked.length }
+    return { ...this.counters, ...this.gauges, outbox: this.outbox.length }
   }
   async log(event: Omit<CrawlEvent, 'at'>) {
     this.events.unshift({ at: new Date().toISOString(), ...event })
