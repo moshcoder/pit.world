@@ -12,8 +12,10 @@ if [ "$want" = "$have" ] && [ "${1:-}" != "--force" ]; then exit 0; fi
 echo "$(date -u +%FT%TZ) deploying ${want:0:12} (was ${have:0:12})"
 git reset -q --hard "$want"
 bun install --frozen-lockfile >/dev/null
-for unit in $(systemctl list-units --plain --no-legend 'pitbot-*' | awk '{print $1}'); do sudo systemctl restart "$unit"; done
+# install.sh --user boxes (no sudo) run user units; the rest run system units.
+if systemctl --user list-units --plain --no-legend 'pitbot-*' 2>/dev/null | grep -q pitbot; then SCTL="systemctl --user"; else SCTL="sudo systemctl"; fi
+for unit in $($SCTL list-units --plain --no-legend 'pitbot-*' | awk '{print $1}'); do $SCTL restart "$unit"; done
 sleep 10
-failed=$(systemctl list-units --plain --no-legend --state=failed 'pitbot-*' | awk '{print $1}')
+failed=$($SCTL list-units --plain --no-legend --state=failed 'pitbot-*' | awk '{print $1}')
 if [ -n "$failed" ]; then echo "$(date -u +%FT%TZ) ${want:0:12} FAILED: $failed" >&2; exit 1; fi
 echo "$(date -u +%FT%TZ) ${want:0:12} running"
