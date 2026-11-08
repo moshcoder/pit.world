@@ -111,7 +111,8 @@ curl 127.0.0.1:8807/api/v1/corpus/stats
 | `CRAWL_CONCURRENCY` | 16 | pages at once per process |
 | `CRAWL_HOST_DELAY_MS` | 1500 | gap between two requests to one site |
 | `CRAWL_RECRAWL_DAYS` | 30 | a site is read again this often |
-| `CRAWL_DISCOVER` | 0 | 1: crawl linked sites too, up to `CRAWL_MAX_SITES` (1,000,000) |
+| `CRAWL_DISCOVER` | 0 | 1: crawl linked sites too, up to `CRAWL_MAX_SITES` (5,000,000; at the limit links to new sites are dropped and /status says so) |
+| `CRAWL_SITE_QUEUE_HIGH` | 50000 | past this many waiting site jobs, new sites park in `pitcrawl:pending` (~40 B each, not ~600 B a job) and are fed in as the queue drains; `pit-crawler compact [--keep n]` parks an older, deeper queue |
 | `CRAWL_MAX_PAGE_BACKLOG` | 50000 | site starts wait while more page jobs than this are queued |
 | `CRAWL_SEEN_TTL_HOURS` | 72 | a site's seen-set lives this long after its last new page |
 | `OBSCURA_MCP_URLS` | none | comma-separated `obscura mcp --http` endpoints |

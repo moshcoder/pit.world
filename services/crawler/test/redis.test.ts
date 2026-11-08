@@ -10,7 +10,7 @@ import { configFromEnv } from '../src/config.ts'
 import { extract } from '../src/extract.ts'
 import { RedisFrontier } from '../src/frontier.ts'
 import { ObscuraClient } from '../src/obscura.ts'
-import { connect, createRuntime, snapshot } from '../src/queues.ts'
+import { compactSites, connect, createRuntime, feedParked, snapshot } from '../src/queues.ts'
 
 const REDIS = process.env.CRAWL_TEST_REDIS
 const OBSCURA = process.env.OBSCURA_TEST_URL
@@ -87,6 +87,42 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
       expect(snap.queues.site?.waiting).toBe(1)
       expect(snap.queues.page?.prioritized).toBe(1)
       expect(snap.stats.sites).toBe(1)
+    } finally {
+      await runtime.close()
+    }
+  })
+
+  test('a deep site queue parks new sites in order, feeds them back, and compacts an old queue', async () => {
+    await redis.flushdb()
+    const config = configFromEnv({ CRAWL_REDIS_URL: REDIS, CRAWL_SITE_QUEUE_HIGH: '4', CRAWL_INDEX_PATH: ':memory:' })
+    const runtime = createRuntime(config, () => {})
+    const waiting = async () => (await runtime.queues.site.getWaiting(0, -1)).map((j) => j.data.site)
+    try {
+      const sites = Array.from({ length: 10 }, (_, i) => `s${i}.example`)
+      expect(await runtime.crawler.scheduleSites(sites.slice(0, 6), 'link')).toEqual({ queued: 6, refused: 0 })
+      // The first call saw an empty queue, so all six went in as jobs; now it is deep.
+      expect(await runtime.crawler.scheduleSites(sites.slice(6), 'link')).toEqual({ queued: 4, refused: 0 })
+      expect(await waiting()).toEqual(sites.slice(0, 6))
+      expect((await snapshot(runtime)).stats.sites_parked).toBe(4)
+      // A `first` site never parks.
+      await runtime.crawler.scheduleSites(['vip.example'], 'submit', { first: true })
+      expect(await waiting()).toContain('vip.example')
+      // Nothing is fed while the queue is over half its cap.
+      expect(await feedParked(runtime, config)).toBe(0)
+
+      // Compaction keeps the oldest `keep` as jobs and parks the rest ahead of what was parked.
+      await redis.del('pitcrawl:pending')
+      await runtime.queues.site.obliterate({ force: true })
+      await runtime.queues.site.addBulk(sites.map((site) => ({ name: 'site', data: { site, source: 'link' } })))
+      expect(await compactSites(runtime, 3, () => {})).toBe(7)
+      expect(await waiting()).toEqual(sites.slice(0, 3))
+      expect(await redis.lrange('pitcrawl:pending', 0, -1)).toEqual(sites.slice(3).map((s) => `link ${s}`))
+
+      // Drained under half: the park refills the queue, oldest first, as plain jobs.
+      for (const j of await runtime.queues.site.getWaiting(0, -1)) await j.remove()
+      expect(await feedParked(runtime, config)).toBe(4)
+      expect(await waiting()).toEqual(sites.slice(3, 7))
+      expect((await runtime.queues.site.getWaiting(0, 0))[0]?.data).toEqual({ site: 's3.example', source: 'link' })
     } finally {
       await runtime.close()
     }

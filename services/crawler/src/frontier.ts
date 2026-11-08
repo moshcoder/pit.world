@@ -61,6 +61,10 @@ export interface Frontier {
    */
   noteSite(site: string, maxSites: number, cycleMs: number): Promise<boolean>
   sitesDue(olderThanMs: number, limit: number): Promise<string[]>
+  /** Park scheduled sites outside the job queue, oldest first out. */
+  park(entries: string[]): Promise<void>
+  /** Up to count parked sites, oldest first, removed from the park. */
+  unpark(count: number): Promise<string[]>
   /** The first start of a site in a cycle claims it; every later one is told no. */
   claimStart(site: string, cycleMs: number): Promise<boolean>
   /** The first sighting of an MCP address in a cycle claims its probe; every later one is told no. */
@@ -107,6 +111,9 @@ const K = {
   lease: (s: string) => `pitcrawl:lease:${s}`,
   started: (s: string) => `pitcrawl:started:${s}`,
   sites: 'pitcrawl:sites',
+  // Sites scheduled while the site queue was already deep: "source site" strings, ~40 B
+  // each against ~600 B for a waiting BullMQ job. The site worker's gate feeds them in.
+  pending: 'pitcrawl:pending',
   outbox: 'pitcrawl:outbox',
   stats: 'pitcrawl:stats',
   mcp: 'pitcrawl:mcp',
@@ -226,6 +233,13 @@ export class RedisFrontier implements Frontier {
     return this.redis.zrangebyscore(K.sites, 0, Date.now() - olderThanMs, 'LIMIT', 0, limit)
   }
 
+  async park(entries: string[]) {
+    for (let i = 0; i < entries.length; i += 1_000) await this.redis.rpush(K.pending, ...entries.slice(i, i + 1_000))
+  }
+  async unpark(count: number) {
+    return ((await this.redis.lpop(K.pending, count)) as string[] | null) ?? []
+  }
+
   async push(entries: unknown[], max: number) {
     if (!entries.length) return
     await this.redis
@@ -260,8 +274,8 @@ export class RedisFrontier implements Frontier {
   }
 
   async stats() {
-    const [hash, sites, outbox] = await Promise.all([this.redis.hgetall(K.stats), this.redis.zcard(K.sites), this.redis.llen(K.outbox)])
-    const out: Record<string, number> = { sites, outbox }
+    const [hash, sites, outbox, parked] = await Promise.all([this.redis.hgetall(K.stats), this.redis.zcard(K.sites), this.redis.llen(K.outbox), this.redis.llen(K.pending)])
+    const out: Record<string, number> = { sites, outbox, sites_parked: parked }
     for (const [k, v] of Object.entries(hash)) out[k] = Number(v)
     return out
   }
@@ -384,6 +398,13 @@ export class MemoryFrontier implements Frontier {
       .slice(0, limit)
       .map(([s]) => s)
   }
+  parked: string[] = []
+  async park(entries: string[]) {
+    this.parked.push(...entries)
+  }
+  async unpark(count: number) {
+    return this.parked.splice(0, count)
+  }
   async push(entries: unknown[], max: number) {
     this.outbox.push(...entries.map((e) => JSON.stringify(e)))
     if (this.outbox.length > max) this.outbox.splice(0, this.outbox.length - max)
@@ -402,7 +423,7 @@ export class MemoryFrontier implements Frontier {
     this.counters[field] = (this.counters[field] ?? 0) + by
   }
   async stats() {
-    return { ...this.counters, sites: this.sites.size, outbox: this.outbox.length }
+    return { ...this.counters, sites: this.sites.size, outbox: this.outbox.length, sites_parked: this.parked.length }
   }
   async log(event: Omit<CrawlEvent, 'at'>) {
     this.events.unshift({ at: new Date().toISOString(), ...event })

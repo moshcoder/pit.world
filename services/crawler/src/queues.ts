@@ -69,6 +69,47 @@ export type Runtime = {
   close(): Promise<void>
 }
 
+const parkEntry = (job: SiteJob) => `${job.source} ${job.site}`
+function unparkEntry(raw: string): SiteJob | null {
+  const at = raw.indexOf(' ')
+  return at > 0 ? { source: raw.slice(0, at), site: raw.slice(at + 1) } : null
+}
+
+/** Top the site queue up from the park once it is under half its cap. */
+export async function feedParked(runtime: Pick<Runtime, 'queues' | 'frontier'>, config: Config): Promise<number> {
+  const waiting = await runtime.queues.site.getWaitingCount()
+  const room = config.siteQueueHigh - waiting
+  if (room < config.siteQueueHigh / 2) return 0
+  const jobs = (await runtime.frontier.unpark(Math.min(room, 10_000))).map(unparkEntry).filter((j): j is SiteJob => j !== null)
+  await addInChunks(jobs, (chunk) => runtime.queues.site.addBulk(chunk.map((data) => ({ name: 'site', data }))))
+  return jobs.length
+}
+
+/**
+ * One-off: move waiting site jobs past the queue cap into the park, keeping their order
+ * (the oldest `keep` stay as jobs, the rest park oldest first). For a queue that grew
+ * before parking existed: 978k waiting jobs were ~600 MB of a 2 GB Redis.
+ */
+export async function compactSites(runtime: Runtime, keep: number, log: (line: string) => void = console.log): Promise<number> {
+  const q = runtime.queues.site
+  let moved = 0
+  for (;;) {
+    const waiting = await q.getWaitingCount()
+    const surplus = waiting - keep
+    if (surplus <= 0) return moved
+    // getWaiting counts from the next job to run (index 0 = oldest), so the surplus starts at
+    // `keep` and comes back oldest first. A job a worker takes meanwhile is parked as well and
+    // skipped later by claimStart: a duplicate, never a loss.
+    const n = Math.min(surplus, 2_000)
+    const jobs = await q.getWaiting(keep, keep + n - 1)
+    if (!jobs.length) return moved
+    await runtime.frontier.park(jobs.filter((j) => j?.data?.site).map((j) => parkEntry(j.data as SiteJob)))
+    await Promise.all(jobs.map((j) => j.remove().catch(() => {})))
+    moved += jobs.length
+    if (moved % 50_000 < n) log(`compact: ${moved} parked, ${waiting - n} still waiting as jobs`)
+  }
+}
+
 /** Queues, frontier and crawler, without workers: what `seed` and `stats` need. */
 export function createRuntime(config: Config, log: (line: string) => void = console.log): Runtime {
   const redis = connect(config.redisUrl)
@@ -100,8 +141,14 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     log,
     enqueue: {
       async sites(jobs: SiteJob[]) {
+        // A deep site queue takes no more jobs: discovery finds sites far faster than they
+        // are read, and ~600 B a waiting job filled Redis long before the frontier was big.
+        // `first` sites always go straight in; the rest wait parked, in order.
+        const deep = (await queues.site.getWaitingCount()) >= config.siteQueueHigh
+        const now = deep ? jobs.filter((j) => j.first) : jobs
+        if (deep) await frontier.park(jobs.filter((j) => !j.first).map(parkEntry))
         // LIFO puts a `first` site at the head of the waiting list, ahead of a big seed.
-        await addInChunks(jobs, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data, ...(data.first ? { opts: { lifo: true } } : {}) }))))
+        await addInChunks(now, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data, ...(data.first ? { opts: { lifo: true } } : {}) }))))
       },
       async pages(jobs: PageJob[]) {
         await addInChunks(jobs, (chunk) =>
@@ -185,6 +232,7 @@ export async function startWorkers(config: Config, log: (line: string) => void =
     let paused = false
     gate = setInterval(async () => {
       try {
+        await feedParked(runtime, config)
         const backlog = await pageBacklog()
         if (!paused && backlog > config.maxPageBacklog) {
           paused = true
@@ -319,6 +367,7 @@ export async function report(runtime: Runtime, config: Config) {
       recrawlDays: config.recrawlDays,
       renderers: config.obscuraUrls.length,
       discover: config.discover,
+      maxSites: config.maxSites,
       publishing: Boolean(config.nichedbKey),
     },
     generatedAt: new Date().toISOString(),
