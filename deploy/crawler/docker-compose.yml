@@ -24,6 +24,9 @@ services:
     volumes: ['redis:/data']
     ports: ['127.0.0.1:6396:6379']
     mem_limit: 5g
+    # dev2 is shared and was pegged on 2026-11-08 (115 runnable, 0% idle): with default
+    # weight the crawler starved, failed its 5 s health check and was restarted in a loop.
+    cpu_shares: 4096
     restart: unless-stopped
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
@@ -62,6 +65,7 @@ services:
     # The local search mirror pit.world reads (/api/v1/search on 8807).
     volumes: ['index:/data']
     mem_limit: 1536m
+    cpu_shares: 4096
     restart: unless-stopped
     stop_grace_period: 30s
 
