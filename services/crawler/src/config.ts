@@ -40,6 +40,8 @@ export type Config = {
   /** Follow links to other sites and crawl those too, up to maxSites. */
   discover: boolean
   maxSites: number
+  /** Postgres for the site frontier (pit.world's own Supabase). Unset: in memory, for tests. */
+  databaseUrl: string
   /** Past this many waiting site jobs, newly scheduled sites are parked compactly and fed in as the queue drains. */
   siteQueueHigh: number
   /** Records waiting for nichedb beyond this are dropped oldest first. */
@@ -89,9 +91,10 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     nichedbUrl: (env.NICHEDB_URL ?? 'https://nichedb.dev').replace(/\/+$/, ''),
     nichedbKey: env.NICHEDB_API_KEY ?? '',
     discover: env.CRAWL_DISCOVER === '1',
-    // 1M filled on 2026-11-08 and discovery stopped dead. A known site costs ~90 B in
-    // pitcrawl:sites plus ~40 B while parked, so 5M fits a 2 GB Redis with room to spare.
-    maxSites: num(env.CRAWL_MAX_SITES, 5_000_000, 1),
+    // 1M filled Redis on 2026-11-08 and discovery stopped dead; the frontier is in
+    // Postgres now, at ~100 B of disk a site.
+    maxSites: num(env.CRAWL_MAX_SITES, 100_000_000, 1),
+    databaseUrl: env.CRAWL_DATABASE_URL ?? '',
     siteQueueHigh: num(env.CRAWL_SITE_QUEUE_HIGH, 50_000, 1),
     seenTtlMs: num(env.CRAWL_SEEN_TTL_HOURS, 72, 1) * 3_600_000,
     maxPageBacklog: num(env.CRAWL_MAX_PAGE_BACKLOG, 50_000, 1),

@@ -19,7 +19,7 @@ import { type Config, configFromEnv, VERSION } from './config.ts'
 import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
-import { compactSites, createRuntime, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
+import { createRuntime, migrateSitesFromRedis, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
 import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
 import { importFromNichedb } from './import-nichedb.ts'
 import { IndexStore } from './index-store.ts'
@@ -342,26 +342,24 @@ async function read(args: string[]) {
   )
 }
 
-/** Park waiting site jobs past the queue cap (a queue grown before parking existed). */
-async function compact(args: string[]) {
+/** One-off: the site frontier from Redis into Postgres. --drop unlinks the Redis keys after. */
+async function migrateSites(args: string[]) {
   const config = configFromEnv()
-  const at = args.indexOf('--keep')
-  const keep = at >= 0 ? Number(args[at + 1]) : config.siteQueueHigh
-  if (!Number.isFinite(keep) || keep < 0) throw new Error('--keep wants a number')
+  if (!config.databaseUrl) throw new Error('CRAWL_DATABASE_URL is not set')
   const runtime = createRuntime(config)
   try {
-    console.log(`compact: ${await compactSites(runtime, keep)} site jobs parked, ${keep} kept as jobs`)
+    await migrateSitesFromRedis(runtime, { drop: args.includes('--drop') })
   } finally {
     await runtime.close()
   }
 }
 
 const [command, ...rest] = process.argv.slice(2)
-const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read, compact }
+const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read, 'migrate-sites': migrateSites }
 const run = command ? commands[command] : undefined
 if (!run) {
   console.log(
-    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | compact [--keep n]',
+    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop]',
   )
   process.exit(command ? 1 : 0)
 }

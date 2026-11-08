@@ -10,6 +10,7 @@ import { politeGet, readSitemapXml } from './fetcher.ts'
 import { endpointsIn, handshake, mcpRecord, type McpJob, WELL_KNOWN } from './mcp.ts'
 import { globalSources, interleave, isTsbbDescriptor, recognise, sampleInstances, searchInstance, type SocialPost, type SocialSite } from './social.ts'
 import type { Frontier } from './frontier.ts'
+import { MemorySiteStore, type SiteStore } from './site-store.ts'
 import type { Rendered } from './obscura.ts'
 import { aiDisallowed, allows, EMPTY, parseRobots, parseTdmrep, pathOf, tdmReserved, type Robots } from './robots.ts'
 import { sitesFromOpml } from './seed.ts'
@@ -54,12 +55,16 @@ export type Enqueue = {
   render(job: PageJob): Promise<void>
   /** MCP addresses to prove (src/mcp.ts). Unset, the crawl does not look for them. */
   mcp?(jobs: McpJob[]): Promise<void>
+  /** True while the site queue holds enough: new sites then park in the site store instead. */
+  sitesDeep?(): Promise<boolean>
 }
 
 export type Deps = {
   config: Config
   frontier: Frontier
   enqueue: Enqueue
+  /** Every known site, parked or scheduled (Postgres in production). */
+  sites?: SiteStore
   fetch?: typeof fetch
   resolver?: Resolver
   renderer?: { size: number; render(url: string): Promise<Rendered> } | null
@@ -95,27 +100,37 @@ export function spreadDelay(waitMs: number, pending: number, gapMs: number, rand
 
 export function createCrawler(deps: Deps) {
   const { config, frontier, enqueue } = deps
+  const siteStore = deps.sites ?? new MemorySiteStore()
   const resolver = deps.resolver ?? resolvesPublic
   const log = deps.log ?? (() => {})
   const get = (url: string, site: string, accept?: string) =>
     politeGet(url, { userAgent: config.userAgent, resolver, site, ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(accept ? { accept } : {}) })
 
-  /** Sites pasted, seeded or discovered: checked, counted, queued once per cycle. */
+  /**
+   * Sites pasted, seeded or discovered: known ones skipped, new ones recorded, and queued
+   * now or parked while the site queue is deep. `first` (a submission, seed --first)
+   * schedules even a known site and jumps the queue; a copy still waiting skips when it
+   * comes up (claimStart).
+   */
   async function scheduleSites(inputs: string[], source: string, options: { first?: boolean } = {}): Promise<{ queued: number; refused: number }> {
-    const jobs: SiteJob[] = []
-    let refused = 0
-    for (const input of inputs) {
-      const site = siteFromInput(input)
-      // `first` re-schedules a site even if it is already waiting: it jumps the queue, and
-      // the copy still waiting skips when it comes up (claimStart).
-      if (!site || !(await frontier.noteSite(site, config.maxSites, options.first ? 0 : config.recrawlDays * 86_400_000))) {
-        refused++
-        continue
-      }
-      jobs.push({ site, source, ...(options.first ? { first: true } : {}) })
+    const sites = [...new Set(inputs.map((input) => siteFromInput(input)).filter((s): s is string => Boolean(s)))]
+    const rows = sites.map((site) => ({ site, source }))
+    if (options.first) {
+      await siteStore.force(rows)
+      if (sites.length) await enqueue.sites(sites.map((site) => ({ site, source, first: true })))
+      return { queued: sites.length, refused: inputs.length - sites.length }
     }
-    if (jobs.length) await enqueue.sites(jobs)
-    return { queued: jobs.length, refused }
+    try {
+      if ((await siteStore.counts()).known >= config.maxSites) return { queued: 0, refused: inputs.length }
+      const deep = (await enqueue.sitesDeep?.()) ?? false
+      const fresh = await siteStore.add(rows, !deep)
+      if (!deep && fresh.length) await enqueue.sites(fresh.map((site) => ({ site, source })))
+      return { queued: fresh.length, refused: inputs.length - fresh.length }
+    } catch (error) {
+      // A frontier outage costs the links found meanwhile, never the page being read.
+      log(`sites: ${sites.length} from ${source} not recorded: ${error instanceof Error ? error.message : error}`)
+      return { queued: 0, refused: inputs.length }
+    }
   }
 
   async function robotsFor(site: string): Promise<Robots | 'unavailable'> {
@@ -507,8 +522,8 @@ export function createCrawler(deps: Deps) {
 
   /** Sites whose cycle has run out are started again. */
   async function recrawl(limit = 5_000): Promise<number> {
-    const due = await frontier.sitesDue(config.recrawlDays * 86_400_000, limit)
-    if (due.length) await scheduleSites(due, 'recrawl')
+    const due = await siteStore.takeDue(config.recrawlDays * 86_400_000, limit)
+    if (due.length) await enqueue.sites(due.map((site) => ({ site, source: 'recrawl' })))
     return due.length
   }
 

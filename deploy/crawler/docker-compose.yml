@@ -9,6 +9,11 @@
 # Scale: `--scale crawler=N` on this box, or the same image on another box with
 # CRAWL_REDIS_URL pointed here. More JavaScript rendering: add obscura-N and
 # list it in OBSCURA_MCP_URLS.
+#
+# The site frontier (every known site, parked or scheduled) is in Postgres: pit.world's
+# own Supabase, pit-world-supabase (cli-tools `dev2-site supabase-stack pit.world`),
+# role pitcrawl, CRAWL_DATABASE_URL in crawler.env. crawler and pages join that stack's
+# network to reach pit-world-supabase-db; it must exist before `up`.
 name: pit-crawler
 
 services:
@@ -48,6 +53,7 @@ services:
       obscura-1: { condition: service_started }
       obscura-2: { condition: service_started }
     ports: ['127.0.0.1:8807:8797']
+    networks: [default, frontier]
     # The local search mirror pit.world reads (/api/v1/search on 8807).
     volumes: ['index:/data']
     mem_limit: 1536m
@@ -63,6 +69,7 @@ services:
       CRAWL_REDIS_URL: redis://redis:6379
       CRAWL_ROLES: page
       CRAWL_HEALTH_HOST: 0.0.0.0
+    networks: [default, frontier]
     depends_on:
       redis: { condition: service_healthy }
       crawler: { condition: service_started }
@@ -75,3 +82,9 @@ services:
 volumes:
   redis:
   index:
+
+networks:
+  default: {}
+  frontier:
+    external: true
+    name: pit-world-supabase_default

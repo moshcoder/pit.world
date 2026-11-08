@@ -21,6 +21,7 @@ import { Redis } from 'ioredis'
 import type { Config, Role } from './config.ts'
 import { createCrawler, type Crawler, type PageJob, type SiteJob } from './crawler.ts'
 import { RedisFrontier } from './frontier.ts'
+import { MemorySiteStore, PgSiteStore, type SiteStore } from './site-store.ts'
 import { submitFeed } from '@profullstack/submit-feed/core'
 import { IndexStore } from './index-store.ts'
 import type { McpJob } from './mcp.ts'
@@ -64,67 +65,63 @@ export type Runtime = {
   crawler: Crawler
   queues: Record<keyof typeof QUEUES, Queue>
   frontier: RedisFrontier
+  sites: SiteStore
   redis: Redis
   index: IndexStore
   close(): Promise<void>
 }
 
-const parkEntry = (job: SiteJob) => `${job.source} ${job.site}`
-function unparkEntry(raw: string): SiteJob | null {
-  const at = raw.indexOf(' ')
-  return at > 0 ? { source: raw.slice(0, at), site: raw.slice(at + 1) } : null
-}
-
-/** Top the site queue up from the park once it is under half its cap. */
-export async function feedParked(runtime: Pick<Runtime, 'queues' | 'frontier'>, config: Config): Promise<number> {
+/** Top the site queue up from the parked sites once it is under half its cap. */
+export async function feedParked(runtime: Pick<Runtime, 'queues' | 'sites'>, config: Config): Promise<number> {
   const waiting = await runtime.queues.site.getWaitingCount()
   const room = config.siteQueueHigh - waiting
   if (room < config.siteQueueHigh / 2) return 0
-  const jobs = (await runtime.frontier.unpark(Math.min(room, 10_000))).map(unparkEntry).filter((j): j is SiteJob => j !== null)
+  const jobs: SiteJob[] = await runtime.sites.takeParked(Math.min(room, 10_000))
   await addInChunks(jobs, (chunk) => runtime.queues.site.addBulk(chunk.map((data) => ({ name: 'site', data }))))
   return jobs.length
 }
 
-// Moves up to ARGV[2] of the NEWEST waiting site jobs (the wait list's head) to the head of
-// the park, while more than ARGV[1] wait. LTRIM on the head is O(chunk); BullMQ's own
-// job.remove() does an LREM over the whole wait list per job, which at 937k waiting ran
-// ~5k jobs/min and pinned Redis (2026-11-08). A job only waiting has nothing else in Redis
-// but its hash, and it is gone from the list before it is deleted, so no worker can see it.
-const COMPACT = `
-local surplus = redis.call('LLEN', KEYS[1]) - tonumber(ARGV[1])
-if surplus <= 0 then return 0 end
-local n = math.min(surplus, tonumber(ARGV[2]))
-local ids = redis.call('LRANGE', KEYS[1], 0, n - 1)
-redis.call('LTRIM', KEYS[1], n, -1)
-for i = 1, #ids do
-  local key = ARGV[3] .. ids[i]
-  local raw = redis.call('HGET', key, 'data')
-  if raw then
-    local ok, d = pcall(cjson.decode, raw)
-    if ok and type(d) == 'table' and d.site then redis.call('LPUSH', KEYS[2], (d.source or 'link') .. ' ' .. d.site) end
-  end
-  redis.call('DEL', key)
-end
-return #ids
-`
+/** Copy the frontier's size into the Redis stats, which is all /stats and health read. */
+export async function publishSiteCounts(runtime: Pick<Runtime, 'sites' | 'frontier'>): Promise<void> {
+  const c = await runtime.sites.counts()
+  await runtime.frontier.setGauges({ sites: c.known, sites_parked: c.parked })
+}
 
 /**
- * One-off: park waiting site jobs past `keep` (a queue grown before parking existed: 978k
- * waiting jobs were ~600 MB of a 2 GB Redis). The oldest `keep` stay as jobs. Each chunk
- * is newest first, pushed onto the park's head, so the parked surplus ends up oldest first
- * and ahead of sites discovered since.
+ * One-off move of the site frontier from Redis (pitcrawl:pending, then pitcrawl:sites)
+ * into Postgres. Parked sites go first, in order, so the later known-site pass keeps them
+ * parked (ON CONFLICT DO NOTHING); the rest arrive scheduled at their old score.
+ * `drop` unlinks the Redis keys afterwards.
  */
-export async function compactSites(runtime: Runtime, keep: number, log: (line: string) => void = console.log): Promise<number> {
-  const redis = runtime.redis as Redis & { pitcrawlCompact?: (...args: (string | number)[]) => Promise<number> }
-  if (!redis.pitcrawlCompact) redis.defineCommand('pitcrawlCompact', { numberOfKeys: 2, lua: COMPACT })
-  const prefix = `bull:${QUEUES.site}:`
-  let moved = 0
-  for (;;) {
-    const n = Number(await redis.pitcrawlCompact!(`${prefix}wait`, 'pitcrawl:pending', keep, 5_000, prefix))
-    if (!n) return moved
-    moved += n
-    if (moved % 100_000 < n) log(`compact: ${moved} parked`)
+export async function migrateSitesFromRedis(runtime: Runtime, options: { drop?: boolean } = {}, log: (line: string) => void = console.log) {
+  const { redis, sites } = runtime
+  let parked = 0
+  for (let at = 0; ; at += 10_000) {
+    const raw = await redis.lrange('pitcrawl:pending', at, at + 9_999)
+    if (!raw.length) break
+    const rows = raw.flatMap((entry) => {
+      const cut = entry.indexOf(' ')
+      return cut > 0 ? [{ source: entry.slice(0, cut), site: entry.slice(cut + 1), scheduledAt: null }] : []
+    })
+    parked += await sites.load(rows)
   }
+  log(`migrate: ${parked} parked sites loaded`)
+  let known = 0
+  for (let at = 0; ; at += 10_000) {
+    const flat = await redis.zrange('pitcrawl:sites', at, at + 9_999, 'WITHSCORES')
+    if (!flat.length) break
+    const rows: { site: string; source: string; scheduledAt: number }[] = []
+    for (let i = 0; i < flat.length; i += 2) rows.push({ site: flat[i]!, source: 'redis', scheduledAt: Number(flat[i + 1]) })
+    known += await sites.load(rows)
+    if (at % 200_000 === 0) log(`migrate: ${at + rows.length} known sites read`)
+  }
+  const counts = await sites.resync()
+  log(`migrate: ${known} scheduled sites loaded; frontier now ${counts.known} known, ${counts.parked} parked`)
+  if (options.drop) {
+    await redis.unlink('pitcrawl:pending', 'pitcrawl:sites')
+    log('migrate: Redis pitcrawl:pending and pitcrawl:sites unlinked')
+  }
+  return counts
 }
 
 /** Queues, frontier and crawler, without workers: what `seed` and `stats` need. */
@@ -142,9 +139,12 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
   const frontier = new RedisFrontier(redis, config.maxPages, Math.min(config.seenTtlMs, config.recrawlDays * 86_400_000))
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
   const index = new IndexStore(config.indexPath, config.indexMaxBytes)
+  if (!config.databaseUrl) log('CRAWL_DATABASE_URL unset: the site frontier is in memory and forgets every site on restart')
+  const sites: SiteStore = config.databaseUrl ? new PgSiteStore(config.databaseUrl) : new MemorySiteStore()
   const crawler = createCrawler({
     config,
     frontier,
+    sites,
     renderer: pool,
     index,
     // A feed submitted at pit.world/submit is offered to the RSS directory as well.
@@ -158,14 +158,13 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     log,
     enqueue: {
       async sites(jobs: SiteJob[]) {
-        // A deep site queue takes no more jobs: discovery finds sites far faster than they
-        // are read, and ~600 B a waiting job filled Redis long before the frontier was big.
-        // `first` sites always go straight in; the rest wait parked, in order.
-        const deep = (await queues.site.getWaitingCount()) >= config.siteQueueHigh
-        const now = deep ? jobs.filter((j) => j.first) : jobs
-        if (deep) await frontier.park(jobs.filter((j) => !j.first).map(parkEntry))
         // LIFO puts a `first` site at the head of the waiting list, ahead of a big seed.
-        await addInChunks(now, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data, ...(data.first ? { opts: { lifo: true } } : {}) }))))
+        await addInChunks(jobs, (chunk) => queues.site.addBulk(chunk.map((data) => ({ name: 'site', data, ...(data.first ? { opts: { lifo: true } } : {}) }))))
+      },
+      // Discovery finds sites far faster than they are read; past this many waiting jobs
+      // new ones stay parked in Postgres and the site gate feeds them in.
+      async sitesDeep() {
+        return (await queues.site.getWaitingCount()) >= config.siteQueueHigh
       },
       async pages(jobs: PageJob[]) {
         await addInChunks(jobs, (chunk) =>
@@ -184,12 +183,14 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
     crawler,
     queues,
     frontier,
+    sites,
     redis,
     index,
     async close() {
       await Promise.all(Object.values(queues).map((q) => q.close()))
       redis.disconnect()
       index.close()
+      await sites.close()
     },
   }
 }
@@ -247,9 +248,11 @@ export async function startWorkers(config: Config, log: (line: string) => void =
       return (c.waiting ?? 0) + (c.prioritized ?? 0) + (c.delayed ?? 0)
     }
     let paused = false
+    let ticks = 0
     gate = setInterval(async () => {
       try {
         await feedParked(runtime, config)
+        if (++ticks % 6 === 1) await publishSiteCounts(runtime)
         const backlog = await pageBacklog()
         if (!paused && backlog > config.maxPageBacklog) {
           paused = true
@@ -301,6 +304,8 @@ export async function startWorkers(config: Config, log: (line: string) => void =
         QUEUES.publish,
         async (job) => {
           if (job.name === 'recrawl') {
+            // Hourly, the counters are made exact again (count(*) is seconds at 100M rows).
+            await runtime.sites.resync().catch((error) => log(`sites resync: ${error instanceof Error ? error.message : error}`))
             const n = await crawler.recrawl()
             if (n) log(`recrawl: ${n} sites due again`)
             return

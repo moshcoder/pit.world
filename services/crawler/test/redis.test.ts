@@ -10,7 +10,8 @@ import { configFromEnv } from '../src/config.ts'
 import { extract } from '../src/extract.ts'
 import { RedisFrontier } from '../src/frontier.ts'
 import { ObscuraClient } from '../src/obscura.ts'
-import { compactSites, connect, createRuntime, feedParked, snapshot } from '../src/queues.ts'
+import { connect, createRuntime, feedParked, migrateSitesFromRedis, publishSiteCounts, snapshot } from '../src/queues.ts'
+import { PgSiteStore } from '../src/site-store.ts'
 
 const REDIS = process.env.CRAWL_TEST_REDIS
 const OBSCURA = process.env.OBSCURA_TEST_URL
@@ -36,7 +37,7 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     expect(await redis.pttl('pitcrawl:seen:race.example')).toBeGreaterThan(50_000)
   })
 
-  test('the site lease spaces requests; sites are scheduled once per cycle', async () => {
+  test('the site lease spaces requests', async () => {
     const frontier = new RedisFrontier(redis, 5, 60_000)
     for (let i = 0; i < 4; i++) await frontier.admit('slow.example', `https://slow.example/${i}`)
     expect(await frontier.lease('slow.example', 2_000)).toEqual({ waitMs: 0, pending: 0 })
@@ -44,9 +45,6 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     expect(busy.waitMs).toBeGreaterThan(1_000)
     // Four admitted, one fetched: three still waiting for their turn.
     expect(busy.pending).toBe(3)
-    const twice = await Promise.all([frontier.noteSite('once.example', 10, 60_000), frontier.noteSite('once.example', 10, 60_000)])
-    expect(twice.filter(Boolean).length).toBe(1)
-    expect(await frontier.noteSite('once.example', 10, 0)).toBe(true)
   })
 
   test('counters land in the hour and the day; the log is newest first and bounded', async () => {
@@ -83,6 +81,8 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
       const enqueue = runtime.queues.page
       await enqueue.addBulk([{ name: 'page', data: page, opts: { jobId: 'p-x', priority: 1 } }])
       await enqueue.addBulk([{ name: 'page', data: page, opts: { jobId: 'p-x', priority: 1 } }])
+      // The site gate copies the frontier's size into the Redis stats every 30 s.
+      await publishSiteCounts(runtime)
       const snap = await snapshot(runtime)
       expect(snap.queues.site?.waiting).toBe(1)
       expect(snap.queues.page?.prioritized).toBe(1)
@@ -92,7 +92,7 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     }
   })
 
-  test('a deep site queue parks new sites in order, feeds them back, and compacts an old queue', async () => {
+  test('a deep site queue parks new sites (in memory without Postgres) and feeds them back in order', async () => {
     await redis.flushdb()
     const config = configFromEnv({ CRAWL_REDIS_URL: REDIS, CRAWL_SITE_QUEUE_HIGH: '4', CRAWL_INDEX_PATH: ':memory:' })
     const runtime = createRuntime(config, () => {})
@@ -100,33 +100,24 @@ describe.skipIf(!REDIS)('on a real Redis', () => {
     try {
       const sites = Array.from({ length: 10 }, (_, i) => `s${i}.example`)
       expect(await runtime.crawler.scheduleSites(sites.slice(0, 6), 'link')).toEqual({ queued: 6, refused: 0 })
-      // The first call saw an empty queue, so all six went in as jobs; now it is deep.
+      // The queue is deep now: the next four are recorded, parked, not queued.
       expect(await runtime.crawler.scheduleSites(sites.slice(6), 'link')).toEqual({ queued: 4, refused: 0 })
+      expect(await runtime.crawler.scheduleSites(sites.slice(6), 'link')).toEqual({ queued: 0, refused: 4 })
       expect(await waiting()).toEqual(sites.slice(0, 6))
-      expect((await snapshot(runtime)).stats.sites_parked).toBe(4)
+      await publishSiteCounts(runtime)
+      expect((await snapshot(runtime)).stats).toMatchObject({ sites: 10, sites_parked: 4 })
       // A `first` site never parks.
       await runtime.crawler.scheduleSites(['vip.example'], 'submit', { first: true })
       expect(await waiting()).toContain('vip.example')
-      // Nothing is fed while the queue is over half its cap.
       expect(await feedParked(runtime, config)).toBe(0)
-
-      // Compaction keeps the oldest `keep` as jobs and parks the rest ahead of what was parked.
-      await redis.del('pitcrawl:pending')
-      await runtime.queues.site.obliterate({ force: true })
-      await runtime.queues.site.addBulk(sites.map((site) => ({ name: 'site', data: { site, source: 'link' } })))
-      expect(await compactSites(runtime, 3, () => {})).toBe(7)
-      expect(await waiting()).toEqual(sites.slice(0, 3))
-      expect(await redis.lrange('pitcrawl:pending', 0, -1)).toEqual(sites.slice(3).map((s) => `link ${s}`))
-
-      // Drained under half: the park refills the queue, oldest first, as plain jobs.
       for (const j of await runtime.queues.site.getWaiting(0, -1)) await j.remove()
       expect(await feedParked(runtime, config)).toBe(4)
-      expect(await waiting()).toEqual(sites.slice(3, 7))
-      expect((await runtime.queues.site.getWaiting(0, 0))[0]?.data).toEqual({ site: 's3.example', source: 'link' })
+      expect(await waiting()).toEqual(sites.slice(6))
     } finally {
       await runtime.close()
     }
   })
+
 })
 
 describe('Obscura over MCP', () => {
@@ -168,4 +159,60 @@ describe('Obscura over MCP', () => {
     expect(doc.internal.length).toBeGreaterThan(10)
     expect(doc.enrichment.words).toBeGreaterThan(200)
   }, 60_000)
+})
+
+const PG = process.env.CRAWL_TEST_PG
+
+describe.skipIf(!PG)('on a real Postgres', () => {
+  test('the site store: new only, parked in order, forced, due again, counted, the limit holds', async () => {
+    const store = new PgSiteStore(PG!)
+    try {
+      await store.add([{ site: 'warm.example', source: 'x' }], false)
+      await (store as unknown as { sql: { unsafe(q: string): Promise<unknown> } }).sql.unsafe('truncate sites; update counts set n = 0')
+      const rows = (names: string[], source = 'link') => names.map((site) => ({ site, source }))
+      expect(await store.add(rows(['a.example', 'b.example', 'a.example', 'q"uote\\.example']), false)).toEqual(['a.example', 'b.example', 'q"uote\\.example'])
+      expect(await store.add(rows(['b.example', 'c.example']), true)).toEqual(['c.example'])
+      expect(await store.resync()).toEqual({ known: 4, parked: 3 })
+      // Concurrent writers: each new site is counted once.
+      const many = Array.from({ length: 50 }, (_, i) => `m${i}.example`)
+      const got = await Promise.all([store.add(rows(many), false), store.add(rows(many), false), store.add(rows(many), false)])
+      expect(got.flat().length).toBe(50)
+      // force: a parked site becomes scheduled, a new one known and scheduled.
+      await store.force(rows(['b.example', 'z.example'], 'submit'))
+      const parked = await store.takeParked(3)
+      expect(parked.map((r) => r.site)).toEqual(['a.example', 'q"uote\\.example', 'm0.example'])
+      const exact = await store.resync()
+      expect(exact).toEqual({ known: 55, parked: 49 })
+      // The counters agree with the exact count after concurrent adds, a force and a take.
+      expect(await store.counts()).toEqual(exact)
+      expect(await store.takeDue(60_000, 10)).toEqual([])
+      expect((await store.takeDue(0, 100)).length).toBe(6)
+    } finally {
+      await store.close()
+    }
+  })
+
+  test.skipIf(!REDIS)('the Redis frontier moves into Postgres: parked stay parked and in order, the rest scheduled', async () => {
+    const redis = connect(REDIS!)
+    await redis.flushdb()
+    const runtime = createRuntime(configFromEnv({ CRAWL_REDIS_URL: REDIS, CRAWL_DATABASE_URL: PG, CRAWL_INDEX_PATH: ':memory:' }), () => {})
+    try {
+      await runtime.sites.add([{ site: 'warm.example', source: 'x' }], false)
+      await (runtime.sites as unknown as { sql: { unsafe(q: string): Promise<unknown> } }).sql.unsafe('truncate sites; update counts set n = 0')
+      const old = Date.now() - 40 * 86_400_000
+      await redis.zadd('pitcrawl:sites', old, 'done.example', Date.now(), 'p1.example', Date.now(), 'p2.example')
+      await redis.rpush('pitcrawl:pending', 'rssamplifier p1.example', 'link p2.example')
+      expect(await migrateSitesFromRedis(runtime, { drop: true }, () => {})).toEqual({ known: 3, parked: 2 })
+      expect(await redis.exists('pitcrawl:sites', 'pitcrawl:pending')).toBe(0)
+      expect(await runtime.sites.takeParked(5)).toEqual([
+        { site: 'p1.example', source: 'rssamplifier' },
+        { site: 'p2.example', source: 'link' },
+      ])
+      expect(await runtime.sites.takeDue(30 * 86_400_000, 10)).toEqual(['done.example'])
+    } finally {
+      await runtime.close()
+      await redis.flushdb()
+      redis.disconnect()
+    }
+  })
 })
