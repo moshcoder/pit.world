@@ -224,12 +224,14 @@ export class PgIndexStore implements SearchIndex {
 
   private async meta(key: string): Promise<number | null> {
     await this.init()
+    // threatcrush-disable-next-line sql-template-interpolation  Bun's sql tagged template binds ${} as parameters; nothing is concatenated
     const rows = (await this.sql`select n from index_meta where k = ${key}`) as { n: string | number }[]
     return rows.length ? Number(rows[0]!.n) : null
   }
 
   private async setMeta(key: string, value: number): Promise<void> {
     await this.init()
+    // threatcrush-disable-next-line sql-template-interpolation  Bun's sql tagged template binds ${} as parameters; nothing is concatenated
     await this.sql`insert into index_meta (k, n) values (${key}, ${value}) on conflict (k) do update set n = excluded.n`
   }
 
@@ -366,6 +368,7 @@ export class PgIndexStore implements SearchIndex {
   async setCursor(key: string, value: number | null): Promise<void> {
     if (value === null) {
       await this.init()
+      // threatcrush-disable-next-line sql-template-interpolation  Bun's sql tagged template binds ${} as parameters; nothing is concatenated
       await this.sql`delete from index_meta where k = ${key}`
     } else await this.setMeta(key, value)
   }
@@ -669,6 +672,7 @@ export class PgIndexStore implements SearchIndex {
 
   async unknownPagesOf(site: string): Promise<PolicyRow[]> {
     await this.init()
+    // threatcrush-disable-next-line sql-template-interpolation  Bun's sql tagged template binds ${} as parameters; nothing is concatenated
     const rows = (await this.sql`select pp.id, p.url from page_policy pp join pages p on p.id = pp.id where pp.site = ${site} and pp.train is null`) as Array<{ id: string | number; url: string }>
     return rows.map((r) => ({ id: Number(r.id), url: r.url }))
   }
@@ -688,8 +692,8 @@ export class PgIndexStore implements SearchIndex {
   async setCard(url: string, image: string | null, price: string | null): Promise<void> {
     if (Buffer.byteLength(url) > MAX_URL_BYTES) return
     await this.init()
-    await this
-      .sql`insert into page_cards (url, image, price) values (${clean(url)}, ${cleanOrNull(image)}, ${cleanOrNull(price)}) on conflict (url) do update set image = excluded.image, price = excluded.price`
+    // threatcrush-disable-next-line sql-template-interpolation  Bun's sql tagged template binds ${} as parameters; nothing is concatenated
+    await this.sql`insert into page_cards (url, image, price) values (${clean(url)}, ${cleanOrNull(image)}, ${cleanOrNull(price)}) on conflict (url) do update set image = excluded.image, price = excluded.price`
   }
 
   /** Cards for these pages. A page absent from the map has never been looked at. */
@@ -697,6 +701,7 @@ export class PgIndexStore implements SearchIndex {
     const out = new Map<string, { image: string | null; price: string | null }>()
     if (!urls.length) return out
     await this.init()
+    // threatcrush-disable-next-line sql-template-interpolation  Bun's sql tagged template binds ${} as parameters; nothing is concatenated
     const rows = (await this.sql`select url, image, price from page_cards where url = any(${pgArray(urls.map(clean))}::text[])`) as Array<{ url: string; image: string | null; price: string | null }>
     for (const r of rows) out.set(r.url, { image: r.image, price: r.price })
     return out
