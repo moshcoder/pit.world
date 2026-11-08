@@ -142,7 +142,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
   const pool = config.obscuraUrls.length ? new ObscuraPool(config.obscuraUrls, config.obscuraToken) : null
   const index = openIndex(config)
   if (!config.databaseUrl) log('CRAWL_DATABASE_URL unset: the site frontier is in memory and forgets every site on restart')
-  const sites: SiteStore = config.databaseUrl ? new PgSiteStore(config.databaseUrl) : new MemorySiteStore()
+  const sites: SiteStore = config.databaseUrl ? new PgSiteStore(config.databaseUrl, config.databasePool) : new MemorySiteStore()
   // Only a publishing process writes the archive; a fetch-only worker never opens it.
   const archive = config.archiveDir && config.roles.includes('publish') ? new PageArchive(config.archiveDir) : null
   const crawler = createCrawler({
@@ -241,7 +241,7 @@ export async function startWorkers(config: Config, log: (line: string) => void =
           if (!out.delayMs) log(`site ${job.data.site}: ${out.outcome}, ${out.admitted} pages queued`)
           return out
         }),
-      { ...common, connection: workerConnection(), concurrency: Math.max(2, Math.ceil(config.concurrency / 4)) },
+      { ...common, connection: workerConnection(), concurrency: config.siteConcurrency },
     )
     workers.push(siteWorker)
     // Backpressure without losing places: a site job delayed for the page backlog came
