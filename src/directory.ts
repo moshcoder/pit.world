@@ -331,8 +331,9 @@ export class Directory {
       .map((host) => {
         const meta = this.state.meta[host]
         const ring = ringAbout(host)
-        const name = displayName(host, meta?.title ?? '')
-        const raw = ring?.about || meta?.description || meta?.title || ''
+        const name = displayName(host, decode(meta?.title ?? ''))
+        // Decoded again here: titles saved by an older parser may still carry entities.
+        const raw = ring?.about || decode(meta?.description || meta?.title || '')
         // A site whose only metadata is its own name has nothing to add after the link.
         const about = raw.toLowerCase() === name.toLowerCase() || raw.toLowerCase() === host ? '' : raw
         return {
