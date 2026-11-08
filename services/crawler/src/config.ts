@@ -68,6 +68,10 @@ export type Config = {
   databaseUrl: string
   /** Past this many waiting site jobs, newly scheduled sites are parked compactly and fed in as the queue drains. */
   siteQueueHigh: number
+  /** Site starts at once in a site-role process. Mostly waiting on politeness gaps, not CPU. */
+  siteConcurrency: number
+  /** Postgres connections per process for the site frontier (the pitcrawl role is capped). */
+  databasePool: number
   /** Records waiting for nichedb beyond this are dropped oldest first. */
   outboxMax: number
   /** Page reads pause while more records than this wait to be published: crawl at the pace the index absorbs. */
@@ -127,6 +131,10 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     maxSites: num(env.CRAWL_MAX_SITES, 100_000_000, 1),
     databaseUrl: env.CRAWL_DATABASE_URL ?? '',
     siteQueueHigh: num(env.CRAWL_SITE_QUEUE_HIGH, 50_000, 1),
+    siteConcurrency: num(env.CRAWL_SITE_CONCURRENCY, Math.max(2, Math.ceil(num(env.CRAWL_CONCURRENCY, 16, 1) / 4)), 1),
+    // 8 a process held 70 idle connections across 11 processes and the 12th could not
+    // connect, so its site starts hung (2026-11-08). Each process needs only a few.
+    databasePool: num(env.CRAWL_DATABASE_POOL, 3, 1),
     seenTtlMs: num(env.CRAWL_SEEN_TTL_HOURS, 72, 1) * 3_600_000,
     maxPageBacklog: num(env.CRAWL_MAX_PAGE_BACKLOG, 50_000, 1),
     outboxMax: num(env.CRAWL_OUTBOX_MAX, 200_000, 1),
