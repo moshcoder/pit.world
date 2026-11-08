@@ -463,3 +463,26 @@ body.has-mini-player { padding-bottom: 72px; }
 /* /settings */
 .settings select { padding: 8px 10px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; }
 .settings .saved { margin-left: 10px; font: 13px var(--mono); color: var(--accent); }
+
+/* /directory: the pit.world Directory, filed the way the 90s web was */
+.dir-search { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 16px 0 20px; }
+.dir-search input { flex: 1 1 220px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--text); font: inherit; }
+.dir-search button { padding: 8px 14px; border: 0; border-radius: 6px; background: var(--accent); color: var(--accent-ink); font: inherit; font-weight: 700; cursor: pointer; }
+.dir-cats { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr)); gap: 4px 28px; margin: 8px 0 24px; }
+.dir-cats section { padding: 6px 0; }
+.dir-cats h2 { margin: 0; font-size: 1.1rem; }
+.dir-cats h2 a { text-decoration: underline; }
+.dir-cats h2 small { color: var(--muted); font-weight: 400; font-size: .85rem; }
+.dir-cats p { margin: 2px 0 0; font-size: .9rem; color: var(--muted); }
+.dir-crumbs { font-size: .9rem; color: var(--muted); margin: 0 0 4px; }
+.dir-subs { columns: 2 220px; padding-left: 18px; }
+.dir-subs li { margin: 3px 0; break-inside: avoid; }
+.dir-sites { padding-left: 18px; }
+.dir-sites li { margin: 8px 0; line-height: 1.45; }
+.dir-sites li > a:first-child { font-weight: 700; }
+.dir-host { display: block; font-family: var(--mono); font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.dir-also { display: block; font-size: .8rem; color: var(--muted); }
+.dir-new { display: inline-block; padding: 0 4px; background: #ffd400; color: #b00000; font: italic 700 .7rem/1.4 var(--sans); border-radius: 2px; vertical-align: 1px; }
+.dir-cool { color: var(--accent); }
+.dir-legend { font-size: .85rem; color: var(--muted); margin-top: 24px; }
+.dir-related { margin-top: 18px; font-size: .9rem; }

@@ -176,7 +176,7 @@ function networkPanel(stats: NetworkStats | null): string {
   return `<section id="moshpit" class="network">
   <p class="kicker">The Moshpit network</p>
   <h2>The internet ICANN didn't sell you.</h2>
-  <p class="why"><a href="/why">Why we built it: ICANN doesn't scale for the agentic web →</a></p>
+  <p class="why"><a href="/why">Why we built it: ICANN doesn't scale for the agentic web →</a> · <a href="/directory">Browse the pit.world Directory →</a></p>
   <p class="lede">Moshpit is a namespace that lives beside the old one. Anyone can claim an ending like <code>.hacker</code>, <code>.eggs</code> or <code>.pit</code>, put names under it, and point them anywhere. The registry is open and append-only, its log is public, and it signs real certificates, so <code>https://chovy.hacker</code> is a working site for everyone on the network. pit.world searches both worlds.</p>
   ${numbers}
   <div class="steps">
@@ -1572,7 +1572,7 @@ export function ringPage(options: { mirror?: { ok: boolean; at: number; missing:
     path: '/ring',
     body: `<h1>The pit.world ring</h1>
 <p class="lede">${sites.length} sites, linked the old way: each member carries the same links, to the one before it, the one after it, and a random one. It is for *.pit.world sites only: pit.world's own subdomains and Moshpit names, which pit.world relays at <code>&lt;name&gt;.pit.world</code>. A Moshpit site that claims its listing joins automatically, so this is also the quickest way to look around the sites on pit.world.</p>
-<p class="row"><a class="btn" href="/ring/random">Visit a random site</a> <a href="/pros">Browse the pro directory</a> <a href="${RSS_RING}" rel="noreferrer noopener">The ring's feeds on rssamplifier.com</a></p>
+<p class="row"><a class="btn" href="/ring/random">Visit a random site</a> <a href="/directory">Every *.pit.world site, by category</a> <a href="/pros">Browse the pro directory</a> <a href="${RSS_RING}" rel="noreferrer noopener">The ring's feeds on rssamplifier.com</a></p>
 <ul class="ring-list">${rows}</ul>
 <h2>No Moshpit DNS? Still works.</h2>
 <p>A name like <code>seo.rank</code> only opens for a visitor on Moshpit DNS. When a member site cannot tell that you are, the bar links to <code>https://&lt;name&gt;.pit.world/</code> instead: the whole site, relayed by pit.world on an ordinary address that opens in any browser. <a href="/connect">Get on Moshpit DNS</a> and the links go straight to the site.</p>
