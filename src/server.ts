@@ -157,7 +157,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC}; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com ${FIXED_FRAME_HOSTS.join(' ')}; media-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
+    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC} https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com ${FIXED_FRAME_HOSTS.join(' ')}; media-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
