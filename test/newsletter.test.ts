@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'bun:test'
 import { main } from '../src/cli.ts'
 import { PitClient } from '../src/client.ts'
-import { adminAuthorized, Newsletter, normalizeEmail, normalizeSource, resendMailer, type Mailer } from '../src/newsletter.ts'
+import { adminAuthorized, Newsletter, newsletterAudience, normalizeEmail, normalizeSource, resendMailer, type Mailer } from '../src/newsletter.ts'
+
+// The cross-promo block reads its bundled catalog, never the CDN, in tests.
+process.env.CROSS_PROMO = 'bundled'
 import { createApp } from '../src/server.ts'
 
 function harness(options: { mxOk?: boolean; mailFails?: boolean; now?: () => number } = {}) {
-  const sent: Array<{ to: string; subject: string; text: string; from?: string }> = []
+  const sent: Array<{ to: string; subject: string; text: string; html: string; from?: string }> = []
   const mailer: Mailer = async (m) => {
     if (options.mailFails) throw new Error('provider down')
     sent.push(m)
@@ -94,6 +97,31 @@ describe('newsletter', () => {
     // pit.world's own signups keep pit.world copy.
     await form({ email: 'pit@example.com' })
     expect(sent[2]!.subject).toBe('Confirm your pit.world newsletter signup')
+  })
+
+  it('ends the confirmation with the network cross-promo block, never promoting the property signed up on', async () => {
+    const { sent, form } = harness()
+    await form({ email: 'reader@example.com', site: 'rssamplifier.com' })
+    const mail = sent[0]!
+    expect(mail.text).toContain('More from the Profullstack network:')
+    expect(mail.html).toContain('More from the Profullstack network')
+    expect(mail.text).toContain('https://mynaposter.com')
+    // The confirm link stays above the block.
+    expect(mail.text.indexOf('Confirm:')).toBeLessThan(mail.text.indexOf('More from the Profullstack network'))
+    expect(mail.text).not.toContain('https://rssamp.com')
+    expect(mail.html).not.toContain('href="https://rssamp.com')
+    expect(mail.text).toContain('utm_source=rssamplifier.com')
+
+    await form({ email: 'dev@example.com', site: 'bufferoverride.com' })
+    expect(sent[1]!.text).toContain('https://logicsrc.com')
+    expect(sent[1]!.text).not.toContain('https://bufferoverride.com')
+  })
+
+  it('picks the promo audience from the property a reader signed up on', () => {
+    expect(newsletterAudience('pit.world')).toBe('developers')
+    expect(newsletterAudience('auctions.pit.world')).toBe('developers')
+    expect(newsletterAudience('hqterm.sh')).toBe('developers')
+    expect(newsletterAudience('ugig.net')).toEqual(['publishers', 'makers'])
   })
 
   it('normalizes properties to bare hostnames and refuses junk', () => {

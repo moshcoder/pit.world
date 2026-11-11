@@ -18,6 +18,7 @@ import { resolveMx } from 'node:dns/promises'
 import { mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { onPit } from './footer.js'
+import { bundled as promoCatalog, hostOf as promoHost, promoBlock } from '@profullstack/cross-promo'
 
 const PENDING_TTL_MS = 48 * 3600 * 1000
 const FROM = 'pit.world <hello@pit.world>'
@@ -94,6 +95,17 @@ const HTML_ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;
 const escHtml = (v: string) => v.replace(/[&<>"']/g, (c) => HTML_ESC[c]!)
 const hash = (token: string) => createHash('sha256').update(token).digest('hex')
 
+/**
+ * Who a newsletter reader is, for the cross-promo block in the confirmation email. A reader is not a
+ * publisher or a maker by default, so: readers of a developer property (the catalog's own developers
+ * list) and of pit.world / Moshpit names (a search engine and DNS network for hackers) see the developer
+ * tools; everyone else sees the publishing and listing sites most of the network is made of.
+ */
+export function newsletterAudience(source: string): string | string[] {
+  const host = promoHost(source)
+  return onPit(source) || (promoCatalog.audiences.developers ?? []).includes(host) ? 'developers' : ['publishers', 'makers']
+}
+
 export type SignupResult = 'sent' | 'invalid' | 'undeliverable' | 'already' | 'failed'
 export type PropertyCount = { source: string; confirmed: number; pending: number }
 export type SubscriberRow = { email: string; confirmed_at: number; source: string; sources: string[] }
@@ -154,13 +166,15 @@ export class Newsletter {
       ? `This address is already on ${brand.list}. Someone (hopefully you) signed up again${via}; confirm to note it, or ignore this.`
       : `Someone (hopefully you) asked to get ${brand.list} at this address${via}.`
     const tail = brand.pit ? 'pit.world: private search, and the doorway to the Moshpit network.' : 'Profullstack: the network of sites at profullstack.com/list.'
+    // The property the signup came from is the sender here, so it never promotes itself. Never throws.
+    const promo = await promoBlock({ site: source, audience: newsletterAudience(source), seed: email, title: 'More from the Profullstack network' })
     try {
       await this.mailer({
         to: email,
         from: brand.from,
         subject: already ? `You're already on ${brand.list}` : `Confirm your ${brand.name} newsletter signup`,
-        text: `${lead}\n\nConfirm: ${link}\n\nIf it wasn't you, ignore this email: without a click, nothing changes and the link expires in 48 hours.\n\n${tail}`,
-        html: `<p>${escHtml(lead)}</p><p><a href="${link}">Confirm my signup</a></p><p>If it wasn't you, ignore this email: without a click, nothing changes and the link expires in 48 hours.</p><p>${escHtml(tail)}</p>`,
+        text: `${lead}\n\nConfirm: ${link}\n\nIf it wasn't you, ignore this email: without a click, nothing changes and the link expires in 48 hours.\n\n${tail}${promo.text ? `\n\n${promo.text}` : ''}`,
+        html: `<p>${escHtml(lead)}</p><p><a href="${link}">Confirm my signup</a></p><p>If it wasn't you, ignore this email: without a click, nothing changes and the link expires in 48 hours.</p><p>${escHtml(tail)}</p>${promo.html}`,
       })
       return already ? 'already' : 'sent'
     } catch {
