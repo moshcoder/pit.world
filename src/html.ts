@@ -139,7 +139,7 @@ ${options.head ?? ''}<link rel="stylesheet" href="${ringFooterCssUrl()}">
 <link rel="stylesheet" href="${STYLE_URL}">
 <script src="${APP_URL}" defer></script>
 ${options.track === false ? '' : `<script data-site="${TRACKER_SITE}" src="https://crawlproof.com/stats.js" async></script>`}
-<script type="module" data-webmcp src="https://cdn.jsdelivr.net/npm/@profullstack/webmcp@0/src/embed.js" data-search-api="/api/search?q={query}&amp;n={limit}" data-pages="{&quot;directory&quot;:&quot;/directory&quot;,&quot;mcp_servers&quot;:&quot;/mcps&quot;,&quot;about&quot;:&quot;/about&quot;,&quot;why&quot;:&quot;/why&quot;,&quot;blog&quot;:&quot;/b&quot;}"></script>
+<script type="module" data-webmcp src="/pf-webmcp.js" data-search-api="/api/search?q={query}&amp;n={limit}" data-pages="{&quot;directory&quot;:&quot;/directory&quot;,&quot;mcp_servers&quot;:&quot;/mcps&quot;,&quot;about&quot;:&quot;/about&quot;,&quot;why&quot;:&quot;/why&quot;,&quot;blog&quot;:&quot;/b&quot;}"></script>
 </head>
 <body class="${options.bodyClass ?? ''}">
 ${ringBar('pit.world', false)}

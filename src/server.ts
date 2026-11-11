@@ -71,6 +71,7 @@ import { ReaderHealth } from './reader-health.js'
 import { Engagement } from './engagement.js'
 import { VoteRewards } from './vote-rewards.js'
 import { playerCss, playerJs } from './player-bundle.js'
+import { webmcpJs } from './webmcp-bundle.js'
 import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-routes.js'
 import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
@@ -157,7 +158,7 @@ type Env = { Bindings: { ip?: string } }
 
 const SECURITY_HEADERS: Record<string, string> = {
   'content-security-policy':
-    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC} https://cdn.jsdelivr.net; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com ${FIXED_FRAME_HOSTS.join(' ')}; media-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
+    `default-src 'none'; script-src 'self' https://crawlproof.com ${FOOTER_SCRIPT_SRC}; style-src 'self'; img-src 'self' data: https://built.indie.pit.world https://pwamart.com https://profullstack.com https://logicsrc.com; connect-src 'self' https://pit.world https://crawlproof.com; frame-src https://crawlproof.com ${FIXED_FRAME_HOSTS.join(' ')}; media-src 'self'; manifest-src 'self'; form-action 'self' https:; base-uri 'none'; frame-ancestors 'none'`,
   'referrer-policy': 'no-referrer',
   'x-content-type-options': 'nosniff',
   'permissions-policy': 'interest-cohort=(), browsing-topics=(), camera=(), microphone=(), geolocation=()',
@@ -1175,6 +1176,15 @@ export function createApp(deps: Deps) {
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error))
       return c.text('player unavailable', 503)
+    }
+  })
+  // @profullstack/webmcp, bundled once on first use (src/webmcp-bundle.ts); every page loads it.
+  app.get('/pf-webmcp.js', async (c) => {
+    try {
+      return c.body(await webmcpJs(), 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=3600' })
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      return c.text('webmcp unavailable', 503)
     }
   })
   app.get('/pf-player.css', (c) => c.body(playerCss(), 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' }))
