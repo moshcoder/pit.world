@@ -71,6 +71,7 @@ import { ReaderHealth } from './reader-health.js'
 import { Engagement } from './engagement.js'
 import { VoteRewards } from './vote-rewards.js'
 import { playerCss, playerJs } from './player-bundle.js'
+import { webmcpJs } from './webmcp-bundle.js'
 import { accountOf, mountVoteHistory, voteHistorySection } from './vote-history-routes.js'
 import { fingerprintSecret, VisitorGate, type WriteAction } from './visitor.js'
 import { itemsOf, type VoteView } from './vote-html.js'
@@ -1175,6 +1176,15 @@ export function createApp(deps: Deps) {
     } catch (error) {
       console.error(error instanceof Error ? error.message : String(error))
       return c.text('player unavailable', 503)
+    }
+  })
+  // @profullstack/webmcp, bundled once on first use (src/webmcp-bundle.ts); every page loads it.
+  app.get('/pf-webmcp.js', async (c) => {
+    try {
+      return c.body(await webmcpJs(), 200, { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=3600' })
+    } catch (error) {
+      console.error(error instanceof Error ? error.message : String(error))
+      return c.text('webmcp unavailable', 503)
     }
   })
   app.get('/pf-player.css', (c) => c.body(playerCss(), 200, { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' }))

@@ -17,6 +17,7 @@
         "@profullstack/redeem-credits": "0.1.0",
         "@profullstack/submit-feed": "0.1.3",
         "@profullstack/throttle": "0.4.1",
+        "@profullstack/webmcp": "0.1.0",
         "@profullstack/x402-gateway": "^0.16.0",
         "franc-min": "^6.2.0",
         "hono": "^4.13.14",
@@ -89,6 +90,8 @@
     "@profullstack/submit-feed": ["@profullstack/submit-feed@0.1.3", "", { "dependencies": { "fast-xml-parser": "^5.2.5" } }, "sha512-RMH294Q1qFJ6L01pU5q/yowshx1Xpu4gfGC2OuNaxyZ5jySqM9FvgqvVuWH+G18711SqzNq+DL8dvbAaBgBIvA=="],
 
     "@profullstack/throttle": ["@profullstack/throttle@0.4.1", "", { "dependencies": { "@profullstack/x402-gateway": "^0.6.0 || ^0.7.0 || ^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0 || ^0.14.0 || ^0.15.0 || ^0.16.0" } }, "sha512-ffY49nQ20/ZXyp/LVh/LxXTKJozqxyggBhjt9rRGz/JCC30IKFaqN2UmNwThm721r0rgQnhikpHNOb5EqzU9kw=="],
+
+    "@profullstack/webmcp": ["@profullstack/webmcp@0.1.0", "", { "peerDependencies": { "react": ">=18" }, "optionalPeers": ["react"], "bin": { "webmcp": "bin/webmcp.js" } }, "sha512-HLIKA9BTctjL7NRNUEqXukC/Vt3da/6cxcQoTYJWMaIeus6Pw0i76J0FEdWKZru0K/BnGTxBPCZh+xxUjtWm4g=="],
 
     "@profullstack/x402-gateway": ["@profullstack/x402-gateway@0.16.0", "", { "dependencies": { "@profullstack/keys": "^0.1.0" } }, "sha512-3xN7vlGXmoqdexR7NNAIExZLtYvE5M8nR9fqr7kwLK/xks06lUiymEsjZOc2wCbowfnCVNiZBOe98rvsCE9Mgw=="],
 
