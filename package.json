@@ -38,6 +38,7 @@
     "@profullstack/affiliates": "0.2.0",
     "@profullstack/bridges": "0.2.0",
     "@profullstack/browser-fingerprint": "0.1.0",
+    "@profullstack/cross-promo": "0.1.0",
     "@profullstack/footer": "0.6.16",
     "@profullstack/form-guard": "0.3.0",
     "@profullstack/hqtui": "^0.11.0",

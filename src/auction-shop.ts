@@ -13,6 +13,7 @@ import { createHmac, randomBytes, randomUUID, timingSafeEqual, createHash } from
 import type { Database } from 'bun:sqlite'
 import type { Hono, Context } from 'hono'
 import type { Mailer } from './newsletter.js'
+import { promoBlock } from '@profullstack/cross-promo'
 import { RateLimiter } from './ratelimit.js'
 
 export type ShopTopic = 'dahlias' | 'mums' | 'roses' | 'other'
@@ -296,11 +297,13 @@ export class AuctionShop {
     return response.json()
   }
 
-  private async mail(to: string, subject: string, text: string) {
+  /** `promo`: a cross-promo block appended after the message (text after a blank line, html after the body). */
+  private async mail(to: string, subject: string, text: string, promo?: { text: string; html: string }) {
     const mailer = this.cfg?.mailer
     if (!mailer || !to) return
-    const html = `<pre style="font:14px/1.5 ui-monospace,monospace;white-space:pre-wrap">${text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)}</pre>`
-    await mailer({ to, subject, text, html }).catch(() => console.error('Shop email failed'))
+    const html = `<pre style="font:14px/1.5 ui-monospace,monospace;white-space:pre-wrap">${text.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!)}</pre>${promo?.html ?? ''}`
+    const body = promo?.text ? `${text}\n\n${promo.text}` : text
+    await mailer({ to, subject, text: body, html }).catch(() => console.error('Shop email failed'))
   }
 
   /** Mark an order paid exactly once, then tell the owner what to buy and where to ship it. */
@@ -311,7 +314,9 @@ export class AuctionShop {
     const address = [order.name, order.address1, order.address2, `${order.city}, ${order.state} ${order.zip}`].filter(Boolean).join('\n')
     await this.mail(this.cfg?.notifyTo ?? '', `PLACE ORDER: ${item?.name ?? order.item_slug} ($${order.amount_usd} paid)`,
       `A shop order is paid. Buy it from the supplier and ship it to the buyer.\n\nItem: ${item?.name ?? order.item_slug}\nSupplier: ${item?.supplier.name ?? '?'} — ${item?.supplier.title ?? ''}\nBuy here: ${item?.supplier.url ?? '?'}\nOur cost: $${item ? (item.supplier.costUsd + item.supplier.shippingUsd).toFixed(2) : '?'}  Paid: $${order.amount_usd}\n\nShip to:\n${address}\n\nBuyer email: ${order.email}${order.note ? `\nNote: ${order.note}` : ''}\n\nThen mark it placed and shipped: https://auctions.pit.world/shop/admin (order ${order.id})`)
-    await this.mail(order.email, `Payment received: ${item?.name ?? 'your order'}`, `Your payment of $${order.amount_usd} is confirmed. We are placing your order with the grower now and will email the tracking number when it ships.\n\nOrder status: https://auctions.pit.world/shop/order/${order.id}?k=${order.view_key}`)
+    // Only the buyer's receipt carries the cross-promo block (never the owner's PLACE ORDER mail). Never throws.
+    const promo = await promoBlock({ site: 'auctions.pit.world', audience: 'shoppers', seed: order.email })
+    await this.mail(order.email, `Payment received: ${item?.name ?? 'your order'}`, `Your payment of $${order.amount_usd} is confirmed. We are placing your order with the grower now and will email the tracking number when it ships.\n\nOrder status: https://auctions.pit.world/shop/order/${order.id}?k=${order.view_key}`, promo)
   }
 
   async tick() {

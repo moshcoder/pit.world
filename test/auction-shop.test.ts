@@ -4,6 +4,9 @@ import { AuctionShop, retailUsd, type ShopItem } from '../src/auction-shop.js'
 import { createHmac } from 'node:crypto'
 import { SHOP_CATALOG } from '../src/shop-catalog.js'
 
+// The cross-promo block reads its bundled catalog, never the CDN, in tests.
+process.env.CROSS_PROMO = 'bundled'
+
 const item: ShopItem = {
   slug: 'cafe-au-lait-dahlia', topic: 'dahlias', name: 'Café au Lait dahlia tuber', blurb: 'Dinner-plate blooms in blush and cream.', priceUsd: 99,
   supplier: { name: 'grower', url: 'https://www.ebay.com/itm/1', title: 'Cafe au lait tuber', costUsd: 14, shippingUsd: 6, shipsFrom: 'Salem, OR' }, season: 'Ships in spring',
@@ -43,7 +46,7 @@ describe('Art Auctions flower shop', () => {
   it('sells, waits for a verified payment, notifies, and ships', async () => {
     const house = new AuctionHouse()
     const pay = fakePayAgent()
-    const mail: { to: string; subject: string; text: string }[] = []
+    const mail: { to: string; subject: string; text: string; html: string }[] = []
     const shop = new AuctionShop(house.db, [item], { payAgentUrl: 'https://pay.agent.test', key: 'pa_test', fetch: pay.fetch, notifyTo: 'owner@example.com', mailer: async (m) => { mail.push(m) } })
     const app = createAuctionApp(house, { shop, adminToken: 'admin-secret' })
 
@@ -72,6 +75,16 @@ describe('Art Auctions flower shop', () => {
     expect(placeOrder[0]!.to).toBe('owner@example.com')
     expect(placeOrder[0]!.text).toContain('https://www.ebay.com/itm/1')
     expect(placeOrder[0]!.text).toContain('Capitola, CA 95010')
+    // Only the buyer's receipt carries the cross-promo block, and never promotes the shop itself.
+    expect(placeOrder[0]!.text).not.toContain('You might also like')
+    const receipt = mail.find((m) => m.subject.startsWith('Payment received'))!
+    expect(receipt.to).toBe('buyer@example.com')
+    expect(receipt.text).toContain('You might also like:')
+    expect(receipt.text).toContain('https://pwamart.com')
+    expect(receipt.html).toContain('You might also like')
+    expect(receipt.text).not.toMatch(/https:\/\/auctions\.pit\.world\/?\?utm/)
+    expect(receipt.text.indexOf('Order status:')).toBeLessThan(receipt.text.indexOf('You might also like'))
+    expect(mail.filter((m) => m.subject.startsWith('Your order')).every((m) => !m.text.includes('You might also like'))).toBe(true)
 
     expect((await app.fetch(new Request(`https://auctions.pit.world/shop/order/${saved!.id}?k=wrong`))).status).toBe(404)
     const status = await (await app.fetch(new Request(`https://auctions.pit.world/shop/order/${saved!.id}?k=${saved!.view_key}`))).text()
