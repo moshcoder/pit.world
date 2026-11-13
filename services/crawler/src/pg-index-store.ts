@@ -37,6 +37,7 @@ import {
   type SearchIndex,
   TOTAL_CAP,
   toFtsTerms,
+  withoutStopwords,
   type TrimOptions,
   type TrimResult,
 } from './index-store.ts'
@@ -47,6 +48,15 @@ const SEARCH_SCAN = 3_000
 const KIND_SCAN = 8_000
 /** Each search query's own limit; the AND query and the OR fallback together stay inside pit.world's 2.5 s. */
 const SEARCH_TIMEOUT_MS = 1_100
+/**
+ * Searches get their own connections, this many, and never wait for one. Postgres does not always
+ * honour statement_timeout: a GIN scan reading a huge posting list ignores it, and on 2026-11-13 eight
+ * searches ran ~60 s each, filled the shared pool and every later search queued behind them, so
+ * pit.world's index engine hung. Now a busy search pool answers "nothing" at once.
+ */
+const SEARCH_POOL = 3
+/** What a search may take end to end, whatever Postgres does; then it answers "nothing" (pit.world waits 2.5 s). */
+const SEARCH_DEADLINE_MS = 2_000
 /** Longer than any write may run, so an id this old belongs to a committed (or abandoned) row. */
 const WRITE_TIMEOUT_MS = 30_000
 /** A btree entry holds ~2.7 kB; a longer address cannot be keyed, and would fail its whole batch. */
@@ -166,6 +176,10 @@ const isTimeout = (error: unknown) => /statement timeout|canceling statement/i.t
 
 export class PgIndexStore implements SearchIndex {
   private sql: SQL
+  /** Searches only, so a stuck one never takes a writer's connection (SEARCH_POOL). */
+  private searchSql: SQL
+  private readonly searchMax: number
+  private searchesInFlight = 0
   private ready: Promise<void> | null = null
   readonly maxBytes: number
   /** Freed space is reused, never returned: trim() bounds the live pages, see there. */
@@ -177,12 +191,40 @@ export class PgIndexStore implements SearchIndex {
   private statsCache: { at: number; value: Record<string, unknown> } | null = null
   private refreshing: Promise<unknown> | null = null
 
-  constructor(url: string, maxBytes = 0, options: { max?: number; corpusLagMs?: number } = {}) {
+  constructor(url: string, maxBytes = 0, options: { max?: number; corpusLagMs?: number; searchMax?: number; searchDeadlineMs?: number } = {}) {
     this.maxBytes = maxBytes > 0 ? maxBytes : 0
     this.corpusLagMs = Math.max(0, options.corpusLagMs ?? 60_000)
     // prepare: false, so every query is planned with its own values: a generic plan for
     // `fts @@ $1` cannot tell a rare word from a common one.
     this.sql = new SQL({ url, max: options.max ?? 8, idleTimeout: 60, prepare: false })
+    this.searchMax = Math.max(1, options.searchMax ?? SEARCH_POOL)
+    this.searchDeadlineMs = Math.max(1, options.searchDeadlineMs ?? SEARCH_DEADLINE_MS)
+    this.searchSql = new SQL({ url, max: this.searchMax, idleTimeout: 60, prepare: false })
+  }
+
+  private readonly searchDeadlineMs: number
+
+  /**
+   * One search, bounded however Postgres behaves: no free search connection means "nothing" now,
+   * and a search past the deadline answers "nothing" while its query finishes in the background
+   * (its slot stays taken until Postgres lets go, so stuck queries cannot pile up).
+   */
+  private async bounded(work: () => Promise<IndexHit[]>): Promise<IndexHit[]> {
+    if (this.searchesInFlight >= this.searchMax) return []
+    this.searchesInFlight++
+    const job = work().finally(() => {
+      this.searchesInFlight--
+    })
+    job.catch(() => {})
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const late = new Promise<IndexHit[]>((resolve) => {
+      timer = setTimeout(() => resolve([]), this.searchDeadlineMs)
+    })
+    try {
+      return await Promise.race([job, late])
+    } finally {
+      clearTimeout(timer)
+    }
   }
 
   private init() {
@@ -201,9 +243,9 @@ export class PgIndexStore implements SearchIndex {
   }
 
   /** A transaction whose statements each give up after `ms`. */
-  private async timed<T>(ms: number, run: (tx: SQL) => Promise<T>, fullText = false): Promise<T> {
+  private async timed<T>(ms: number, run: (tx: SQL) => Promise<T>, fullText = false, sql: SQL = this.sql): Promise<T> {
     await this.init()
-    return (await this.sql.begin(async (tx: SQL) => {
+    return (await sql.begin(async (tx: SQL) => {
       await tx.unsafe(`set local statement_timeout = ${Math.max(1, Math.trunc(ms))}`)
       if (fullText) await fullTextPlan(tx)
       return run(tx)
@@ -713,9 +755,12 @@ export class PgIndexStore implements SearchIndex {
    * word costs a bounded amount; `score` is negated so lower is better, as bm25 was.
    */
   async search(query: string, limit = 10, kind?: string): Promise<IndexHit[]> {
-    const terms = toFtsTerms(query)
+    const terms = withoutStopwords(toFtsTerms(query))
     if (!terms.length) return []
-    if (kind) return this.searchKind(terms, kind, limit)
+    return this.bounded(() => (kind ? this.searchKind(terms, kind, limit) : this.searchAll(terms, limit)))
+  }
+
+  private async searchAll(terms: string[], limit: number): Promise<IndexHit[]> {
     const k = Math.min(Math.max(1, limit), 50)
     const run = async (q: string) => {
       try {
@@ -737,6 +782,7 @@ export class PgIndexStore implements SearchIndex {
             return rows.map((r) => ({ ...r, score: Number(r.score) }))
           },
           true,
+          this.searchSql,
         )
       } catch (error) {
         // Too slow is no answer, not an error: pit.world has other engines.
@@ -766,6 +812,7 @@ export class PgIndexStore implements SearchIndex {
             order by p.id desc limit 200`) as IndexHit[]
           },
           true,
+          this.searchSql,
         )
       } catch (error) {
         if (isTimeout(error)) return []
@@ -811,6 +858,7 @@ export class PgIndexStore implements SearchIndex {
   async close(): Promise<void> {
     await this.refreshing?.catch(() => {})
     await this.sql.close()
+    await this.searchSql.close()
   }
 }
 

@@ -43,6 +43,22 @@ export type IndexedRecord = {
 /** How many of a word's newest matches a search for one kind of page looks through. */
 const KIND_SCAN = 8_000
 
+/**
+ * Words too common to search on: "the" is in nearly every English page, so asking an index for it
+ * means reading a posting list of millions (2026-11-13, "Join the conversation" held every Postgres
+ * search connection for a minute, and GIN does not stop for statement_timeout while it reads).
+ * Dropped only when other words remain; a search for "the rust" still asks for "rust".
+ */
+const STOPWORDS = new Set(
+  'a an and are as at be but by for from has have he her his i in is it its of on or our she so that the their them they this to was we were what when which who will with you your'.split(' '),
+)
+
+/** FTS terms (as toFtsTerms makes them) without the stopwords, unless that would leave nothing. */
+export function withoutStopwords(terms: string[]): string[] {
+  const kept = terms.filter((t) => !STOPWORDS.has(t.slice(1, -1).replace(/""/g, '"')))
+  return kept.length ? kept : terms
+}
+
 export type IndexHit = { url: string; title: string; summary: string; site: string; kind: string; fetched_at: string; score: number }
 
 /**
@@ -656,7 +672,7 @@ export class IndexStore implements SearchIndex {
 
   /** Best matches: every word if any page has them all, else any word. Title weighs most. `kind` keeps one kind of page. */
   search(query: string, limit = 10, kind?: string): IndexHit[] {
-    const terms = toFtsTerms(query)
+    const terms = withoutStopwords(toFtsTerms(query))
     if (!terms.length) return []
     const run = (match: string) =>
       this.db
