@@ -82,7 +82,7 @@ const playable = (url: string): { player?: Player } => {
   return player ? { player } : {}
 }
 
-export type MediaProvider = 'pit' | 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive' | 'gdelt' | 'itunes' | 'osm'
+export type MediaProvider = 'pit' | 'nichedb' | 'serper' | 'rssamplifier' | 'p0dcasters' | 'openlibrary' | 'openalex' | 'commons' | 'peertube' | 'archive' | 'gdelt' | 'itunes' | 'osm'
 
 export type MediaResult = {
   query: string
@@ -104,6 +104,7 @@ const READ_FOR_LANGUAGE = new Set<Vertical>(['news', 'blogs', 'podcasts', 'video
 /** Where each provider's results come from, as the page says it. */
 export const MEDIA_SOURCES: Record<MediaProvider, string> = {
   pit: 'pit.world index',
+  nichedb: 'the open product graph (nichedb.dev/products: what shops state on their own pages)',
   serper: 'the Google index',
   rssamplifier: 'the RSS Amplifier directory (rssamplifier.com)',
   p0dcasters: 'the p0dcasters.com directory',
@@ -735,6 +736,58 @@ async function askOwnMcps(fetchImpl: Fetch, pit: string, q: string, limit: numbe
   })
 }
 
+/** The nichedb.dev product graph (docs/products.md there): products with every shop's offer, cheapest buyable first. */
+export const PRODUCT_GRAPH = 'https://nichedb.dev/api/v1/products'
+
+export function parseProductGraph(body: any): Array<Media & { offerUrls?: string[] }> {
+  const rows: any[] = Array.isArray(body?.products) ? body.products : []
+  return rows.flatMap((p) => {
+    const offers: any[] = Array.isArray(p?.offers) ? p.offers : []
+    const first = offers[0]
+    const shops = Number(p?.stores) || 1
+    // One shop: straight to its page. Several: the comparison page, so the visitor picks the shop.
+    const url = shops > 1 ? httpUrl(p?.page) : httpUrl(first?.offerUrl)
+    if (!url || !first) return []
+    const price = money(p?.lowPrice ?? first?.price, p?.currency ?? first?.currency)
+    const stock = typeof first?.availability === 'string' ? first.availability.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase() : ''
+    const gtin = typeof p?.gtin === 'string' ? `GTIN ${shortGtin(p.gtin)}` : typeof p?.mpn === 'string' ? `MPN ${p.mpn}` : ''
+    return [
+      {
+        url,
+        title: str(p?.name) || host(url),
+        host: shops > 1 ? `${shops} shops` : str(first?.seller) || str(first?.host) || host(url),
+        thumbnail: httpsUrl(p?.imageUrl),
+        ...(price ? { price: shops > 1 ? `from ${price}` : price } : {}),
+        extra: [str(p?.brand), gtin, stock].filter(Boolean).join(' · ') || undefined,
+        offerUrls: offers.map((o) => str(o?.offerUrl)).filter(Boolean),
+      },
+    ]
+  })
+}
+
+/** A GTIN-14 as printed on the pack: EAN-13, or UPC-A (12) when the EAN starts with 0. */
+const shortGtin = (g: string): string => {
+  let s = g.length === 14 && g.startsWith('0') ? g.slice(1) : g
+  if (s.length === 13 && s.startsWith('0')) s = s.slice(1)
+  return s
+}
+
+const money = (amount: unknown, currency: unknown): string => {
+  const n = typeof amount === 'number' ? amount : Number.NaN
+  if (!Number.isFinite(n)) return ''
+  const code = typeof currency === 'string' && /^[A-Z]{3}$/.test(currency) ? currency : ''
+  try {
+    return code ? new Intl.NumberFormat('en-US', { style: 'currency', currency: code }).format(n) : n.toFixed(2)
+  } catch {
+    return `${code} ${n.toFixed(2)}`.trim()
+  }
+}
+
+async function askProductGraph(fetchImpl: Fetch, q: string, limit: number): Promise<Array<Media & { offerUrls?: string[] }>> {
+  const params = new URLSearchParams({ q, limit: String(Math.min(50, limit)) })
+  return parseProductGraph(await fetchJson(fetchImpl, `${PRODUCT_GRAPH}?${params}`, { headers: OURS }, 2_500))
+}
+
 async function askOwnProducts(fetchImpl: Fetch, pit: string, q: string, limit: number): Promise<Media[]> {
   const [base, apiKey] = pit.split(' ')
   const params = new URLSearchParams({ q, limit: String(limit), kind: 'product' })
@@ -819,7 +872,6 @@ export async function searchMedia(
   const bounds = LIMITS[vertical] ?? { max: 20, default: 10 }
   const limit = Math.min(bounds.max, Math.max(1, options.limit ?? bounds.default))
   const key = keys.serper
-  if (vertical === 'shopping' && !key && !keys.pit) throw new SearchUnavailable('shopping search needs our own index, which is not configured.')
   const lang = options.lang ?? ALL_LANGUAGES
   const asked = lang === ALL_LANGUAGES ? undefined : lang
   const cacheKey = `${vertical}:${limit}:${lang}:${q.toLowerCase()}`
@@ -871,8 +923,15 @@ export async function searchMedia(
       case 'shopping': {
         // Our own index first: pages pitbot read and the shop itself marked as products. Google
         // only when we have nothing, and an empty page, never an error, when it cannot answer.
-        const own = keys.pit ? await askOwnProducts(fetchImpl, keys.pit, q, limit).catch(() => []) : []
-        if (own.length) result = make('pit', own)
+        // The product graph comes first: the same pages, joined across shops by barcode or part
+        // number, with every shop's price and stock. Then pages pitbot read that the graph lacks.
+        const [graph, own] = await Promise.all([
+          askProductGraph(fetchImpl, q, limit).catch(() => []),
+          keys.pit ? askOwnProducts(fetchImpl, keys.pit, q, limit).catch(() => []) : Promise.resolve([] as Media[]),
+        ])
+        const inGraph = new Set(graph.flatMap((m) => [m.url, ...(m.offerUrls ?? [])]))
+        const mixed = [...graph.map(({ offerUrls: _, ...m }) => m), ...own.filter((m) => !inGraph.has(m.url))]
+        if (mixed.length) result = make(graph.length ? 'nichedb' : 'pit', mixed)
         else {
           const google = key ? await askSerper(fetchImpl, key, 'shopping', q, limit, asked).catch(() => null) : null
           result = make(google?.length ? 'serper' : 'pit', google ?? [])

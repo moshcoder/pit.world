@@ -39,7 +39,7 @@ it('lists the tools and answers search and moshpit_resolve', async () => {
   await client.connect(transport)
   try {
     const tools = (await client.listTools()).tools.map((t) => t.name).sort()
-    expect(tools).toEqual(['corpus', 'edit_listing', 'listing', 'mcp_servers', 'moshpit_network', 'moshpit_resolve', 'pros', 'ring', 'search', 'submit_urls', 'summarize', 'vote_tallies', 'vote_top'])
+    expect(tools).toEqual(['corpus', 'edit_listing', 'listing', 'mcp_servers', 'moshpit_network', 'moshpit_resolve', 'pros', 'ring', 'search', 'shop', 'submit_urls', 'summarize', 'vote_tallies', 'vote_top'])
     const pros: any = await client.callTool({ name: 'pros', arguments: { category: 'home-services', near: 'oakland' } })
     expect(pros.content[0].text).toContain('Acme Plumbing')
     const ring: any = await client.callTool({ name: 'ring', arguments: {} })

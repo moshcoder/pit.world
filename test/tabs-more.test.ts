@@ -88,8 +88,50 @@ describe('News, Music and Places keep answering when Serper is out of credits', 
     expect(r.hits).toHaveLength(2)
     expect(log.find((l) => l.startsWith('nominatim'))).toContain('pit.world search')
   })
-  it('Shopping needs an index of some kind', async () => {
-    await expect(searchMedia('shopping', 'shoes', {}, {})).rejects.toThrow('our own index')
+  it('Shopping with no keys still asks the open product graph, and is empty, not an error, when it cannot answer', async () => {
+    const asked: string[] = []
+    const fetchImpl = (async (url: string | URL | Request) => {
+      asked.push(String(url))
+      return new Response('down', { status: 503 })
+    }) as typeof fetch
+    const r = await searchMedia('shopping', 'shoes', {}, { fetch: fetchImpl })
+    expect(r.hits).toEqual([])
+    expect(asked).toEqual(['https://nichedb.dev/api/v1/products?q=shoes&limit=20'])
+  })
+  it('Shopping puts the product graph first, one row per product, and drops index pages it already covers', async () => {
+    const graph = {
+      products: [
+        {
+          key: 'gtin:00036000291452',
+          name: 'Trail shoe',
+          brand: 'Acme',
+          gtin: '00036000291452',
+          stores: 2,
+          lowPrice: 79,
+          currency: 'USD',
+          imageUrl: 'https://cdn.shop.example/shoe.jpg',
+          page: 'https://nichedb.dev/products/gtin%3A00036000291452',
+          offers: [
+            { offerUrl: 'https://b.example/shoe', seller: 'B', host: 'b.example', price: 79, currency: 'USD', availability: 'InStock' },
+            { offerUrl: 'https://shop.example/shoe', seller: 'Shop', host: 'shop.example', price: 89.5, currency: 'USD', availability: 'InStock' },
+          ],
+        },
+        { key: 'url:https://c.example/sock', name: 'Sock', stores: 1, lowPrice: null, offers: [{ offerUrl: 'https://c.example/sock', seller: 'C', host: 'c.example', price: 5, currency: 'EUR', availability: 'OutOfStock' }] },
+      ],
+    }
+    const fetchImpl = (async (url: string | URL | Request) =>
+      String(url).startsWith('https://nichedb.dev/api/v1/products')
+        ? Response.json(graph)
+        : Response.json({ items: [
+            { url: 'https://shop.example/shoe', title: 'Trail shoe', site: 'shop.example' },
+            { url: 'https://d.example/hat', title: 'Hat', site: 'd.example', summary: 'Only $12.00' },
+          ] })) as typeof fetch
+    const r = await searchMedia('shopping', 'shoes', { pit: 'http://127.0.0.1:8807' }, { fetch: fetchImpl })
+    expect(r.provider).toBe('nichedb')
+    expect(r.hits.map((h) => h.url)).toEqual(['https://nichedb.dev/products/gtin%3A00036000291452', 'https://c.example/sock', 'https://d.example/hat'])
+    expect(r.hits[0]).toMatchObject({ title: 'Trail shoe', host: '2 shops', price: 'from $79.00', extra: 'Acme · GTIN 036000291452 · in stock', thumbnail: 'https://cdn.shop.example/shoe.jpg' })
+    expect(r.hits[1]).toMatchObject({ host: 'C', price: '€5.00', extra: 'out of stock' })
+    expect(r.hits[0]).not.toHaveProperty('offerUrls')
   })
   it('Shopping comes from our own index, products only, with the price a shop wrote', async () => {
     const asked: string[] = []
@@ -100,8 +142,8 @@ describe('News, Music and Places keep answering when Serper is out of credits', 
     const r = await searchMedia('shopping', 'shoes', { pit: 'http://127.0.0.1:8807', serper: 'k' }, { fetch: fetchImpl })
     expect(r.provider).toBe('pit')
     expect(r.hits[0]).toMatchObject({ url: 'https://shop.example/shoe', title: 'Trail shoe', price: '$89.50' })
-    expect(asked).toHaveLength(1)
-    expect(asked[0]).toContain('kind=product')
+    expect(asked).toHaveLength(2)
+    expect(asked.find((u) => u.startsWith('http://127.0.0.1:8807'))).toContain('kind=product')
   })
   it('Shopping asks Google only when our index has nothing, and survives Google being out of credits', async () => {
     const fetchImpl = (async (url: string | URL | Request) =>
