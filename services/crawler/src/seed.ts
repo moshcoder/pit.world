@@ -1,6 +1,7 @@
 /**
  * Where the first sites come from, the backfill: everything nichedb.dev
- * already keeps in /c/sites, the pit.world ring, a file, or names typed.
+ * already keeps in /c/sites, the pit.world ring, shops (c0upons.com's stores,
+ * Wikidata's online shops and retail chains), a file, or names typed.
  * Each becomes a site job once per cycle; the crawl takes it from there.
  */
 import { RING } from '../../../src/ring.ts'
@@ -86,3 +87,67 @@ export function sitesFromText(text: string): string[] {
     .map((t) => siteFromInput(t))
     .filter((s): s is string => Boolean(s))
 }
+
+/** c0upons.com's store list (public, keyless; c0upons.com redirects to the pwa host). */
+export const C0UPONS_STORES = 'https://c0upons.pwa.pit.world/api/stores'
+
+/**
+ * Every shop c0upons.com lists: its `website`, or the domain c0upons built the
+ * favicon URL from when the website is missing. Shops are what the product
+ * graph needs: their product pages state prices in JSON-LD.
+ */
+export function sitesFromC0uponsStores(rows: unknown): string[] {
+  const found = new Set<string>()
+  for (const row of Array.isArray(rows) ? rows : []) {
+    const r = row as { website?: unknown; logo_url?: unknown }
+    let site = typeof r.website === 'string' ? siteFromInput(r.website) : null
+    if (!site && typeof r.logo_url === 'string') {
+      try {
+        const domain = new URL(r.logo_url).searchParams.get('domain')
+        if (domain) site = siteFromInput(domain)
+      } catch {}
+    }
+    if (site) found.add(site)
+  }
+  return [...found]
+}
+
+export async function sitesFromC0upons(fetchImpl: Fetch = fetch): Promise<string[]> {
+  const response = await fetchImpl(C0UPONS_STORES, { headers: { accept: 'application/json' }, signal: AbortSignal.timeout(60_000) })
+  if (!response.ok) throw new Error(`${C0UPONS_STORES} answered HTTP ${response.status}`)
+  return sitesFromC0uponsStores(await response.json())
+}
+
+/**
+ * Wikidata classes whose members are shops (CC0): online shop, retail chain,
+ * supermarket chain, department store chain, electronics retailer. Direct
+ * instances only (wdt:P31, no subclass walk), so the query stays inside the
+ * public endpoint's 60 s; about 4,000 with an official website (2026-11-14).
+ */
+export const SHOP_CLASSES = ['Q4382945', 'Q507619', 'Q18043413', 'Q2549179', 'Q76214980']
+
+export function shopsSparql(classes = SHOP_CLASSES): string {
+  return `SELECT DISTINCT ?w WHERE { VALUES ?c { ${classes.map((c) => `wd:${c}`).join(' ')} } ?s wdt:P31 ?c ; wdt:P856 ?w . }`
+}
+
+export function sitesFromSparql(body: unknown): string[] {
+  const rows = (body as { results?: { bindings?: Array<{ w?: { value?: string } }> } })?.results?.bindings ?? []
+  const found = new Set<string>()
+  for (const b of rows) {
+    const site = siteFromInput(b.w?.value ?? '')
+    if (site) found.add(site)
+  }
+  return [...found]
+}
+
+export async function sitesFromWikidataShops(fetchImpl: Fetch = fetch): Promise<string[]> {
+  const url = `https://query.wikidata.org/sparql?${new URLSearchParams({ query: shopsSparql() })}`
+  const response = await fetchImpl(url, {
+    // Wikidata asks every client for a descriptive User-Agent.
+    headers: { accept: 'application/sparql-results+json', 'user-agent': 'pitbot/0.1 (+https://pit.world/bot)' },
+    signal: AbortSignal.timeout(90_000),
+  })
+  if (!response.ok) throw new Error(`Wikidata SPARQL answered HTTP ${response.status}`)
+  return sitesFromSparql(await response.json())
+}
+

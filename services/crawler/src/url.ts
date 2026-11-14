@@ -120,3 +120,11 @@ export const resolvesPublic: Resolver = async (host) => {
     return false
   }
 }
+
+/** Addresses that look like a product (or a product sitemap) on common shop software. */
+export const PRODUCTISH = /product|\/p\/|\/dp\/|\/item[s]?\/|\/buy\//i
+
+/** Product-looking addresses first, the rest after, each in its own order. */
+export function productFirst(urls: string[]): string[] {
+  return [...urls.filter((u) => PRODUCTISH.test(u)), ...urls.filter((u) => !PRODUCTISH.test(u))]
+}

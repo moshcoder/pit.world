@@ -7,6 +7,7 @@
  *   pit-crawler social <site...> [--file f]  recognise social sites now, without a crawl cycle
  *   pit-crawler seed --from nichedb|ring     backfill: every site nichedb keeps, or the ring
  *   pit-crawler seed --from rssamplifier|p0dcasters   every site behind every feed in that directory's OPML
+ *   pit-crawler seed --from c0upons|wikidata-shops     shops: c0upons.com's stores, Wikidata's online shops and retail chains
  *   pit-crawler seed --opml <url|path>       any OPML file
  *   add --first to any seed to put those sites ahead of everything already waiting
  *   pit-crawler seed --file <path>           one site per line
@@ -21,7 +22,7 @@ import { extract, needsRender } from './extract.ts'
 import { politeGet } from './fetcher.ts'
 import { ObscuraClient } from './obscura.ts'
 import { createRuntime, migrateSitesFromRedis, enqueueSubmissions, report, snapshot, startWorkers, type Runtime } from './queues.ts'
-import { OPML_SOURCES, opmlText, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText } from './seed.ts'
+import { OPML_SOURCES, opmlText, sitesFromC0upons, sitesFromNichedb, sitesFromOpml, sitesFromRing, sitesFromText, sitesFromWikidataShops } from './seed.ts'
 import { importFromNichedb } from './import-nichedb.ts'
 import { openIndex, PgIndexStore } from './pg-index-store.ts'
 import { migrateIndexFromSqlite } from './migrate-index.ts'
@@ -284,8 +285,10 @@ async function seed(args: string[]) {
   let sites: string[] = []
   if (from === 'nichedb') sites = await sitesFromNichedb(config.nichedbUrl, { ...(limit ? { limit } : {}), ...(config.nichedbKey ? { key: config.nichedbKey } : {}) })
   else if (from === 'ring') sites = sitesFromRing()
+  else if (from === 'c0upons') sites = await sitesFromC0upons()
+  else if (from === 'wikidata-shops') sites = await sitesFromWikidataShops()
   else if (from && OPML_SOURCES[from]) sites = sitesFromOpml(await opmlText(from))
-  else if (from) throw new Error(`unknown --from ${from} (nichedb, ring, ${Object.keys(OPML_SOURCES).join(', ')})`)
+  else if (from) throw new Error(`unknown --from ${from} (nichedb, ring, c0upons, wikidata-shops, ${Object.keys(OPML_SOURCES).join(', ')})`)
   const opml = flag(args, '--opml')
   if (opml) sites.push(...sitesFromOpml(await opmlText(opml)))
   if (file) sites.push(...sitesFromText(readFileSync(file, 'utf8')))
@@ -404,7 +407,7 @@ const commands: Record<string, (args: string[]) => Promise<void>> = { worker, se
 const run = command ? commands[command] : undefined
 if (!run) {
   console.log(
-    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop] | migrate-index --from-sqlite <path> [--batch n] [--restart]',
+    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring|c0upons|wikidata-shops|rssamplifier|p0dcasters] [--first] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop] | migrate-index --from-sqlite <path> [--batch n] [--restart]',
   )
   process.exit(command ? 1 : 0)
 }
