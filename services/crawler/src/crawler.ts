@@ -16,7 +16,7 @@ import type { Rendered } from './obscura.ts'
 import { aiDisallowed, allows, EMPTY, parseRobots, parseTdmrep, pathOf, tdmReserved, type Robots } from './robots.ts'
 import { sitesFromOpml } from './seed.ts'
 import { feedLinks, guessKind, sniff, type SubmitKind } from './submit.ts'
-import { crawlable, normalizeUrl, resolvesPublic, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
+import { crawlable, normalizeUrl, productFirst, resolvesPublic, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
 
 /** `first`: ahead of everything already waiting (seed --first). */
 export type SiteJob = { site: string; source: string; first?: boolean }
@@ -404,7 +404,8 @@ export function createCrawler(deps: Deps) {
     await recogniseSocial(site, robots)
     const home = `https://${site}/`
     const listed: string[] = []
-    const queue = robots.sitemaps.length ? [...robots.sitemaps] : [`https://${site}/sitemap.xml`]
+    // Product sitemaps and product pages first: a shop's page budget should go to what it sells.
+    const queue = robots.sitemaps.length ? productFirst(robots.sitemaps) : [`https://${site}/sitemap.xml`]
     for (let i = 0; i < queue.length && i < SITEMAP_DOCS && listed.length < config.maxPages; i++) {
       const sitemap = queue[i]!
       if (!sameSite(sitemap, site)) continue
@@ -412,7 +413,7 @@ export function createCrawler(deps: Deps) {
         const r = await get(sitemap, site, 'application/xml,text/xml;q=0.9,*/*;q=0.1')
         if (r.status >= 400) continue
         const { urls, sitemaps } = readSitemapXml(r.body)
-        queue.push(...sitemaps.slice(0, SITEMAP_DOCS))
+        queue.push(...productFirst(sitemaps).slice(0, SITEMAP_DOCS))
         for (const u of urls) {
           const url = normalizeUrl(u)
           if (url && sameSite(url, site)) listed.push(url)
@@ -421,7 +422,7 @@ export function createCrawler(deps: Deps) {
         log(`sitemap ${site}: ${(error as Error).message}`)
       }
     }
-    const jobs = [...(await admitAll(site, [home], 0, robots)), ...(await admitAll(site, listed.slice(0, config.maxPages), 1, robots))]
+    const jobs = [...(await admitAll(site, [home], 0, robots)), ...(await admitAll(site, productFirst(listed).slice(0, config.maxPages), 1, robots))]
     if (jobs.length) await enqueue.pages(jobs)
     await frontier.bump('sites_started')
     await frontier.bump('pages_queued', jobs.length)
