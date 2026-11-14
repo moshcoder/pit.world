@@ -10,6 +10,9 @@ import { z } from 'zod'
 import { PitClient } from './client.js'
 import { CATEGORIES, PRICES } from './pros.js'
 
+/** The open product graph pit.world's Shopping tab reads first (nichedb.dev docs/products.md). */
+const PRODUCT_GRAPH = 'https://nichedb.dev/api/v1/products'
+
 export function createMcpServer(client = new PitClient()): McpServer {
   // Typed loosely: the SDK's generic tool() signature recurses past TypeScript's
   // instantiation depth with zod shapes. The shapes are still validated at runtime.
@@ -121,7 +124,27 @@ export function createMcpServer(client = new PitClient()): McpServer {
     async ({ query, limit }: { query?: string; limit?: number }) => ({ content: [{ type: 'text', text: JSON.stringify(await client.mcps(query ?? '', limit ?? 20), null, 2) }] }),
   )
 
-  server.tool('ring', 'The pit.world web ring: every site in it (claimed pit.world listings plus the Moshpit network sites), in ring order, with direct and pit.world proxy URLs and feeds.', {}, async () => ({
+  server.tool(
+    'shop',
+    "Find a product and every shop selling it, from the open product graph (nichedb.dev/products): what shops state in their own product page data, read by pit.world's crawler and joined across shops by barcode (UPC, EAN, ISBN) or brand + part number. query is words or a bare barcode; or pass gtin, or brand with mpn. Offers come cheapest buyable first, with price, currency, stock, seller and seenAt (prices are as last read, not live). No shop pays to be listed.",
+    {
+      query: z.string().max(200).optional(),
+      gtin: z.string().max(20).optional(),
+      brand: z.string().max(120).optional(),
+      mpn: z.string().max(80).optional(),
+      limit: z.number().int().min(1).max(50).optional(),
+    },
+    async (args: { query?: string; gtin?: string; brand?: string; mpn?: string; limit?: number }) => {
+      const params = new URLSearchParams({ limit: String(args.limit ?? 10) })
+      if (args.query) params.set('q', args.query)
+      for (const k of ['gtin', 'brand', 'mpn'] as const) if (args[k]) params.set(k, args[k]!)
+      const res = await fetch(`${PRODUCT_GRAPH}?${params}`, { headers: { accept: 'application/json', 'user-agent': 'pit.world mcp (https://pit.world/privacy)' }, signal: AbortSignal.timeout(10_000) })
+      const body = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+      return { content: [{ type: 'text', text: JSON.stringify(body, null, 2) }], ...(res.ok ? {} : { isError: true }) }
+    },
+  )
+
+  server.tool('ring','The pit.world web ring: every site in it (claimed pit.world listings plus the Moshpit network sites), in ring order, with direct and pit.world proxy URLs and feeds.', {}, async () => ({
     content: [{ type: 'text', text: JSON.stringify(await client.ring(), null, 2) }],
   }))
 
