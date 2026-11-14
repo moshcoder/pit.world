@@ -728,12 +728,13 @@ describe('categories: shopping, news, books, podcasts, blogs, places, scholar', 
 
   it('says Google-only tabs are unavailable without a Google key, and keeps the free ones working', async () => {
     const { request } = app({ keys: { linkup: 'LINKUP-KEY' } })
-    for (const t of ['shopping', 'places']) {
+    for (const t of ['places']) {
       const res = await request(`/search?q=cats&t=${t}`)
       expect(res.status).toBe(503)
       expect(await res.text()).toContain('unavailable for a moment')
     }
-    for (const t of ['books', 'podcasts', 'blogs', 'news', 'scholar']) expect((await request(`/search?q=cats&t=${t}`)).status).toBe(200)
+    // Shopping reads the open product graph, which needs no key.
+    for (const t of ['shopping', 'books', 'podcasts', 'blogs', 'news', 'scholar']) expect((await request(`/search?q=cats&t=${t}`)).status).toBe(200)
   })
 
   it('offers no PairUX or nixamp strip outside Videos, Music and Live', async () => {
