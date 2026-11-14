@@ -77,6 +77,8 @@ export interface Frontier {
   claimStart(site: string, cycleMs: number): Promise<boolean>
   /** The first sighting of an MCP address in a cycle claims its probe; every later one is told no. */
   claimMcp(endpoint: string, cycleMs: number): Promise<boolean>
+  /** A named once-per-period job (the daily reprice): the first worker to ask runs it. */
+  claimOnce(name: string, ttlMs: number): Promise<boolean>
   /** A site pitbot recognised as social, kept by host. */
   saveSocial(site: SocialSite): Promise<void>
   listSocial(): Promise<SocialSite[]>
@@ -128,6 +130,7 @@ const K = {
   mcp: 'pitcrawl:mcp',
   social: 'pitcrawl:social',
   mcpSeen: (id: string) => `pitcrawl:mcpseen:${id}`,
+  once: (name: string) => `pitcrawl:once:${name}`,
   minute: (m: number) => `pitcrawl:m:${m}`,
   hour: (h: number) => `pitcrawl:h:${h}`,
   log: 'pitcrawl:log',
@@ -251,6 +254,9 @@ export class RedisFrontier implements Frontier {
 
   async claimMcp(endpoint: string, cycleMs: number) {
     return (await this.redis.set(K.mcpSeen(urlId(endpoint)), '1', 'PX', cycleMs, 'NX')) === 'OK'
+  }
+  async claimOnce(name: string, ttlMs: number) {
+    return (await this.redis.set(K.once(name), '1', 'PX', ttlMs, 'NX')) === 'OK'
   }
   async saveSocial(site: SocialSite) {
     await this.redis.hset(K.social, site.site, JSON.stringify(site))
@@ -420,6 +426,12 @@ export class MemoryFrontier implements Frontier {
   async claimMcp(endpoint: string, cycleMs: number) {
     if ((this.mcpSeen.get(endpoint) ?? 0) > Date.now()) return false
     this.mcpSeen.set(endpoint, Date.now() + cycleMs)
+    return true
+  }
+  once = new Map<string, number>()
+  async claimOnce(name: string, ttlMs: number) {
+    if ((this.once.get(name) ?? 0) > Date.now()) return false
+    this.once.set(name, Date.now() + ttlMs)
     return true
   }
   async saveMcp(server: McpServer) {

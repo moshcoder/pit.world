@@ -55,6 +55,16 @@ export type Config = {
    * still gets every page; MCP records and seeds still use the key.
    */
   publishPages: boolean
+  /**
+   * With publishPages off, still send the pages that carry products (JSON-LD
+   * Product, or kind product) to nichedb's product graph only
+   * (/api/v1/products/records): offers, no /c/sites rows. CRAWL_PUBLISH_PRODUCTS=0 stops it.
+   */
+  publishProducts: boolean
+  /** Re-read known product pages once a day for their prices (CRAWL_REPRICE=0 stops it). */
+  reprice: boolean
+  /** A product page is due again when its price was read longer ago than this. */
+  repriceHours: number
   /** Directory for the page archive (src/archive.ts); empty = no archive. Only the publish role writes it. */
   archiveDir: string
   /** How long a site's seen-set outlives its last new page (sliding). */
@@ -124,6 +134,9 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     nichedbUrl: (env.NICHEDB_URL ?? 'https://nichedb.dev').replace(/\/+$/, ''),
     nichedbKey: env.NICHEDB_API_KEY ?? '',
     publishPages: env.CRAWL_PUBLISH_PAGES !== '0',
+    publishProducts: env.CRAWL_PUBLISH_PRODUCTS !== '0',
+    reprice: env.CRAWL_REPRICE !== '0',
+    repriceHours: num(env.CRAWL_REPRICE_HOURS, 20, 1),
     archiveDir: env.CRAWL_ARCHIVE_DIR ?? '',
     discover: env.CRAWL_DISCOVER === '1',
     // 1M filled Redis on 2026-11-08 and discovery stopped dead; the frontier is in

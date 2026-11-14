@@ -21,7 +21,11 @@ import { crawlable, normalizeUrl, productFirst, resolvesPublic, sameSite, siteFr
 /** `first`: ahead of everything already waiting (seed --first). */
 export type SiteJob = { site: string; source: string; first?: boolean }
 /** `optOut`: a training reservation the page's headers made when it was first fetched (a render has no headers). */
-export type PageJob = { url: string; site: string; depth: number; rendered?: boolean; optOut?: string }
+/** A published record line that carries a product: kind product, or a JSON-LD Product node. */
+export const PRODUCT_LINE = /"kind":"product"|"@type":"(?:Product|ProductGroup|IndividualProduct|ProductModel)"|"@type":\[[^\]]*"Product"/
+
+/** `reprice`: a daily re-read of a known product page for its price; it follows no links. */
+export type PageJob = { url: string; site: string; depth: number; rendered?: boolean; optOut?: string; reprice?: boolean }
 
 export type Training = { allowed: boolean; reason: string }
 
@@ -441,7 +445,7 @@ export function createCrawler(deps: Deps) {
       if (doc.enrichment.videos.length) await frontier.bump('videos_found', doc.enrichment.videos.length)
     } else await frontier.bump('pages_noindex')
     let followed = 0
-    if (job.depth < config.maxDepth && doc.internal.length) {
+    if (!job.reprice && job.depth < config.maxDepth && doc.internal.length) {
       const next = await admitAll(job.site, doc.internal.slice(0, LINKS_PER_PAGE), job.depth + 1, robots)
       if (next.length) {
         await enqueue.pages(next)
@@ -456,7 +460,7 @@ export function createCrawler(deps: Deps) {
       title: doc.record.title,
       note: doc.noindex ? 'noindex' : `${doc.enrichment.words} words${followed ? `, ${followed} new links` : ''}`,
     })
-    if (config.discover && doc.external.length) await scheduleSites(doc.external.slice(0, SITES_PER_PAGE), 'link')
+    if (config.discover && !job.reprice && doc.external.length) await scheduleSites(doc.external.slice(0, SITES_PER_PAGE), 'link')
     await noteMcps(doc.mcp, doc.record.url)
     return doc.noindex ? 'noindex' : 'indexed'
   }
@@ -561,7 +565,9 @@ export function createCrawler(deps: Deps) {
    */
   async function publish(): Promise<{ sent: number; added: number; rejected: number; waiting: boolean }> {
     const toNichedb = Boolean(config.nichedbKey) && config.publishPages
-    if (!toNichedb && !deps.index && !deps.archive) return { sent: 0, added: 0, rejected: 0, waiting: true }
+    // Every page to /c/sites is off on dev2; the product graph still gets the shop pages.
+    const productsOnly = !toNichedb && Boolean(config.nichedbKey) && config.publishProducts
+    if (!toNichedb && !productsOnly && !deps.index && !deps.archive) return { sent: 0, added: 0, rejected: 0, waiting: true }
     const fetchImpl = deps.fetch ?? fetch
     let sent = 0
     let added = 0
@@ -583,6 +589,7 @@ export function createCrawler(deps: Deps) {
         const kept = await deps.index.add(raw)
         if (kept) await frontier.bump('indexed_local', kept)
       }
+      if (productsOnly) await sendProducts(raw)
       if (!toNichedb) continue
       // The full text stays in the local index; nichedb keeps the record, excerpt and media.
       const outgoing = raw.map((line) => {
@@ -626,6 +633,76 @@ export function createCrawler(deps: Deps) {
       await frontier.log({ kind: 'publish', note: `${sent} records to nichedb: ${added} new${rejected ? `, ${rejected} refused` : ''}` })
     }
     return { sent, added, rejected, waiting: false }
+  }
+
+  /**
+   * The product graph's share of a batch, when every page no longer goes to nichedb:
+   * only records that carry a product, cut to what core/products.js reads. Never throws:
+   * the batch is already in the local index, and tomorrow's reprice reads it again.
+   */
+  async function sendProducts(raw: string[]): Promise<void> {
+    const records = raw.flatMap((line) => {
+      if (!PRODUCT_LINE.test(line)) return []
+      try {
+        const r = JSON.parse(line)?.record ?? {}
+        return [JSON.stringify({ record: { url: r.url, canonical: r.canonical, kind: r.kind, title: r.title, site: r.site, image: r.image, jsonld: r.jsonld, cards: { og: r.cards?.og ?? {} } } })]
+      } catch {
+        return []
+      }
+    })
+    if (!records.length) return
+    try {
+      const response = await (deps.fetch ?? fetch)(`${config.nichedbUrl}/api/v1/products/records`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${config.nichedbKey}`, 'user-agent': config.userAgent },
+        body: `{"records":[${records.join(',')}]}`,
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const body = (await response.json().catch(() => ({}))) as { offers?: number }
+      await frontier.bump('products_published', records.length)
+      if (body.offers) await frontier.bump('offers_published', body.offers)
+    } catch (error) {
+      await frontier.bump('products_failed', records.length)
+      log(`products: ${records.length} records not sent (${errorText(error)})`)
+    }
+  }
+
+  /**
+   * Known product pages whose price was read more than repriceHours ago, queued again
+   * (once a day, see queues.ts). Each is one page job that follows no links; robots.txt,
+   * per-site politeness and parked hosts apply as to any page.
+   */
+  async function reprice(options: { max?: number } = {}): Promise<{ pages: number; sites: number }> {
+    if (!config.nichedbKey) return { pages: 0, sites: 0 }
+    const fetchImpl = deps.fetch ?? fetch
+    const jobs: PageJob[] = []
+    const seen = new Set<string>()
+    let after = 0
+    for (let call = 0; call < 1_000; call++) {
+      const url = `${config.nichedbUrl}/api/v1/products/pages?${new URLSearchParams({ after: String(after), limit: '5000', olderThanHours: String(config.repriceHours) })}`
+      const response = await fetchImpl(url, {
+        headers: { accept: 'application/json', authorization: `Bearer ${config.nichedbKey}`, 'user-agent': config.userAgent },
+        signal: AbortSignal.timeout(60_000),
+      })
+      if (!response.ok) throw new Error(`nichedb ${url} answered HTTP ${response.status}`)
+      const body = (await response.json()) as { pages?: string[]; next?: number | null }
+      for (const page of body.pages ?? []) {
+        const u = normalizeUrl(page)
+        const site = u ? siteOf(u) : null
+        if (!u || !site || !crawlable(u) || seen.has(u)) continue
+        seen.add(u)
+        jobs.push({ url: u, site, depth: 0, reprice: true })
+      }
+      if (body.next == null || (options.max && jobs.length >= options.max)) break
+      after = body.next
+    }
+    const list = options.max ? jobs.slice(0, options.max) : jobs
+    if (list.length) await enqueue.pages(list)
+    await frontier.bump('reprice_queued', list.length)
+    const sites = new Set(list.map((j) => j.site)).size
+    await frontier.log({ kind: 'publish', note: `reprice: ${list.length} product pages on ${sites} sites queued` })
+    return { pages: list.length, sites }
   }
 
   /** Sites whose cycle has run out are started again. */
@@ -712,7 +789,7 @@ export function createCrawler(deps: Deps) {
     return out
   }
 
-  return { scheduleSites, crawlSite, crawlPage, renderPage, probeMcp, fillCards, identifySocial, searchSocial, publish, recrawl, submit, robotsFor }
+  return { scheduleSites, crawlSite, crawlPage, renderPage, probeMcp, fillCards, identifySocial, searchSocial, publish, recrawl, reprice, submit, robotsFor }
 }
 
 export type Crawler = ReturnType<typeof createCrawler>
