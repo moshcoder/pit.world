@@ -30,6 +30,17 @@ import type { McpJob } from './mcp.ts'
 import { ObscuraPool } from './obscura.ts'
 import { urlId } from './url.ts'
 
+/**
+ * A page job's id and priority. Shallow pages first (priority = depth + 1). A daily
+ * reprice re-read gets its own id per UTC day, or BullMQ would refuse it as the page's
+ * crawl job still kept in Redis, and the top priority, so prices do not wait behind a
+ * seed backlog.
+ */
+export function pageOpts(data: PageJob, now = new Date()): { jobId: string; priority: number } {
+  if (data.reprice) return { jobId: `r-${now.toISOString().slice(0, 10)}-${urlId(data.url)}`, priority: 1 }
+  return { jobId: `p-${urlId(data.url)}`, priority: Math.min(data.depth + 1, 100) }
+}
+
 export const QUEUES = {
   site: 'pit-crawl-site',
   page: 'pit-crawl-page',
@@ -173,7 +184,7 @@ export function createRuntime(config: Config, log: (line: string) => void = cons
       },
       async pages(jobs: PageJob[]) {
         await addInChunks(jobs, (chunk) =>
-          queues.page.addBulk(chunk.map((data) => ({ name: 'page', data, opts: { jobId: `p-${urlId(data.url)}`, priority: Math.min(data.depth + 1, 100) } }))),
+          queues.page.addBulk(chunk.map((data) => ({ name: 'page', data, opts: pageOpts(data) }))),
         )
       },
       async render(job: PageJob) {
@@ -304,10 +315,20 @@ export async function startWorkers(config: Config, log: (line: string) => void =
   if (role('publish')) {
     await runtime.queues.publish.upsertJobScheduler('flush', { every: 5_000 }, { name: 'flush', opts: { removeOnComplete: true, removeOnFail: 100 } })
     await runtime.queues.publish.upsertJobScheduler('recrawl', { every: 3_600_000 }, { name: 'recrawl', opts: { removeOnComplete: true, removeOnFail: 100 } })
+    if (config.reprice) await runtime.queues.publish.upsertJobScheduler('reprice', { every: 3_600_000 }, { name: 'reprice', opts: { removeOnComplete: true, removeOnFail: 100 } })
+    else await runtime.queues.publish.removeJobScheduler('reprice')
     workers.push(
       new Worker(
         QUEUES.publish,
         async (job) => {
+          if (job.name === 'reprice') {
+            // Hourly tick; the first one of each UTC day claims the day and re-reads the prices.
+            const day = new Date().toISOString().slice(0, 10)
+            if (!(await runtime.frontier.claimOnce(`reprice:${day}`, 26 * 3_600_000))) return
+            const out = await crawler.reprice()
+            log(`reprice: ${out.pages} product pages on ${out.sites} sites queued`)
+            return
+          }
           if (job.name === 'recrawl') {
             // Hourly, the counters are made exact again (count(*) is seconds at 100M rows).
             await runtime.sites.resync().catch((error) => log(`sites resync: ${error instanceof Error ? error.message : error}`))

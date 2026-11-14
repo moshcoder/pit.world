@@ -10,6 +10,7 @@
  *   pit-crawler seed --from c0upons|wikidata-shops     shops: c0upons.com's stores, Wikidata's online shops and retail chains
  *   pit-crawler seed --opml <url|path>       any OPML file
  *   add --first to any seed to put those sites ahead of everything already waiting
+ *   pit-crawler reprice [--max n]             re-read known product pages for prices now (also daily)
  *   pit-crawler seed --file <path>           one site per line
  *   pit-crawler stats                        queue depths and counters, as JSON
  *   pit-crawler read <url> [--render]        read one page now and print its record (no Redis)
@@ -277,6 +278,19 @@ async function social(args: string[]) {
   }
 }
 
+/** Queue the daily price re-read now (it also runs by itself once a UTC day). --max n caps it. */
+async function reprice(args: string[]) {
+  const config = configFromEnv()
+  const max = Number(flag(args, '--max')) || undefined
+  const runtime = createRuntime(config, log)
+  try {
+    const out = await runtime.crawler.reprice(max ? { max } : {})
+    console.log(JSON.stringify(out))
+  } finally {
+    await runtime.close()
+  }
+}
+
 async function seed(args: string[]) {
   const config = configFromEnv()
   const from = flag(args, '--from')
@@ -403,11 +417,11 @@ async function migrateIndex(args: string[]) {
 }
 
 const [command, ...rest] = process.argv.slice(2)
-const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, social, import: importCmd, stats: () => stats(), read, 'migrate-sites': migrateSites, 'migrate-index': migrateIndex }
+const commands: Record<string, (args: string[]) => Promise<void>> = { worker, seed, reprice, social, import: importCmd, stats: () => stats(), read, 'migrate-sites': migrateSites, 'migrate-index': migrateIndex }
 const run = command ? commands[command] : undefined
 if (!run) {
   console.log(
-    'usage: pit-crawler worker | seed <site...> [--from nichedb|ring|c0upons|wikidata-shops|rssamplifier|p0dcasters] [--first] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop] | migrate-index --from-sqlite <path> [--batch n] [--restart]',
+    'usage: pit-crawler worker | reprice [--max n] | seed <site...> [--from nichedb|ring|c0upons|wikidata-shops|rssamplifier|p0dcasters] [--first] [--file path] [--limit n] | import [--from nichedb] [--limit n] [--max-gb n] [--restart] | stats | read <url> [--render] | migrate-sites [--drop] | migrate-index --from-sqlite <path> [--batch n] [--restart]',
   )
   process.exit(command ? 1 : 0)
 }
