@@ -267,8 +267,15 @@ const page = (status: number, title: string, body: string, extra: Record<string,
 
 export type ProxyDeps = { access: MoshpitAccess; certs: Certs; targets?: Targets }
 
-/** Answer a request for <name>.pit.world. `proto` is the scheme the visitor used, as nginx reports it. */
-export async function proxyRequest(request: Request, name: string, ip: string, proto: string, deps: ProxyDeps): Promise<Response> {
+/** robots.txt and sitemaps: the files whose URLs must name the host the crawler fetched them from. */
+export const isCrawlerFile = (path: string) => path === '/robots.txt' || /^\/sitemap[a-z0-9_-]*\.xml$/i.test(path) || /^\/sitemaps\/[a-z0-9_.-]+\.xml$/i.test(path)
+
+/**
+ * Answer a request for <name>.pit.world. `proto` is the scheme the visitor used, as nginx reports it.
+ * `publicHost` is the host the visitor asked for when a trusted local proxy fronts this relay under
+ * another name (chovy.hacker.w3bs.org); robots.txt and sitemaps name it instead of <name>.pit.world.
+ */
+export async function proxyRequest(request: Request, name: string, ip: string, proto: string, deps: ProxyDeps, publicHost?: string): Promise<Response> {
   const url = new URL(request.url)
   const proxyHost = `${name}${PROXY_SUFFIX}`
   if (url.pathname === ASSET_PATH) return new Response(PROXY_CSS, { headers: { 'content-type': 'text/css; charset=utf-8', 'cache-control': 'public, max-age=3600' } })
@@ -336,6 +343,21 @@ export async function proxyRequest(request: Request, name: string, ip: string, p
   if (request.method === 'HEAD' || status === 204 || status === 304) {
     upstream.resume()
     return new Response(null, { status, headers: out })
+  }
+  // A Moshpit site's sitemap and robots.txt list https://<name>/ URLs, right for a visitor on Moshpit and
+  // wrong for a crawler here: a sitemap may only name the host it was fetched from. Rewrite those two files.
+  const type = String(upstream.headers['content-type'] ?? '')
+  if (status === 200 && isCrawlerFile(url.pathname) && /xml|text\/plain/i.test(type) && length <= MAX_REWRITE) {
+    const chunks: Buffer[] = []
+    let size = 0
+    for await (const chunk of upstream) {
+      size += chunk.length
+      if (size > MAX_REWRITE) break
+      chunks.push(chunk)
+    }
+    if (size <= MAX_REWRITE) return new Response(rewriteUrls(Buffer.concat(chunks).toString('utf8'), name, publicHost ?? proxyHost), { status, headers: out })
+    upstream.destroy()
+    return page(502, `${name} sent too much`, `<p>That file is larger than pit.world will relay.</p>`)
   }
   if (isHtml && length <= MAX_REWRITE) {
     const chunks: Buffer[] = []

@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test'
 import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { decorate, joinFooter, namesFromSitemap, proxiedName, proxyRequest, rewriteCookie, rewriteUrls, sweepCerts, Targets, unrewriteUrl, type Certs } from '../src/proxy.ts'
+import { decorate, isCrawlerFile, joinFooter, namesFromSitemap, proxiedName, proxyRequest, rewriteCookie, rewriteUrls, sweepCerts, Targets, unrewriteUrl, type Certs } from '../src/proxy.ts'
 
 describe('certificate sweep', () => {
   const sitemap = `<?xml version="1.0"?><urlset>
@@ -181,5 +181,20 @@ describe('a visitor who disconnects mid-upload', () => {
     const res = await proxyRequest(req, 'up.load', '1.2.3.4', 'https', { access, certs, targets })
     expect(res.status).toBe(502)
     await new Promise((r) => setTimeout(r, 50))
+  })
+})
+
+describe('robots.txt and sitemaps through the relay', () => {
+  it('knows which files list URLs that must name the fetched host', () => {
+    for (const p of ['/robots.txt', '/sitemap.xml', '/sitemap-1.xml', '/sitemaps/pages.xml']) expect(isCrawlerFile(p)).toBe(true)
+    for (const p of ['/', '/feed.xml', '/robots.txt/x', '/a/sitemap.xml', '/sitemaps/../x.xml/y']) expect(isCrawlerFile(p)).toBe(false)
+  })
+
+  it('rewrites a Moshpit sitemap and robots line to the host the crawler asked', () => {
+    const xml = '<urlset><url><loc>https://seo.rank/</loc></url><url><loc>https://seo.rank/about</loc></url><url><loc>https://other.site/</loc></url></urlset>'
+    expect(rewriteUrls(xml, 'seo.rank', 'seo.rank.pit.world')).toBe('<urlset><url><loc>https://seo.rank.pit.world/</loc></url><url><loc>https://seo.rank.pit.world/about</loc></url><url><loc>https://other.site/</loc></url></urlset>')
+    expect(rewriteUrls('Sitemap: https://chovy.hacker/sitemap.xml\n', 'chovy.hacker', 'chovy.hacker.w3bs.org')).toBe('Sitemap: https://chovy.hacker.w3bs.org/sitemap.xml\n')
+    // A site that already prints its .pit.world URLs is left as it is.
+    expect(rewriteUrls('<loc>https://built.indie.pit.world/</loc>', 'built.indie', 'built.indie.pit.world')).toBe('<loc>https://built.indie.pit.world/</loc>')
   })
 })
