@@ -1,7 +1,11 @@
-# Ship every merge to dev2, where pit.world runs as root from /opt/pit.world.
-# PIT_DEPLOY_KEY is a root key restricted on dev2 to one forced command,
-# /usr/local/bin/pit-world-deploy, which takes a commit already on origin/main,
-# fast-forwards the checkout to it and runs bin/install.sh. It can do nothing else.
+# Ship every merge to dev2, where pit.world runs from /opt/pit.world.
+# PIT_DEPLOY_KEY is an anthony key on dev2 (root ssh is off since the 2026-11-20
+# lockdown) forced to `ci-deploy moshcoder/pit.world`, which accepts exactly
+# `deploy-pit-world <40-hex sha>` and runs `sudo -n /usr/local/bin/pit-world-deploy <sha>`.
+# That root-owned script refuses a commit not on origin/main, fast-forwards the
+# checkout and runs a HOST-PINNED copy of bin/install.sh with a host-side
+# install.conf: editing bin/install.sh or bin/install.conf here does not change
+# the deploy (update /usr/local/lib/pit-world-deploy/ on dev2 as root for that).
 name: Deploy to dev2
 
 on:
@@ -43,7 +47,7 @@ jobs:
       - name: Deploy
         env:
           SHA: ${{ github.sha }}
-        run: ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 root@dev2.profullstack.com "deploy $SHA"
+        run: ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519 anthony@dev2.profullstack.com "deploy-pit-world $SHA"
 
       - name: Verify the site answers
         run: |
