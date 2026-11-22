@@ -11,12 +11,13 @@ import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
 import { Hono, type Context } from 'hono'
 import { parseBang, BANGS } from './bangs.js'
-import { type RowTools, settingsPage, lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
+import { type RowTools, settingsPage, lookupCard, aboutPage, sharedResultPage, shareMissingPage, whyPage, botPage, statusPage, mcpsPage, type FoundMcp, buildPage, buildPlanPage, startPage, connectPage, errorPage, homePage, mediaPage, mobileConfig, newsletterPage, offlinePage, subscribersAdminPage, openSearchXml, privacyPage, resultsPage, ringOpml, ringPage } from './html.js'
 import { lookupSearchTerms, parseLookup, runLookup } from './lookups.js'
 import { adminAuthorized, brandFor, Newsletter, normalizeSource, resendMailer } from './newsletter.js'
 import { createFormGuard } from '@profullstack/form-guard'
 import { looksLikeSpam, orderByInvoice, OrderError, readOrder, type BuildInvoicing } from './build-invoice.js'
-import { looksLikeName, Registry } from './moshpit.js'
+import { AB_COOKIE, AB_COOKIE_MAX_AGE, BuildAb, forcedVariant, formatReport, isBotUa, newVisitorId, refreshPaid, validVisitorId, variantFor, type Step } from './build-ab.js'
+import { LINKS, looksLikeName, Registry } from './moshpit.js'
 import { RateLimiter } from './ratelimit.js'
 import { snippetFor } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
@@ -121,6 +122,8 @@ export type Deps = {
   /** /build by pay.agent invoice; unset means only the chovy.com checkout. */
   featuredBusinesses?: FeaturedBusinesses
   buildInvoicing?: BuildInvoicing
+  /** The /build A/B test's store (src/build-ab.ts); unset means an in-memory one. */
+  buildAb?: BuildAb
   /** Credit codes (server months) and invites on accounts (needs accounts); unset means off. */
   rewards?: Rewards
   /** Addresses whose visits are ours, excluded from promotion measurement. */
@@ -205,8 +208,10 @@ export function createApp(deps: Deps) {
       c.header(name, name === 'content-security-policy' && frames.length ? value.replace('frame-src ', `frame-src ${frames.join(' ')} `) : value)
     // Belt and braces: only the sign-in and account routes set a cookie, and only after you press Sign in.
     // The one exception is the auction house's color theme choice (aa_theme), set when a visitor picks it.
+    // And the /build A/B test's random id (pit_build_ab), on /build pages only and scoped to them (see /privacy).
     const auctionTheme = isAuctionHost(c.req.header('host')) && (c.req.path.startsWith('/theme/') || ['/signin', '/signout', '/auth/bridge/callback'].includes(c.req.path))
-    if (!auctionTheme && (!deps.accounts || !COOKIE_PATHS.test(c.req.path))) c.res.headers.delete('set-cookie')
+    const abOnly = (c.req.path === '/build' || c.req.path.startsWith('/build/')) && c.res.headers.getSetCookie().every((v) => v.startsWith(`${AB_COOKIE}=`))
+    if (!auctionTheme && !abOnly && (!deps.accounts || !COOKIE_PATHS.test(c.req.path))) c.res.headers.delete('set-cookie')
   })
 
   const auctionApp = deps.auctions ? createAuctionApp(deps.auctions, { ...(deps.auctionShop ? { shop: deps.auctionShop } : {}), ...(deps.adminToken ? { adminToken: deps.adminToken } : {}), ...(deps.auctionAccounts ?? {}) }) : null
@@ -491,9 +496,63 @@ export function createApp(deps: Deps) {
       })
     : null
   const guardHtml = async () => (orderGuard ? orderGuard.hiddenHTML(await orderGuard.issue(), { className: 'hp' }) : undefined)
+  // /build is an A/B test (src/build-ab.ts): a random first-party id in a /build-only cookie picks the
+  // variant, and every funnel step is a row in pit.world's own store. ?variant=a|b forces one for QA,
+  // and those visits (and visits from internal addresses) are recorded as qa, outside the report.
+  const buildAb = deps.buildAb ?? new BuildAb()
+  const internal = new Set(deps.internalIps ?? [])
+  const abOf = (c: Context<Env>) => {
+    const raw = parseCookies(c.req.header('cookie'))[AB_COOKIE] ?? ''
+    const [kept, keptForced] = raw.split('~')
+    const forced = forcedVariant(c.req.query('variant')) ?? forcedVariant(keptForced)
+    const id = validVisitorId(kept) ? kept : newVisitorId()
+    const value = forced ? `${id}~${forced}` : id
+    if (value !== raw) c.header('set-cookie', `${AB_COOKIE}=${value}; Path=/build; Max-Age=${AB_COOKIE_MAX_AGE}; HttpOnly; Secure; SameSite=Lax`, { append: true })
+    const ua = c.req.header('user-agent')
+    return { id, variant: forced ?? variantFor(id), bot: isBotUa(ua), qa: Boolean(forced) || internal.has(c.env?.ip || '') }
+  }
+  const step = (v: ReturnType<typeof abOf>, s: Step, ref?: string) => {
+    try {
+      buildAb.record(v.id, v.variant, s, { bot: v.bot, qa: v.qa, ...(ref ? { ref } : {}) })
+    } catch (e) {
+      console.error('build ab:', e instanceof Error ? e.message : e)
+    }
+  }
   app.get('/build', async (c) => {
     c.header('cache-control', 'no-store')
-    return c.html(buildPage({ invoicing: Boolean(deps.buildInvoicing), guard: await guardHtml() }))
+    const v = abOf(c)
+    step(v, 'view')
+    return c.html(buildPage({ invoicing: Boolean(deps.buildInvoicing), guard: await guardHtml(), variant: v.variant, pixel: true }))
+  })
+  // The page's 1x1 image: a browser that renders the page, not a script that fetches HTML.
+  const PIXEL = Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'), (ch) => ch.charCodeAt(0))
+  app.get('/build/seen.gif', (c) => {
+    if (validVisitorId((parseCookies(c.req.header('cookie'))[AB_COOKIE] ?? '').split('~')[0])) step(abOf(c), 'seen')
+    return c.body(PIXEL, 200, { 'content-type': 'image/gif', 'cache-control': 'no-store' })
+  })
+  // A's "Start building" (and B's secondary link): counted here, then on to chovy.com with the variant in ref.
+  app.get('/build/go', (c) => {
+    const idea = (c.req.query('idea') ?? '').trim()
+    if (!idea) return c.redirect('/build')
+    const v = abOf(c)
+    step(v, 'idea')
+    step(v, 'handoff')
+    const to = new URL(LINKS.chovyStart)
+    to.searchParams.set('idea', idea.slice(0, 2000))
+    to.searchParams.set('plan', 'starter')
+    to.searchParams.set('ref', `pitworld-${v.variant}`)
+    return c.redirect(to.href, 302)
+  })
+  // B's step 2, on pit.world: the idea back, what the $49 covers, one email for the invoice.
+  app.post('/build/plan', async (c) => {
+    const form = (await c.req.parseBody()) as Record<string, string>
+    const idea = String(form.idea ?? '').replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ').trim().slice(0, 2000)
+    if (!idea) return c.redirect('/build')
+    const v = abOf(c)
+    step(v, 'idea')
+    if (!deps.buildInvoicing) return c.redirect(`/build/go?idea=${encodeURIComponent(idea)}`)
+    c.header('cache-control', 'no-store')
+    return c.html(buildPlanPage({ idea, invoicing: true, guard: await guardHtml(), pixel: true }))
   })
   // /build by invoice: two pay.agent invoices ($49 now, $2 a month from day 31), then the buyer sees the first.
   const orderLimit = new RateLimiter(3, 0.2)
@@ -501,7 +560,14 @@ export function createApp(deps: Deps) {
     const cfg = deps.buildInvoicing
     if (!cfg || !orderGuard) return c.redirect('/build')
     const form = (await c.req.parseBody()) as Record<string, string>
-    const again = async (error: string, status: 400 | 429 | 502) => c.html(buildPage({ invoicing: true, error, values: form, guard: await guardHtml() }), status)
+    const v = abOf(c)
+    const again = async (error: string, status: 400 | 429 | 502) => {
+      const guard = await guardHtml()
+      // B's buyers came from step 2, so they get step 2 back with their idea still in it.
+      return v.variant === 'b' && String(form.idea ?? '').trim()
+        ? c.html(buildPlanPage({ idea: String(form.idea).trim().slice(0, 2000), invoicing: true, error, values: form, guard }), status)
+        : c.html(buildPage({ invoicing: true, error, values: form, guard, variant: v.variant }), status)
+    }
     if (await writeLimited(c, 'order', form, (ip) => orderLimit.take(ip || 'unknown'))) return again('Too many orders from you just now. Try again in a few minutes.', 429)
     // No token, a forged one or a filled honeypot: told it worked (back to /build), no invoice, no email.
     // A stale page or a too-fast submit is a person often enough to get the form back instead.
@@ -519,10 +585,20 @@ export function createApp(deps: Deps) {
         return c.redirect('/build')
       }
       const { build } = await orderByInvoice(cfg, order)
+      step(v, 'checkout', build.id)
       return c.redirect(build.url)
     } catch (e) {
       return again(e instanceof Error ? e.message : String(e), e instanceof OrderError && !e.message.startsWith('pay.agent') ? 400 : 502)
     }
+  })
+  // The test's numbers (admin): visitors and each funnel step per variant, with a significance note.
+  app.get('/api/admin/build-ab.json', async (c) => {
+    if (!subscriberAdmin(c)) return c.json({ error: 'unauthorized' }, 401)
+    if (deps.buildInvoicing && c.req.query('refresh') !== '0') await refreshPaid(buildAb, deps.buildInvoicing.payAgentUrl, deps.buildInvoicing.fetch).catch(() => 0)
+    const days = Number(c.req.query('days'))
+    const report = buildAb.report(Number.isFinite(days) && days > 0 ? Date.now() - days * 86_400_000 : 0)
+    c.header('cache-control', 'no-store')
+    return c.json({ ...report, text: formatReport(report) })
   })
   app.get('/start', (c) => c.html(startPage()))
   // /promote and its sub-routes are mounted by mountPromote when accounts are on.
@@ -1372,6 +1448,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   }
   const promotion = new Promotion(listings, site)
   const promoters = new Promoters(env.PIT_PROMOTERS_DB ?? `${dataDir}/promoters.db`)
+  const buildAb = new BuildAb(env.PIT_BUILD_AB_DB ?? `${dataDir}/build-ab.db`)
   const internalIps = (env.PIT_INTERNAL_IPS ?? '').split(',').map((s) => s.trim()).filter(Boolean)
   const buildInvoicing: BuildInvoicing | undefined = env.PIT_PAYAGENT_KEY
     ? { payAgentUrl: env.PIT_PAYAGENT_URL ?? 'https://pay.agent.pit.world', key: env.PIT_PAYAGENT_KEY, mailer, notifyTo: env.PIT_BUILD_NOTIFY ?? 'ettinger@gmail.com' }
@@ -1467,7 +1544,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     setTimeout(run, 30_000).unref()
     setInterval(run, 15 * 60_000).unref()
   }
-  const app = createApp({ ...(directory ? { directory } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(process.env, ['/sitemap.xml', '/sitemaps/', ...(indexNow ? [indexNow.keyPath] : [])]), ...(indexNow ? { indexNow } : {}), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ ...(directory ? { directory } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(process.env, ['/sitemap.xml', '/sitemaps/', ...(indexNow ? [indexNow.keyPath] : [])]), ...(indexNow ? { indexNow } : {}), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, buildAb, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {

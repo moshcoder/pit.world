@@ -738,6 +738,7 @@ export function privacyPage(): string {
 <p>For businesses pit.world is featuring in a promotion (like a local roundup), pit.world counts visits to their listing page, clicks on the link to their website, taps on their phone number and quote requests, so it can tell each business honestly what the listing did for them. Search is never counted. A visit is stored as a type, a time, the listing, which of our posts linked you there (if one did) and the site you came from (its name only, never the full address). To count distinct visitors in a day, pit.world keeps a hash of your IP address and browser under a random key that is deleted when that day ends: nothing that can be turned back into an address, and nothing that links two days. No cookie is set, and nothing from a third party is loaded. The phone-tap count comes from a few lines of pit.world's own script on the listing page.</p>
 <h2 id="accounts">Your account, only if you sign in</h2>
 <p>Business owners may buy featured placement for $19 per month. We keep the invoice email, listing domain, renewal preference, provider invoice identifiers and paid-through date for billing. CoinPay processes the payments through pay.agent. Paid listings are labeled; these billing records are not used to track searches.</p>
+<p>The <a href="/build">build page</a> is running an A/B test of two versions of itself. To show you the same version each time, it sets one cookie, <code>pit_build_ab</code>, for the <code>/build</code> pages only: a random id, kept 180 days. pit.world records which version you saw and whether you sent an idea or asked for an invoice, against that random id and the time. Not your idea, email, address or browser: the idea and email go only to the invoice and the builder, as the page says. Search never sees the cookie.</p>
 <p>One pit.world account signs you in on every <code>social.&lt;name&gt;.pit.world</code> feed and <code>bbs.&lt;name&gt;.pit.world</code> board, so you never make an account per site. You sign in with CoinPay (OAuth 2.1). We keep your CoinPay id, the name and email CoinPay gives us, a session cookie for <code>pit.world</code> only, and the list of pit.world sites you signed in to, which you can see and clear on <a href="/account">your account page</a>. A site gets your CoinPay id and name, nothing else. Search never reads the cookie. Delete the account from the same page and it is gone; what you posted on a board or feed stays there until you delete it on that site.</p>
 <h2>Source</h2>
 <p>The code that does all of this is public: <a href="https://github.com/moshcoder/pit.world">github.com/moshcoder/pit.world</a>.</p>
@@ -1274,50 +1275,48 @@ ${o.body}
 </html>`
 }
 
-export function buildPage(o: { invoicing?: boolean; error?: string; values?: Record<string, string>; guard?: string } = {}): string {
+/** Live apps the same agents built (demo builds by our team, 2026-10); variant B of /build shows them above the idea box. */
+export const BUILD_EXAMPLES: ReadonlyArray<{ name: string; url: string; what: string }> = [
+  { name: 'Court Booking', url: 'https://court-booking-6.preshy-2.dev.chovy.com/', what: 'A week grid where tennis club members book four courts themselves, cancel their own slots, and staff print the day for the gate.' },
+  { name: 'Hale Street Dental intake', url: 'https://hale-street-dental-intake-13.preshy-2.dev.chovy.com/', what: 'A multi-step form new patients fill in on their phone before the first visit. Progress saves by magic link; staff print the answers.' },
+  { name: 'Verity Wines', url: 'https://verity-wines-10.preshy-2.dev.chovy.com/', what: 'A trade catalogue where restaurants sign in, filter wines by region and stock, and send an order the importer confirms.' },
+]
+
+export type BuildPageOptions = {
+  invoicing?: boolean
+  error?: string
+  values?: Record<string, string>
+  guard?: string
+  /** The A/B variant (src/build-ab.ts). A is the page as it was; B keeps the idea on pit.world. */
+  variant?: 'a' | 'b'
+  /** Print the 1x1 image that tells the test a real browser rendered the page. */
+  pixel?: boolean
+}
+
+const BUILD_PIXEL = '<img class="ab-pixel" src="/build/seen.gif" alt="" width="1" height="1" decoding="async">'
+
+function buildInvoiceForm(o: BuildPageOptions, opts: { hiddenIdea?: string; button?: string } = {}): string {
   const v = o.values ?? {}
-  return layout({
-    title: 'We build it. We host it. $49, then $2 a month · pit.world',
-    description: 'Describe the app in plain words. An AI product team plans it, builds it on the open source Profullstack stack and shows you it working. $49 to build, including the first 30 days, then $2 a month to keep it online. Paid in crypto through CoinPay.',
-    path: '/build',
-    bodyClass: 'doc',
-    body: `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>
-<main class="prose build">
-<p class="kicker">Build an app</p>
-<h1>We build it. We host it.</h1>
-<p class="lede">Describe the app in plain words. An AI product team writes a plan you can argue with, builds it on the open source <a href="${LINKS.stack}">Profullstack stack</a>, and shows you it working before anything launches. $49 to build, including the first 30 days, then $2 a month to keep it online. Paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>.</p>
-
-<form class="idea" action="${LINKS.chovyStart}" method="get">
-  <label for="idea">What should it do?</label>
-  <textarea id="idea" name="idea" rows="5" maxlength="2000" required placeholder="A booking page for my barbershop: customers pick a barber and a time, pay a deposit, and get a text reminder the day before."></textarea>
-  <input type="hidden" name="plan" value="starter">
-  <input type="hidden" name="ref" value="pitworld">
-  <button class="btn" type="submit">Start building →</button>
-  <p class="small">You continue on chovy.com, where the agents work and you pay at checkout. Your idea is sent there, not kept here.</p>
-</form>
-
-<div class="prices">
-  <div><b>$49</b><span>to build it, including the first 30 days</span><p>One small app: pages, a database, sign-in and payments where it needs them, on your own subdomain, online for its first month.</p></div>
-  <div><b>$2</b><span>a month after that, to keep it online</span><p>Hosting for that one app. Stop paying and it is paused, not deleted; pay again and it is back.</p></div>
-</div>
-<p>Both are paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>. No card, no account with a payment company.</p>
-${o.invoicing ? `
-<h2 id="invoice">Rather pay by invoice?</h2>
-<p>We send you two invoices through <a href="https://pay.agent.pit.world/">pay.agent</a>: $49 now, and $2 a month from day 31, which CoinPay sends each month by itself. A person on our team starts your build when the first one is paid.</p>
-${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
+  return `${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
 <form class="idea" action="/build/invoice" method="post">
-  <label for="inv-idea">What should it do?</label>
-  <textarea id="inv-idea" name="idea" rows="4" maxlength="2000" required>${esc(v.idea ?? '')}</textarea>
+  ${opts.hiddenIdea !== undefined ? `<input type="hidden" name="idea" value="${esc(opts.hiddenIdea)}">` : `<label for="inv-idea">What should it do?</label>
+  <textarea id="inv-idea" name="idea" rows="4" maxlength="2000" required>${esc(v.idea ?? '')}</textarea>`}
   <label for="inv-email">Email for the invoices</label>
   <input id="inv-email" name="email" type="email" required maxlength="254" autocomplete="email" value="${esc(v.email ?? '')}">
   <label for="inv-name">Your name <span class="small">(optional)</span></label>
   <input id="inv-name" name="name" maxlength="80" autocomplete="name" value="${esc(v.name ?? '')}">
   ${o.guard ?? '<input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">'}
-  <button class="btn" type="submit">Send me the invoice →</button>
+  <button class="btn" type="submit">${opts.button ?? 'Send me the invoice →'}</button>
   <p class="small">Your idea and email go to pay.agent (for the invoices) and to the builder. Nothing is kept on pit.world.</p>
-</form>` : ''}
+</form>`
+}
 
-<h2>What you get</h2>
+const BUILD_PRICES = `<div class="prices">
+  <div><b>$49</b><span>to build it, including the first 30 days</span><p>One small app: pages, a database, sign-in and payments where it needs them, on your own subdomain, online for its first month.</p></div>
+  <div><b>$2</b><span>a month after that, to keep it online</span><p>Hosting for that one app. Stop paying and it is paused, not deleted; pay again and it is back.</p></div>
+</div>`
+
+const BUILD_DETAILS = `<h2>What you get</h2>
 <ul>
 <li><b>A real app, not a mock-up.</b> It is not called finished until it can be shown working.</li>
 <li><b>You approve the launch.</b> Nothing goes live without your yes.</li>
@@ -1352,7 +1351,106 @@ ${o.error ? `<p class="note error" role="alert">${esc(o.error)}</p>` : ''}
 <h3>What happens if I stop paying the $2?</h3>
 <p>The app is paused, not deleted. Pay again and it comes back as it was.</p>
 <h3>Who builds it?</h3>
-<p><a href="https://chovy.com">Chovy</a>, an AI product team by Profullstack, Inc., the people behind pit.world.</p>
+<p><a href="https://chovy.com">Chovy</a>, an AI product team by Profullstack, Inc., the people behind pit.world.</p>`
+
+const BUILD_TITLE = 'We build it. We host it. $49, then $2 a month · pit.world'
+const BUILD_DESCRIPTION = 'Describe the app in plain words. An AI product team plans it, builds it on the open source Profullstack stack and shows you it working. $49 to build, including the first 30 days, then $2 a month to keep it online. Paid in crypto through CoinPay.'
+const buildBar = () => `<header class="bar"><a class="brand" href="/">${LOGO}<span>pit<i>.</i>world</span></a>${searchForm()}</header>`
+
+export function buildPage(o: BuildPageOptions = {}): string {
+  if (o.variant === 'b') return buildPageB(o)
+  return layout({
+    title: BUILD_TITLE,
+    description: BUILD_DESCRIPTION,
+    path: '/build',
+    bodyClass: 'doc',
+    body: `${buildBar()}
+<main class="prose build">
+<p class="kicker">Build an app</p>
+<h1>We build it. We host it.</h1>
+<p class="lede">Describe the app in plain words. An AI product team writes a plan you can argue with, builds it on the open source <a href="${LINKS.stack}">Profullstack stack</a>, and shows you it working before anything launches. $49 to build, including the first 30 days, then $2 a month to keep it online. Paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>.</p>
+
+<form class="idea" action="/build/go" method="get">
+  <label for="idea">What should it do?</label>
+  <textarea id="idea" name="idea" rows="5" maxlength="2000" required placeholder="A booking page for my barbershop: customers pick a barber and a time, pay a deposit, and get a text reminder the day before."></textarea>
+  <button class="btn" type="submit">Start building →</button>
+  <p class="small">You continue on chovy.com, where the agents work and you pay at checkout. Your idea is sent there, not kept here.</p>
+</form>
+${o.pixel ? BUILD_PIXEL : ''}
+${BUILD_PRICES}
+<p>Both are paid in crypto through <a href="https://coinpayportal.com">CoinPay</a>. No card, no account with a payment company.</p>
+${o.invoicing ? `
+<h2 id="invoice">Rather pay by invoice?</h2>
+<p>We send you two invoices through <a href="https://pay.agent.pit.world/">pay.agent</a>: $49 now, and $2 a month from day 31, which CoinPay sends each month by itself. A person on our team starts your build when the first one is paid.</p>
+${buildInvoiceForm(o)}` : ''}
+
+${BUILD_DETAILS}
+</main>`,
+  })
+}
+
+/** Variant B: proof first (three live apps), and the idea stays on pit.world. No account, no other domain. */
+function buildPageB(o: BuildPageOptions): string {
+  return layout({
+    title: BUILD_TITLE,
+    description: BUILD_DESCRIPTION,
+    path: '/build',
+    bodyClass: 'doc',
+    body: `${buildBar()}
+<main class="prose build">
+<p class="kicker">Build an app</p>
+<h1>Describe your app. We build it and host it.</h1>
+<p class="lede">AI agents build it on the open source <a href="${LINKS.stack}">Profullstack stack</a> and show it to you working before it launches. $49 includes the build and the first 30 days online, then $2 a month. No account to make.</p>
+
+<h2 id="examples">Apps these agents built</h2>
+<ul class="examples">
+${BUILD_EXAMPLES.map((e) => `<li><a href="${esc(e.url)}" rel="noopener" target="_blank"><b>${esc(e.name)}</b></a> <span class="small">live</span><br>${esc(e.what)}</li>`).join('\n')}
+</ul>
+<p class="small">Demo builds our team had the agents make. Open them: they are running, not screenshots.</p>
+
+<form class="idea" action="/build/plan" method="post">
+  <label for="idea">What should yours do?</label>
+  <textarea id="idea" name="idea" rows="5" maxlength="2000" required placeholder="A booking page for my barbershop: customers pick a barber and a time, pay a deposit, and get a text reminder the day before."></textarea>
+  <button class="btn" type="submit">See what you get →</button>
+  <p class="small">Next you see exactly what the $49 covers for your idea. Nothing to pay and no account on this step.</p>
+</form>
+${o.pixel ? BUILD_PIXEL : ''}
+${BUILD_PRICES}
+<p>Paid in crypto through <a href="https://coinpayportal.com">CoinPay</a> (USDC and other coins). No card yet.</p>
+
+${BUILD_DETAILS}
+</main>`,
+  })
+}
+
+/** Variant B, step 2: the idea back, what the $49 covers, and one email for the invoice. Still on pit.world. */
+export function buildPlanPage(o: BuildPageOptions & { idea: string }): string {
+  const idea = o.idea
+  const first = idea.split('\n')[0]!.slice(0, 160)
+  return layout({
+    title: 'Your app, built and hosted · pit.world',
+    description: 'What the $49 build covers for your idea, and the invoice by email.',
+    path: '/build/plan',
+    bodyClass: 'doc',
+    noindex: true,
+    body: `${buildBar()}
+<main class="prose build">
+<p class="kicker">Step 2 of 2</p>
+<h1>Here is what you get</h1>
+<blockquote class="idea-quote"><p>${esc(first)}${first.length < idea.length ? '…' : ''}</p></blockquote>
+<ol>
+<li><b>A plan first.</b> The agents write up the pages, the data and the sign-in your app needs, and ask you about anything unclear.</li>
+<li><b>The build.</b> Pages, a database, sign-in and payments where it needs them, on the open source Profullstack stack.</li>
+<li><b>Shown working.</b> You get a preview link to click through before anything launches.</li>
+<li><b>Launch on your yes.</b> Online at your own chovy.com subdomain with HTTPS, the first 30 days included.</li>
+<li><b>$2 a month from day 31</b> to keep it online. Stop paying and it is paused, not deleted.</li>
+</ol>
+${BUILD_PRICES}
+<h2 id="invoice">Get the invoice</h2>
+<p>We email two invoices through <a href="https://pay.agent.pit.world/">pay.agent</a>: $49 now and $2 a month from day 31. Pay in crypto through CoinPay. A person on our team starts your build when the $49 is paid and writes to you at this address.</p>
+${buildInvoiceForm(o, { hiddenIdea: idea, button: 'Email me the invoice →' })}
+<p class="small">Rather sign up and talk to the agents yourself? <a href="/build/go?idea=${esc(encodeURIComponent(idea))}">Continue on chovy.com</a>.</p>
+${o.pixel ? BUILD_PIXEL : ''}
 </main>`,
   })
 }
