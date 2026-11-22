@@ -277,7 +277,7 @@ describe('why pit.world exists', () => {
     const why = await res.text()
     expect(why).toContain("<h1>ICANN doesn't scale for the agentic web.</h1>")
     expect(why).toContain('href="/connect"')
-    expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/why')
+    expect(await (await request('/sitemaps/pages.xml')).text()).toContain('https://pit.world/why')
   })
 })
 
@@ -486,7 +486,7 @@ describe('the web app', () => {
     for (const id of ['moshcode', 'tron', 'browser', 'apple', 'windows', 'android', 'ca', 'check', 'undo']) expect(html).toContain(`id="${id}"`)
     expect(html).toContain('https://dns.moshcode.sh/dns-query')
     expect(html).toContain(MOSHPIT_ROOT_SHA256)
-    expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/connect')
+    expect(await (await request('/sitemaps/pages.xml')).text()).toContain('https://pit.world/connect')
   })
 
   it('serves the Moshpit root it documents, and an Apple profile carrying it', async () => {
@@ -852,7 +852,7 @@ describe('/build', () => {
     expect(html).toContain('$49')
     expect(html).toContain('$2')
     expect(await (await request('/')).text()).toContain('href="/build"')
-    expect(await (await request('/sitemap.xml')).text()).toContain('https://pit.world/build')
+    expect(await (await request('/sitemaps/pages.xml')).text()).toContain('https://pit.world/build')
     expect(html).toContain('We build it. We host it.')
     expect(html).toContain('$49 to build, including the first 30 days, then $2 a month to keep it online.')
     expect(html).not.toContain('action="/build/invoice"')

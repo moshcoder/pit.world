@@ -157,7 +157,7 @@ describe('footer', () => {
     const home = await (await app.request('/about')).text()
     expect(home).toContain('href="/status"')
     expect(home).toContain('href="/bot"')
-    const sitemap = await (await app.request('/sitemap.xml')).text()
+    const sitemap = await (await app.request('/sitemaps/pages.xml')).text()
     expect(sitemap).toContain('https://pit.world/status')
     expect(sitemap).toContain('https://pit.world/bot')
   })

@@ -12,7 +12,8 @@ import { SESSION_COOKIE } from './accounts.js'
 
 export type CrawlGate = { handle: (request: Request) => Promise<Response | null> }
 
-export function createCrawlGate(env: Record<string, string | undefined> = process.env): CrawlGate | null {
+/** `extraOpen`: more paths every crawler may read (the sitemaps and the IndexNow key file, so search engines can discover pages). */
+export function createCrawlGate(env: Record<string, string | undefined> = process.env, extraOpen: string[] = []): CrawlGate | null {
   const apiKey = env.COINPAY_X402_KEY ?? ''
   const payTo = env.CRAWL_PAY_TO ?? ''
   if (!apiKey || !payTo) return null
@@ -23,7 +24,7 @@ export function createCrawlGate(env: Record<string, string | undefined> = proces
     coinpay: { apiKey },
     payTo,
     contact: 'mailto:anthony@profullstack.com',
-    openPaths: ['/health', '/api/', '/mcp', '/snippets/', '/llms.txt', '/moshpit-root-ca.crt', '/moshpit.mobileconfig', '/opensearch.xml'],
+    openPaths: ['/health', '/api/', '/mcp', '/snippets/', '/llms.txt', '/moshpit-root-ca.crt', '/moshpit.mobileconfig', '/opensearch.xml', ...extraOpen],
     exempt: (request: Request) => session.test(request.headers.get('cookie') ?? ''),
   })
 }

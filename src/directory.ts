@@ -18,6 +18,7 @@
 import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { docPage, esc } from './html.js'
 import { RING } from './ring.js'
+import { CATEGORIES as PRO_CATEGORIES } from './pros.js'
 
 export type Subcategory = { slug: string; name: string }
 export type Category = { slug: string; name: string; subs: Subcategory[] }
@@ -426,6 +427,8 @@ ${searchBox()}
       })
       .join('')}</div>
 ${fresh.length ? `<h2>What's New</h2>${siteList(v, fresh)}<p><a href="/directory/new">All new sites</a></p>` : ''}
+<h2><a href="/pros">Business Directory</a></h2>
+<p>Businesses anywhere on the web, by category. Owners claim their listing free. ${PRO_CATEGORIES.map((c) => `<a href="/pros/${encodeURIComponent(c.slug)}">${esc(c.label)}</a>`).join(', ')}.</p>
 ${legend(v)}
 ${footer}`,
   })

@@ -69,7 +69,7 @@ describe('shares: the pages', () => {
     expect(page).toContain('value="https://pit.world/result/site2.example/page"')
     expect(page).not.toContain('<meta name="robots" content="noindex">')
     expect(page).toContain('<link rel="canonical" href="https://pit.world/result/site2.example/page">')
-    expect(await (await req('/sitemap.xml')).text()).toContain('<loc>https://pit.world/result/site2.example/page</loc>')
+    expect(await (await req('/sitemaps/results.xml')).text()).toContain('<loc>https://pit.world/result/site2.example/page</loc>')
     expect(await (await req('/robots.txt')).text()).toContain('Disallow: /share')
     expect(page).not.toContain('nichedb.dev/c/sites')
     // A tampered link is refused, and keeps nothing.
@@ -103,7 +103,7 @@ describe('shares: a result with a query string', () => {
     const page = await (await req('/result/q.example/p%3Fb=2&c=3')).text()
     expect(page).toContain('<h1><a href="https://q.example/p?b=2&amp;c=3"')
     expect(page).toContain('<link rel="canonical" href="https://pit.world/result/q.example/p%3Fb=2&amp;c=3">')
-    expect(await (await req('/sitemap.xml')).text()).toContain('<loc>https://pit.world/result/q.example/p%3Fb=2&amp;c=3</loc>')
+    expect(await (await req('/sitemaps/results.xml')).text()).toContain('<loc>https://pit.world/result/q.example/p%3Fb=2&amp;c=3</loc>')
     expect((await req('/result/%E0%A4%A')).status).toBe(404)
   })
 })

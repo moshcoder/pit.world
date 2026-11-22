@@ -25,17 +25,21 @@ import { Directory, directoryCategory, directoryHome, directoryJson, directoryNe
 import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
 import { backfillFor, featuredFor } from './featured.js'
 import { Promoted } from './promoted.js'
-import { listingCard } from './listings-html.js'
+import { listingCard, MAX_PROS_PAGE, PROS_PER_PAGE } from './listings-html.js'
+import { CATEGORIES as PRO_CATEGORIES } from './pros.js'
+import { classifyBusiness } from './classify.js'
+import { IndexNow, indexNowKey, readState, writeState } from './indexnow.js'
+import { LISTINGS_PER_SITEMAP, SitemapCache, listingSitemapCount, prosHubPaths, sitemapIndex, urlset } from './sitemap.js'
 import { FeaturedBusinesses } from './business-featured.js'
 import { mountBusinessFeatured } from './business-featured-routes.js'
 import { mountListings } from './listings-routes.js'
 import { PageImages } from './page-image.js'
 import { ALL_LANGUAGES, browserLanguage, inLanguage, parseLanguage } from './language.js'
-import { liveVerifier, Listings } from './listings.js'
+import { isIndexable, liveVerifier, Listings } from './listings.js'
 import { ensurePublicDirectorySeeds } from './directory-seeds.js'
 import { enrichNicheDb } from './nichedb.js'
 import { resultPath, Shares } from './shares.js'
-import { CATEGORY_RULES_VERSION, categoryFor, importNicheDb } from './nichedb-import.js'
+import { CATEGORY_RULES_VERSION, importNicheDb } from './nichedb-import.js'
 import { enrichOfficialCompanySites } from './official-company-sites.js'
 import { readFileSync } from 'node:fs'
 import { Accounts, serviceHost } from './accounts.js'
@@ -102,6 +106,8 @@ export type Deps = {
   promoted?: Promoted
   /** Claimable business listings (/b); unset means the feature is off. */
   listings?: Listings
+  /** IndexNow pings for changed listings, and the key file it is checked against; unset means off. */
+  indexNow?: IndexNow
   /** Mirrors the ring to rssamplifier.com; unset means no mirror. */
   ringSync?: RingSync
   /** The *.pit.world directory (/directory), read from the live certs and edge config; unset means off. */
@@ -571,15 +577,44 @@ export function createApp(deps: Deps) {
   app.get('/robots.txt', (c) =>
     c.body('User-agent: *\nDisallow: /search\nDisallow: /share\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
   )
+  // /sitemap.xml is an index; the listings get as many child sitemaps as they need (src/sitemap.ts).
+  const sitemaps = new SitemapCache()
+  const xmlBody = (c: Context<Env>, body: string) => c.body(body, 200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=900' })
+  const sitePagePaths = () => ['/', '/connect', '/start', '/build', '/api', '/mcps', ...(deps.promoters ? ['/promote'] : []), '/ring', ...(deps.directory ? directoryPaths(directoryView(deps.directory)) : []), '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot']
+  const listingMaps = () => (deps.listings ? Number(sitemaps.get('count', () => String(listingSitemapCount(deps.listings!.sitemapCount())))) : 0)
   app.get('/sitemap.xml', (c) =>
-    c.body(
-      `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${['/', '/connect', '/start', '/build', '/api', '/mcps', ...(deps.promoters ? ['/promote'] : []), '/ring', ...(deps.directory ? directoryPaths(directoryView(deps.directory)) : []), '/pros', '/b', '/featured', '/why', '/about', '/privacy', '/submit', '/status', '/bot', ...(deps.listings ? deps.listings.sitemapDomains().map((d) => `/b/${encodeURIComponent(d)}`) : []), ...shares.slugs().map(resultPath)]
-        .map((p) => `<url><loc>https://pit.world${esc(p)}</loc></url>`)
-        .join('')}</urlset>`,
-      200,
-      { 'content-type': 'application/xml; charset=utf-8' },
-    ),
+    xmlBody(c, sitemaps.get('index', () => {
+      const now = Date.now()
+      const maps = [
+        { loc: '/sitemaps/pages.xml' },
+        ...(deps.listings ? [{ loc: '/sitemaps/pros.xml' }] : []),
+        ...Array.from({ length: listingMaps() }, (_, i) => {
+          const page = deps.listings!.sitemapPage(i * LISTINGS_PER_SITEMAP, LISTINGS_PER_SITEMAP)
+          return { loc: `/sitemaps/listings-${i + 1}.xml`, lastmod: Math.min(now, Math.max(0, ...page.map((e) => e.lastmod))) }
+        }),
+        ...(shares.slugs().length ? [{ loc: '/sitemaps/results.xml' }] : []),
+      ]
+      return sitemapIndex(maps)
+    })),
   )
+  app.get('/sitemaps/pages.xml', (c) => xmlBody(c, sitemaps.get('pages', () => urlset(sitePagePaths().map((loc) => ({ loc }))))))
+  app.get('/sitemaps/results.xml', (c) => xmlBody(c, sitemaps.get('results', () => urlset(shares.slugs().map((slug) => ({ loc: resultPath(slug) }))))))
+  app.get('/sitemaps/pros.xml', (c) =>
+    deps.listings
+      ? xmlBody(c, sitemaps.get('pros', () => urlset(prosHubPaths(deps.listings!.indexableCategoryCounts(), PROS_PER_PAGE, MAX_PROS_PAGE, PRO_CATEGORIES.map((cat) => cat.slug)).map((loc) => ({ loc })))))
+      : c.notFound(),
+  )
+  app.get('/sitemaps/:file{listings-[0-9]+\\.xml}', (c) => {
+    const n = Number(/(\d+)/.exec(c.req.param('file'))?.[1] ?? 0)
+    if (!deps.listings || n < 1 || n > listingMaps()) return c.notFound()
+    return xmlBody(c, sitemaps.get(`listings-${n}`, () =>
+      urlset(deps.listings!.sitemapPage((n - 1) * LISTINGS_PER_SITEMAP, LISTINGS_PER_SITEMAP).map((e) => ({ loc: `/b/${encodeURIComponent(e.domain)}`, lastmod: e.lastmod })))))
+  })
+  // The IndexNow key file: how Bing and Yandex check that our pings come from pit.world.
+  if (deps.indexNow) {
+    const key = deps.indexNow.key
+    app.get(deps.indexNow.keyPath, (c) => c.body(`${key}\n`, 200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=86400' }))
+  }
   app.get('/llms.txt', (c) =>
     c.body(
       `# pit.world
@@ -1313,6 +1348,16 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   const mailer = env.RESEND_API_KEY ? resendMailer(env.RESEND_API_KEY) : null
   const listings = new Listings(env.PIT_LISTINGS_DB ?? `${dataDir}/listings.db`, liveVerifier(fetch, { resolve: (name) => registry.resolve(name), rootPem }), undefined, { mailer })
   ensurePublicDirectorySeeds(listings)
+  // IndexNow: listing pages that are claimed, edited, written by pit.world or newly worth indexing.
+  const indexNow = env.PIT_INDEXNOW === 'off'
+    ? undefined
+    : new IndexNow(indexNowKey(`${dataDir}/indexnow.key`, env.PIT_INDEXNOW_KEY), { site: env.PIT_SITE ?? 'https://pit.world', log: (line) => console.log(line) })
+  if (indexNow) {
+    listings.onChange((domain) => {
+      const l = listings.toPublic(domain) ?? listings.claimedOnly(domain)
+      if (l && isIndexable(l)) indexNow.queue(`${env.PIT_SITE ?? 'https://pit.world'}/b/${encodeURIComponent(l.domain)}`)
+    })
+  }
   const ringSync = env.RSSAMPLIFIER_API_KEY
     ? new RingSync({ apiKey: env.RSSAMPLIFIER_API_KEY, ...(env.RSSAMPLIFIER_URL ? { base: env.RSSAMPLIFIER_URL } : {}), ...(env.RSSAMPLIFIER_RING ? { slug: env.RSSAMPLIFIER_RING } : {}) })
     : undefined
@@ -1422,7 +1467,7 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
     setTimeout(run, 30_000).unref()
     setInterval(run, 15 * 60_000).unref()
   }
-  const app = createApp({ ...(directory ? { directory } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ ...(directory ? { directory } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(process.env, ['/sitemap.xml', '/sitemaps/', ...(indexNow ? [indexNow.keyPath] : [])]), ...(indexNow ? { indexNow } : {}), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
@@ -1471,12 +1516,56 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       }
     }
     try {
-      const n = listings.recategorizeImported(categoryFor, CATEGORY_RULES_VERSION)
-      if (n) console.log(`NicheDB directory import: re-categorised ${n} imported listings`)
+      const r = listings.repairImported(CATEGORY_RULES_VERSION)
+      if (r.requeued || r.decoded) console.log(`NicheDB directory import: ${r.requeued} podcast-named listings to read again, ${r.decoded} descriptions decoded`)
     } catch (err) {
-      console.error(`NicheDB directory re-categorise failed: ${(err as Error).message}`)
+      console.error(`NicheDB directory repair failed: ${(err as Error).message}`)
     }
+    void listings
+      .recategorizeImportedInBatches(classifyBusiness, CATEGORY_RULES_VERSION)
+      .then((n) => n && console.log(`NicheDB directory import: re-categorised ${n} imported listings`))
+      .catch((err) => console.error(`NicheDB directory re-categorise failed: ${(err as Error).message}`))
     setTimeout(importDirectory, 90_000).unref()
+  }
+  // Imported listings whose homepage was never read get a description and a category from their own
+  // words, a batch every few minutes, so they can be indexed (src/listings.ts describeBacklog).
+  if (env.PIT_DESCRIBE_BACKLOG !== 'off') {
+    let describing = false
+    const describe = async () => {
+      if (describing) return
+      describing = true
+      try {
+        const r = await listings.describeBacklog(Number(env.PIT_DESCRIBE_BATCH ?? 200) || 200, Number(env.PIT_DESCRIBE_CONCURRENCY ?? 6) || 6)
+        if (r.checked) console.log(`Listing descriptions: read ${r.checked} homepages, ${r.described} answered, ${listings.describeRemaining()} left`)
+      } catch (err) {
+        console.error(`Listing descriptions failed: ${(err as Error).message}`)
+      } finally {
+        describing = false
+      }
+    }
+    setTimeout(describe, 120_000).unref()
+    setInterval(describe, 5 * 60_000).unref()
+  }
+  // Once: tell IndexNow about every indexable listing and directory hub already live. After that only
+  // changes are sent (the hook above). PIT_INDEXNOW_FULL names the pass; change it to send everything again.
+  if (indexNow) {
+    const statePath = `${dataDir}/indexnow-state.json`
+    const pass = env.PIT_INDEXNOW_FULL ?? 'listings-v1'
+    setTimeout(() => {
+      const state = readState(statePath)
+      if (state.full === pass) return
+      const site = env.PIT_SITE ?? 'https://pit.world'
+      const urls = [`${site}/pros`, ...PRO_CATEGORIES.filter((cat) => listings.indexableCategoryCounts()[cat.slug]).map((cat) => `${site}/pros/${cat.slug}`)]
+      for (let offset = 0; ; offset += LISTINGS_PER_SITEMAP) {
+        const page = listings.sitemapPage(offset, LISTINGS_PER_SITEMAP)
+        urls.push(...page.map((e) => `${site}/b/${encodeURIComponent(e.domain)}`))
+        if (page.length < LISTINGS_PER_SITEMAP) break
+      }
+      void indexNow.submit(urls).then((r) => {
+        console.log(`IndexNow full pass ${pass}: ${r.sent} of ${urls.length} URLs accepted, statuses ${r.statuses.join(',')}`)
+        if (r.sent) writeState(statePath, { ...state, full: pass, at: new Date().toISOString(), sent: r.sent, statuses: r.statuses })
+      })
+    }, 180_000).unref()
   }
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   // Last good target per name, on disk: the relay keeps serving names while the registry is down.

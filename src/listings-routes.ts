@@ -2,7 +2,7 @@
 import type { RowTools } from './html.js'
 import type { Context, Hono } from 'hono'
 import {
-  claimPage, contactConfirmedPage, hasOpenProfile, editPage, listingPage, listingsFeed, listingsIndexPage, prosPage, siteUrl, verifiedPage, verifyFailedPage, type QuoteState,
+  claimPage, contactConfirmedPage, hasOpenProfile, editPage, listingPage, listingsFeed, listingsIndexPage, MAX_PROS_PAGE, PROS_PER_PAGE, prosPage, siteUrl, verifiedPage, verifyFailedPage, type QuoteState,
 } from './listings-html.js'
 import { EDIT_FIELDS, normalizeDomain, type ClaimStart, type ContactResult, type ListingEdit, type Listings } from './listings.js'
 import { CATEGORIES, categoryOf, PRICES } from './pros.js'
@@ -71,7 +71,7 @@ export const isPerson = (userAgent: string | undefined) => Boolean(userAgent) &&
 
 const pageNumber = (raw: string | undefined) => {
   const n = Math.trunc(Number(raw ?? 1))
-  return Number.isFinite(n) && n >= 1 ? Math.min(n, 500) : 1
+  return Number.isFinite(n) && n >= 1 ? Math.min(n, MAX_PROS_PAGE) : 1
 }
 
 export function mountListings(
@@ -129,7 +129,7 @@ export function mountListings(
     if (c.req.method === 'GET') hooks.viewed?.(c, listing.domain)
     if (hasOpenProfile(listing)) c.header('link', `<${openProfilePath(listing.domain)}>; rel="openprofile"; type="text/markdown"`)
     const votes = views([listing.domain], `/b/${encodeURIComponent(listing.domain)}`)
-    return c.html(listingPage(listing, { via: viaOf(c), ...(votes ? { votes } : {}) }))
+    return c.html(listingPage(listing, { via: viaOf(c), similar: listings.similar(listing.domain), ...(votes ? { votes } : {}) }))
   })
 
   // The listing as an OpenProfile.md (Kind organization), for directory listings only: a bare unclaimed
@@ -219,7 +219,7 @@ export function mountListings(
   })
 
   const directory = (c: Context<Env>, category: string | undefined) => {
-    const perPage = 20
+    const perPage = PROS_PER_PAGE
     const page = pageNumber(c.req.query('page'))
     const q = (c.req.query('q') ?? '').trim().slice(0, 120)
     const near = (c.req.query('near') ?? '').trim().slice(0, 120)

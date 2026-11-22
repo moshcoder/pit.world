@@ -73,6 +73,9 @@ const fmt = (n: number) => n.toLocaleString('en-US')
  * CRAWLPROOF_AD_SLOT=off turns ads off.
  */
 const TRACKER_SITE = '81a8a3cd-8d5b-4c5f-bb29-c21a1bbb6a05'
+/** Search Console and Bing Webmaster ownership tags: the token each one hands out when the site is added. */
+const GOOGLE_VERIFICATION = (process.env.PIT_GOOGLE_SITE_VERIFICATION ?? '').trim()
+const BING_VERIFICATION = (process.env.PIT_BING_SITE_VERIFICATION ?? '').trim()
 export const AD_SLOT = process.env.CRAWLPROOF_AD_SLOT ?? '782907b4-bf27-44bf-b202-df196c4b207e'
 /**
  * Sponsored listings at the top of results (Anthony 2026-11-02: "we need more sponsored
@@ -133,7 +136,7 @@ ${options.noindex ? '<meta name="robots" content="noindex">' : `<link rel="canon
 <link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <meta name="apple-mobile-web-app-title" content="pit.world">
 <meta name="pwamart-verification" content="19278327af99806655813c4a">
-<link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
+${GOOGLE_VERIFICATION ? `<meta name="google-site-verification" content="${esc(GOOGLE_VERIFICATION)}">\n` : ''}${BING_VERIFICATION ? `<meta name="msvalidate.01" content="${esc(BING_VERIFICATION)}">\n` : ''}<link rel="search" type="application/opensearchdescription+xml" title="pit.world" href="/opensearch.xml">
 <link rel="alternate" type="application/atom+xml" title="New on pit.world" href="/b/feed.xml">
 ${options.head ?? ''}<link rel="stylesheet" href="${ringFooterCssUrl()}">
 <link rel="stylesheet" href="${STYLE_URL}">

@@ -179,7 +179,7 @@ describe('listings: listed by pit.world (seeded)', () => {
     expect(page).toContain('CSLB #123456 (B - General Building) · active when pit.world checked on 2026-10-17')
     expect(page).toContain('(408) 555-0100')
     expect(page).not.toContain('id="quote"')
-    expect(await (await h.request('/sitemap.xml')).text()).toContain('/b/acme-builders.com')
+    expect(await (await h.request('/sitemaps/listings-1.xml')).text()).toContain('/b/acme-builders.com')
   })
 
   it('adds Trial Stack AI from its public site without inventing a location or license', async () => {
