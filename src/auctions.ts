@@ -375,6 +375,11 @@ export class AuctionHouse {
     return this.db.query<ArtworkImage, [string]>('SELECT image_type, image FROM auction_artworks WHERE id = ?').get(id) ?? null
   }
 
+  /** Every piece's id and dates, newest first, for /sitemap.xml (no images, no limit of 100). */
+  sitemapPieces(limit = 40_000): { id: string; created_at: number; closed_at: number | null }[] {
+    return this.db.query<{ id: string; created_at: number; closed_at: number | null }, [number]>('SELECT id, created_at, closed_at FROM auction_artworks ORDER BY created_at DESC LIMIT ?').all(limit)
+  }
+
   add(input: { title: string; artist: string; medium: string; description: string; imageType: string; image: Uint8Array; topic?: AuctionTopic | ''; ownerSub?: string }, now = Date.now()): string {
     const id = randomBytes(12).toString('base64url')
     this.db.query('INSERT INTO auction_artworks (id, title, artist, medium, description, image_type, image, topic, owner_sub, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -545,6 +550,26 @@ function accountPage(house: AuctionHouse, viewer: Identity | null, theme: Auctio
     <form method="post" action="/signout"><button class="quiet-button">Sign out</button></form></section></main>`, 'Your Art Auctions account.', '/account')
 }
 
+/** robots.txt for the auction house: everything public, the forms and account pages left out. */
+export function auctionRobots(): string {
+  return `User-agent: *\nDisallow: /account\nDisallow: /signin\nDisallow: /shop/admin\nDisallow: /shop/order/\nAllow: /\nSitemap: https://${AUCTION_HOST}/sitemap.xml\n`
+}
+
+/** /sitemap.xml: the house's pages, its topics, the shop and every piece (newest first, with lastmod). */
+export function auctionSitemap(house: AuctionHouse, catalog: ShopItem[]): string {
+  const w3c = (ms: number) => new Date(ms).toISOString().replace(/\.\d{3}Z$/, 'Z')
+  const url = (path: string, lastmod?: number | null) => `<url><loc>${esc(`https://${AUCTION_HOST}${path}`)}</loc>${lastmod && lastmod > 0 ? `<lastmod>${w3c(lastmod)}</lastmod>` : ''}</url>`
+  const pieces = house.sitemapPieces()
+  const urls = [
+    url('/', pieces[0]?.created_at),
+    url('/topics'),
+    ...TOPIC_SLUGS.map((slug) => url(`/topics/${encodeURIComponent(slug)}`)),
+    ...(catalog.length ? [url('/shop'), ...catalog.map((i) => url(`/shop/${encodeURIComponent(i.slug)}`))] : []),
+    ...pieces.map((p) => url(`/art/${encodeURIComponent(p.id)}`, Math.max(p.created_at, p.closed_at ?? 0))),
+  ]
+  return `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">${urls.join('')}</urlset>`
+}
+
 export type AuctionAppOptions = {
   shop?: AuctionShop
   adminToken?: string
@@ -648,6 +673,9 @@ export function createAuctionApp(house: AuctionHouse, options: AuctionAppOptions
     return c.redirect(`/art/${encodeURIComponent(id)}`, 303)
   })
   app.get('/', (c) => c.html(home(house, themeOf(c))))
+  // For crawlers: the public pages and every piece, on the one canonical host.
+  app.get('/robots.txt', (c) => c.body(auctionRobots(), 200, { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' }))
+  app.get('/sitemap.xml', (c) => c.body(auctionSitemap(house, shop.catalog), 200, { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=900' }))
   app.post('/shop/webhooks/coinpay', async (c) => {
     const raw = await c.req.text()
     if (!shop.verifyWebhook(raw, c.req.header('x-coinpay-signature'))) return c.json({ error: 'bad signature' }, 401)

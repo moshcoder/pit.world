@@ -1716,7 +1716,12 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       if (svc) return serviceRequest(request, svc, forwarded || peer, proto, serviceDeps)
       // <name>.pit.world is a Moshpit name relayed to the old internet (src/proxy.ts), not pit.world itself.
       const name = proxiedName(request.headers.get('host'))
-      if (name) return proxyRequest(request, name, forwarded || peer, (local && request.headers.get('x-forwarded-proto')) || 'http', proxyDeps)
+      if (name) {
+        // A local proxy serving the name under another host (nginx: chovy.hacker.w3bs.org) says so in X-Forwarded-Host.
+        const asked = local ? String(request.headers.get('x-forwarded-host') ?? '').trim().toLowerCase().replace(/:\d+$/, '') : ''
+        const publicHost = /^[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?$/.test(asked) && asked.includes('.') ? asked : undefined
+        return proxyRequest(request, name, forwarded || peer, (local && request.headers.get('x-forwarded-proto')) || 'http', proxyDeps, publicHost)
+      }
       // threatcrush-disable-next-line js-ssrf-outbound-request  not an outbound request: Hono's in-process dispatch of the incoming request
       return app.fetch(request, { ip: forwarded || peer })
     },
