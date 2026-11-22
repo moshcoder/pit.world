@@ -20,7 +20,9 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # The deploy queues in dev2's deploy-gate (3 slots, waits up to 60 min for one)
+    # behind every other fleet deploy, so 20 minutes timed out during busy merges.
+    timeout-minutes: 75
     steps:
       - name: Set up ssh
         env:
