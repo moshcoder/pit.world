@@ -1551,7 +1551,9 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   if (indexNow) {
     const statePath = `${dataDir}/indexnow-state.json`
     const pass = env.PIT_INDEXNOW_FULL ?? 'listings-v1'
-    setTimeout(() => {
+    // A brand-new key answers 202 ("validation pending") and then 403 until the engines have fetched the
+    // key file, so a pass sent in that window is refused: try again later, up to four times.
+    const fullPass = (attempt: number) => {
       const state = readState(statePath)
       if (state.full === pass) return
       const site = env.PIT_SITE ?? 'https://pit.world'
@@ -1563,9 +1565,11 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       }
       void indexNow.submit(urls).then((r) => {
         console.log(`IndexNow full pass ${pass}: ${r.sent} of ${urls.length} URLs accepted, statuses ${r.statuses.join(',')}`)
-        if (r.sent) writeState(statePath, { ...state, full: pass, at: new Date().toISOString(), sent: r.sent, statuses: r.statuses })
+        if (r.sent === urls.length) writeState(statePath, { ...state, full: pass, at: new Date().toISOString(), sent: r.sent, statuses: r.statuses })
+        else if (attempt < 4) setTimeout(() => fullPass(attempt + 1), attempt * 15 * 60_000).unref()
       })
-    }, 180_000).unref()
+    }
+    setTimeout(() => fullPass(1), 180_000).unref()
   }
   const trustProxy = (process.env.PIT_TRUST_PROXY ?? '1') === '1'
   // Last good target per name, on disk: the relay keeps serving names while the registry is down.
