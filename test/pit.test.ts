@@ -845,10 +845,9 @@ describe('Google + Bing', () => {
 describe('/build', () => {
   it('hands the idea to chovy.com on the Starter plan, credited to pit.world, linked from home', async () => {
     const { request } = app()
-    const html = await (await request('/build')).text()
-    expect(html).toContain('action="https://chovy.com/start"')
-    expect(html).toContain('name="plan" value="starter"')
-    expect(html).toContain('name="ref" value="pitworld"')
+    // Variant A (the page as it was): Start building goes through /build/go, which hands off to chovy.com.
+    const html = await (await request('/build?variant=a')).text()
+    expect(html).toContain('action="/build/go"')
     expect(html).toContain('$49')
     expect(html).toContain('$2')
     expect(await (await request('/')).text()).toContain('href="/build"')
@@ -881,12 +880,12 @@ describe('/build', () => {
       buildInvoicing: { payAgentUrl: 'https://pa.test/', key: 'pa_test', fetch: payAgent, notifyTo: 'builder@example.com', mailer: async (m) => void mails.push(m), guard: { minAgeMs: 0 } },
     })
     // A person renders /build first, so every post carries the form guard's token from that page.
-    const token = async () => /name="fg_token" value="([^"]+)"/.exec(await (await instance.request('/build', {}, { ip: '203.0.113.9' })).text())![1]!
+    const token = async () => /name="fg_token" value="([^"]+)"/.exec(await (await instance.request('/build?variant=a', {}, { ip: '203.0.113.9' })).text())![1]!
     const raw = (form: Record<string, string>, ip = '203.0.113.9') =>
       instance.request('/build/invoice', { method: 'POST', body: new URLSearchParams(form).toString(), headers: { 'content-type': 'application/x-www-form-urlencoded' } }, { ip })
     const post = async (form: Record<string, string>, ip = '203.0.113.9') => raw({ fg_token: await token(), ...form }, ip)
 
-    const page = await instance.request('/build', {}, { ip: '203.0.113.9' })
+    const page = await instance.request('/build?variant=a', {}, { ip: '203.0.113.9' })
     expect(page.headers.get('cache-control')).toBe('no-store')
     const html = await page.text()
     expect(html).toContain('action="/build/invoice"')

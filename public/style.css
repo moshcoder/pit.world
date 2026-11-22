@@ -164,6 +164,10 @@ ol.videos li.no-image, ol.books li.no-image { grid-template-columns: 1fr; }
 .prices b { display: block; font: 800 34px/1.1 var(--mono); color: var(--accent); }
 .prices span { color: var(--muted); font-size: 14px; }
 .prices p { margin: 8px 0 0; font-size: 15px; }
+.build .examples { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; margin: 8px 0; }
+.build .examples li { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px; font-size: 15px; margin: 0; }
+.build .idea-quote { border-left: 3px solid var(--accent); margin: 12px 0 20px; padding: 4px 0 4px 14px; color: var(--muted); }
+.ab-pixel { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
 
 /* newsletter */
 .newsletter { max-width: 1040px; margin: 0 auto; padding: 40px 16px 64px; border-top: 1px solid var(--line); }

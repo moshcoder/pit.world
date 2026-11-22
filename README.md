@@ -118,6 +118,13 @@ Both sign people in with their **pit.world account**: sign in once at [pit.world
 - **Affiliate links**: `pit.world/join?ref=CODE` (and `/?ref=CODE`) attributes a new account to the member, first touch, once. Promoter codes stay with the [promoter program](https://pit.world/promote).
 - No cookie: the invite or ref rides the sign-in `next` URL. Tables `credit_*` and `aff_*` live in accounts.db.
 
+## /build A/B test
+
+`/build` ($49 to build an app, then $2 a month) runs a server-side 50/50 test (`src/build-ab.ts`). A random first-party id in the `pit_build_ab` cookie (path `/build` only) picks the variant by hash, so it is sticky; no third-party SDK. **A** is the page as it was (Start building goes through `/build/go` to chovy.com, `ref=pitworld-a`). **B** shows three live apps the agents built and keeps the idea on pit.world: `POST /build/plan` is step 2 (what the $49 covers, one email field for the pay.agent invoice). Steps `view`, `seen` (the page's 1x1 image loaded, the denominator that drops HTML-only bots), `idea` (primary), `handoff`, `checkout` (invoice made) and `paid` (checked against pay.agent) are rows in `build-ab.db`. `?variant=a|b` forces a page for QA, recorded as qa and left out, as are `PIT_INTERNAL_IPS`.
+
+    curl -H "Authorization: Bearer $PIT_ADMIN_TOKEN" https://pit.world/api/admin/build-ab.json   # also refreshes paid
+    PIT_DATA_DIR=/var/lib/pit-world bun src/build-ab-cli.ts [--days 30] [--json]                 # read-only, on the host
+
 ## Privacy, by construction
 
 - nginx writes **no access log** for the site (`ACCESS_LOG=off` in `bin/install.conf`), and the app logs nothing per request.
