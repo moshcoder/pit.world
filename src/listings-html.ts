@@ -1,6 +1,6 @@
 /** Pages for business listings (/b) and the pro directory (/pros). Every value is escaped; links carry no referrer. */
 import { docPage, esc, rowActions, sideThumb, type RowTools } from './html.js'
-import type { ClaimStart, ContactStatus, Listing } from './listings.js'
+import { isIndexable, type ClaimStart, type ContactStatus, type Listing } from './listings.js'
 import { CATEGORIES, PRICES, categoryOf, operatorHref, priceLabel, ringEligible } from './pros.js'
 import { proxyUrl, ringSnippet, RSS_RING } from './ring.js'
 import { openProfilePath } from './listing-openprofile.js'
@@ -42,25 +42,216 @@ export function place(l: Listing): string {
 }
 
 
-/** Machine-readable organization metadata from visible, attributed business facts. */
-export function organizationJsonLd(l: Listing): string {
-  const meta = l.publicMetadata
-  const org = {
-    '@context': 'https://schema.org',
-    '@type': 'Organization',
-    name: l.name || l.domain,
-    url: siteUrl(l),
-    ...(l.description ? { description: l.description } : {}),
-    ...(l.category ? { industry: categoryOf(l.category)?.label ?? l.category } : {}),
-    ...(l.phone || meta?.phone ? { telephone: l.phone || meta?.phone } : {}),
-    ...(l.address ? { address: l.address } : {}),
-    ...(l.country ? { areaServed: l.country } : {}),
-    ...(meta?.email ? { email: meta.email } : {}),
-    ...(meta?.socialUrls.length ? { sameAs: meta.socialUrls } : {}),
-    ...(meta?.contactUrl ? { contactPoint: { '@type': 'ContactPoint', url: meta.contactUrl, ...(meta.email ? { email: meta.email } : {}) } } : {}),
-  }
-  return JSON.stringify(org).replace(/</g, '\\u003c')
+const SITE = 'https://pit.world'
+const pageUrl = (l: Listing) => `${SITE}/b/${p(l.domain)}`
+
+/** What the listing is called: its name, or its domain when it has none. */
+export const displayName = (l: Listing) => l.name || l.domain
+
+/** Text cut at a word boundary to at most `max` characters, with an ellipsis when cut. */
+export function clip(text: string, max: number): string {
+  const t = text.replace(/\s+/g, ' ').trim()
+  if (t.length <= max) return t
+  const cut = t.slice(0, Math.max(0, max - 1))
+  const space = cut.lastIndexOf(' ')
+  return `${(space > max * 0.6 ? cut.slice(0, space) : cut).replace(/[\s,;:.–-]+$/, '')}…`
 }
+
+/** A name that only repeats the domain ("acme.com", "Acme.com", "acme") adds nothing beside it. */
+function nameIsDomain(l: Listing): boolean {
+  const n = displayName(l).toLowerCase().replace(/^www\./, '').trim()
+  return n === l.domain || n === l.domain.split('.')[0]
+}
+
+/**
+ * The page title people see in search results. It leads with what an owner types when they look
+ * themselves up, the business name and its domain, then the category and city when they fit in about
+ * 70 characters. The domain makes it unique per page. No "reviews" or ratings: pit.world has none.
+ */
+export function listingTitle(l: Listing): string {
+  const suffix = ' | pit.world'
+  const base = nameIsDomain(l) ? l.domain : `${clip(displayName(l), 44)} (${l.domain})`
+  const cat = categoryOf(l.category)?.label ?? ''
+  const tries = [cat && l.city ? ` – ${cat} in ${l.city}` : '', cat ? ` – ${cat}` : '', l.city ? ` – ${l.city}` : '']
+  const extra = tries.find((t) => t && (base + t + suffix).length <= 70) ?? ''
+  return base + extra + suffix
+}
+
+/**
+ * The meta description: who the business is (name, domain, category, place), what it does in its own
+ * words, and, for an unclaimed listing, that the owner can claim it free. About 160 characters.
+ */
+export function listingDescription(l: Listing): string {
+  const name = displayName(l)
+  const cat = categoryOf(l.category)?.label ?? ''
+  const where = place(l)
+  const lead = `${name}${nameIsDomain(l) ? '' : ` (${l.domain})`}${cat ? ` · ${cat}` : ''}${where ? ` in ${where}` : ''}.`
+  const tail = l.claimed ? ' Listing written by the verified owner.' : ' Is this your business? Claim this listing free.'
+  const room = 160 - lead.length - tail.length - 1
+  const about = l.description && room >= 40 ? ` ${clip(l.description, room)}` : ''
+  return `${lead}${about}${tail}`
+}
+
+/** Categories whose businesses serve people where they are: a LocalBusiness even when pit.world does not know the address. */
+const LOCAL_TYPES: Record<string, string> = {
+  'home-services': 'HomeAndConstructionBusiness',
+  construction: 'GeneralContractor',
+  outdoor: 'HomeAndConstructionBusiness',
+  moving: 'MovingCompany',
+  auto: 'AutomotiveBusiness',
+  legal: 'LegalService',
+  accounting: 'AccountingService',
+  'real-estate': 'RealEstateAgent',
+  health: 'MedicalBusiness',
+  wellness: 'HealthAndBeautyBusiness',
+  beauty: 'HealthAndBeautyBusiness',
+  childcare: 'ChildCare',
+  pets: 'LocalBusiness',
+  food: 'FoodEstablishment',
+}
+
+/** Categories that can be online-only: LocalBusiness types once there is a place, Organization types without one. */
+const PLACED_TYPES: Record<string, string> = {
+  finance: 'FinancialService',
+  software: 'ProfessionalService',
+  it: 'ProfessionalService',
+  design: 'ProfessionalService',
+  writing: 'ProfessionalService',
+  'photo-video': 'ProfessionalService',
+  consulting: 'ProfessionalService',
+  marketing: 'ProfessionalService',
+  retail: 'Store',
+}
+const ONLINE_TYPES: Record<string, string> = {
+  retail: 'OnlineStore',
+  media: 'Organization',
+  community: 'NGO',
+  education: 'EducationalOrganization',
+}
+
+/** Home trades schema.org names exactly, read from the business's own words. */
+const TRADES: Array<[RegExp, string]> = [
+  [/\bplumb/i, 'Plumber'],
+  [/\bhvac\b|heating and (?:air|cooling)|air condition/i, 'HVACBusiness'],
+  [/\belectricians?\b/i, 'Electrician'],
+  [/\broof(?:ing|ers?)\b/i, 'RoofingContractor'],
+  [/\blocksmith/i, 'Locksmith'],
+  [/\bhouse painter|painting contractor/i, 'HousePainter'],
+]
+
+/**
+ * The most specific schema.org type the listing's category supports. A LocalBusiness subtype when
+ * the business serves a place (its category is local, or pit.world knows where it is); otherwise an
+ * Organization subtype, so an online business is never presented as having a storefront.
+ */
+export function schemaType(l: Listing): string {
+  const placed = Boolean(l.address || l.city || l.region || l.area)
+  if (l.category === 'home-services' || l.category === 'construction') {
+    const text = `${displayName(l)} ${l.services.join(' ')}`
+    for (const [rule, type] of TRADES) if (rule.test(text)) return type
+  }
+  if (LOCAL_TYPES[l.category]) return LOCAL_TYPES[l.category]!
+  if (placed) return PLACED_TYPES[l.category] ?? 'LocalBusiness'
+  return ONLINE_TYPES[l.category] ?? 'OnlineBusiness'
+}
+
+export type Faq = { q: string; a: string; html: string }
+
+/** Short factual answers from what the listing holds: nothing invented, nothing that is not on the page. */
+export function listingFaq(l: Listing): Faq[] {
+  const name = displayName(l)
+  const cat = categoryOf(l.category)?.label ?? ''
+  const where = [l.area, place(l)].filter(Boolean).join(' · ')
+  const site = siteUrl(l)
+  const out: Faq[] = []
+  const whatIs = l.description
+    ? `${name} is ${cat ? `listed under ${cat} on pit.world, ` : ''}at ${l.domain}. In ${l.claimed ? "the owner's" : 'its own'} words: “${clip(l.description, 300)}”`
+    : `${name} is the business at ${l.domain}${cat ? `, listed under ${cat}` : ''}. ${l.claimed ? 'The owner has not written a description yet.' : 'Its homepage gives no description yet.'}`
+  out.push({ q: `What is ${name}?`, a: whatIs, html: esc(whatIs) })
+  const web = `${name}'s website is ${bare(site)}${l.moshpitOnly ? ', a Moshpit name that opens in any browser through pit.world' : ''}.`
+  out.push({ q: `Where is ${name}'s website?`, a: `${web} ${site}`, html: `${esc(web)} ${ext(site, site)}` })
+  if (where || l.address) {
+    const loc = `${l.address ? `${name}'s address: ${l.address}.` : ''}${where ? ` ${l.address ? 'It serves' : `${name} serves`} ${where}.` : ''}`.trim()
+    out.push({ q: `Where is ${name}?`, a: loc, html: esc(loc) })
+  }
+  const official = l.claimed
+    ? `Yes. The owner of ${l.domain} proved control of the domain (a DNS record or a homepage tag) and wrote this listing.`
+    : `No. pit.world put this page together from public information${l.imported ? " (NicheDB's public company directory and the business's own homepage)" : ''}. Nobody at ${l.domain} wrote or paid for it, and pit.world shows no reviews or ratings for it.`
+  out.push({ q: `Is this ${name}'s official page?`, a: official, html: esc(official) })
+  if (!l.claimed) {
+    const how = `Whoever runs ${l.domain} can claim this listing free: press “Claim this listing”, add the DNS TXT record or homepage meta tag pit.world gives you, then press Verify. No account and no fee. Once claimed, you can rewrite it, add services, hours and links, turn on quote requests, or take it out of the directory.`
+    out.push({ q: `How does the owner of ${l.domain} claim this listing?`, a: how, html: esc(how) })
+  }
+  return out
+}
+
+/**
+ * The page's structured data, as one @graph: the business (the most specific type its category
+ * supports), the breadcrumb trail, and the FAQ shown on the page. Address, phone and email appear only
+ * when the listing holds them; pit.world never fills them in.
+ */
+export function listingJsonLd(l: Listing, faq: Faq[] = listingFaq(l)): string {
+  const meta = l.publicMetadata
+  const cat = categoryOf(l.category)
+  const url = pageUrl(l)
+  const sameAs = [...new Set([siteUrl(l), ...(meta?.socialUrls ?? []), ...(l.moshpit ? [`https://${l.moshpit}/`] : [])])]
+  const address = l.address || l.city || l.region || l.country
+    ? {
+        '@type': 'PostalAddress',
+        ...(l.address ? { streetAddress: l.address } : {}),
+        ...(l.city ? { addressLocality: l.city } : {}),
+        ...(l.region ? { addressRegion: l.region } : {}),
+        ...(l.country ? { addressCountry: l.country } : {}),
+      }
+    : null
+  const phone = l.phone || meta?.phone || ''
+  const business = {
+    '@type': schemaType(l),
+    '@id': `${url}#business`,
+    name: displayName(l),
+    url: siteUrl(l),
+    sameAs,
+    mainEntityOfPage: url,
+    ...(l.description ? { description: l.description } : {}),
+    ...(cat ? { additionalType: `${SITE}/pros/${cat.slug}`, knowsAbout: [cat.label, ...l.services] } : l.services.length ? { knowsAbout: l.services } : {}),
+    ...(address ? { address } : {}),
+    ...(phone ? { telephone: phone } : {}),
+    ...(l.area ? { areaServed: l.area } : l.country ? { areaServed: l.country } : {}),
+    ...(l.hours ? { openingHours: l.hours } : {}),
+    ...(l.price && l.price !== 'free' && l.price !== 'quote' && LOCAL_OR_PLACED(l) ? { priceRange: l.price } : {}),
+    ...(meta?.email ? { email: meta.email } : {}),
+    ...(meta?.contactUrl ? { contactPoint: { '@type': 'ContactPoint', contactType: 'customer service', url: meta.contactUrl, ...(meta.email ? { email: meta.email } : {}) } } : {}),
+  }
+  const crumbs = [
+    { name: 'pit.world', item: `${SITE}/` },
+    { name: 'Business directory', item: `${SITE}/pros` },
+    ...(cat ? [{ name: cat.label, item: `${SITE}/pros/${cat.slug}` }] : []),
+    { name: displayName(l), item: url },
+  ]
+  const graph: object[] = [
+    business,
+    {
+      '@type': 'BreadcrumbList',
+      '@id': `${url}#breadcrumb`,
+      itemListElement: crumbs.map((c, i) => ({ '@type': 'ListItem', position: i + 1, name: c.name, item: c.item })),
+    },
+    {
+      '@type': 'WebPage',
+      '@id': url,
+      url,
+      name: listingTitle(l),
+      description: listingDescription(l),
+      isPartOf: { '@type': 'WebSite', '@id': `${SITE}/#website`, name: 'pit.world', url: `${SITE}/` },
+      about: { '@id': `${url}#business` },
+      breadcrumb: { '@id': `${url}#breadcrumb` },
+    },
+  ]
+  if (faq.length) graph.push({ '@type': 'FAQPage', '@id': `${url}#faq`, mainEntity: faq.map((f) => ({ '@type': 'Question', name: f.q, acceptedAnswer: { '@type': 'Answer', text: f.a } })) })
+  return JSON.stringify({ '@context': 'https://schema.org', '@graph': graph }).replace(/</g, '\\u003c')
+}
+
+/** priceRange belongs to LocalBusiness types only. */
+const LOCAL_OR_PLACED = (l: Listing) => !['OnlineBusiness', 'OnlineStore', 'Organization', 'NGO', 'EducationalOrganization'].includes(schemaType(l))
 
 function details(l: Listing, track?: { domain: string; via: string }): string {
   const beacon = track ? ` data-ev="phone" data-domain="${esc(track.domain)}"${track.via ? ` data-via="${esc(track.via)}"` : ''}` : ''
@@ -152,40 +343,82 @@ export function importedNote(l: Listing): string {
 /** Directory listings (claimed or listed by pit.world, and not taken out) publish an OpenProfile. */
 export const hasOpenProfile = (l: Listing) => l.listed
 
-export function listingPage(l: Listing, options: { quote?: QuoteState; via?: string; votes?: VoteView } = {}): string {
-  const title = l.name || l.domain
+/** The claim button: a POST, with the honeypot field bots fill. */
+const claimForm = (l: Listing, label = 'Claim this listing') =>
+  `<form action="/b/${p(l.domain)}/claim" method="post"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">${esc(label)}</button></form>`
+
+/** Other businesses in the same category: internal links, so every listing is reachable from its neighbours. */
+function similarBlock(l: Listing, similar: Listing[]): string {
+  if (!similar.length) return ''
+  const cat = categoryOf(l.category)
+  return `<section class="similar" aria-labelledby="similar-h">
+<h2 id="similar-h">Similar ${cat ? `${esc(cat.label)} ` : ''}businesses</h2>
+<ul>${similar
+    .map((s) => `<li><a href="/b/${p(s.domain)}">${esc(displayName(s))}</a> <span class="small">${esc(s.domain)}${place(s) ? ` · ${esc(place(s))}` : ''}</span>${s.description ? `<br><span class="small">${esc(clip(s.description, 140))}</span>` : ''}</li>`)
+    .join('')}</ul>
+${cat ? `<p class="small"><a href="/pros/${p(cat.slug)}">Every ${esc(cat.label)} listing →</a></p>` : ''}
+</section>`
+}
+
+function faqBlock(l: Listing, faq: Faq[]): string {
+  return `<section class="faq" aria-labelledby="faq-h">
+<h2 id="faq-h">Questions about ${esc(displayName(l))}</h2>
+<dl>${faq.map((f) => `<dt>${esc(f.q)}</dt><dd>${f.html}</dd>`).join('')}</dl>
+</section>`
+}
+
+export function listingPage(l: Listing, options: { quote?: QuoteState; via?: string; votes?: VoteView; similar?: Listing[] } = {}): string {
+  const title = displayName(l)
   const via = options.via ?? ''
+  const cat = categoryOf(l.category)
+  const indexable = isIndexable(l)
+  const faq = listingFaq(l)
+  const where = [l.area, place(l)].filter(Boolean).join(' · ')
+  // Above the fold for every unclaimed listing: the owner looking themselves up is who this page is for.
+  const topClaim = l.claimed
+    ? ''
+    : `<div class="claim-cta"><p><b>Own ${esc(l.domain)}?</b> This listing is unclaimed. Claim it free to rewrite it, add your services, hours and links, or take it down. No account, no fee.</p>${claimForm(l, 'Claim this listing free')}</div>`
   const claim = l.claimed
     ? `<p class="small">Claimed by the owner of ${esc(l.domain)}.${l.ring ? ` In the <a href="/ring">pit.world ring</a>.` : ''} <a href="/b/${p(l.domain)}/edit">Owner? Edit this listing</a></p>`
     : l.seeded
       ? `<section class="claim" id="claim">
   <h2>Is this your business? Claim it</h2>
   <p>pit.world listed ${esc(title)} in the <a href="/pros">pro directory</a> using public information, such as the business's own website, licensing or permit records when available, and public company directories. Source links appear on this page. Nobody at ${esc(l.domain)} wrote or paid for this page. Claim it to take it over: rewrite it, add your services, hours and links, turn on quote requests, or take it out of the directory. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
-  <form action="/b/${p(l.domain)}/claim" method="post"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">Claim this listing</button></form>
+  ${claimForm(l)}
 </section>`
       : `<section class="claim" id="claim">
   <h2>Is this your business?</h2>
   <p>Claim the listing to write it yourself: what you do, who runs it, where you work, services, hours, phone, links and your Moshpit name. You prove you run ${esc(l.domain)} with a DNS record or a tag on your homepage. No account, no fee.</p>
-  <form action="/b/${p(l.domain)}/claim" method="post"><input class="hp" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true"><button class="btn" type="submit">Claim this listing</button></form>
+  ${claimForm(l)}
 </section>`
+  const about = l.description
+    ? `<h2>About ${esc(title)}</h2>
+<p class="lede">${esc(l.description)}</p>
+<p class="small">${l.claimed ? `Written by the owner of ${esc(l.domain)}.` : l.seeded ? 'Written by pit.world from public information.' : `In its own words, from the homepage of ${esc(l.domain)}.`}${cat ? ` Listed under <a href="/pros/${p(cat.slug)}">${esc(cat.label)}</a>.` : ''}${where ? ` Serves ${esc(where)}.` : ''}</p>`
+    : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'
+  const crumbs = `<nav class="crumbs" aria-label="Breadcrumb"><ol><li><a href="/">pit.world</a></li><li><a href="/pros">Business directory</a></li>${cat ? `<li><a href="/pros/${p(cat.slug)}">${esc(cat.label)}</a></li>` : ''}<li aria-current="page">${esc(title)}</li></ol></nav>`
   return docPage({
-    title: `${title} · pit.world`,
-    description: l.description || `${l.domain} on pit.world`,
+    title: listingTitle(l),
+    description: listingDescription(l),
     path: `/b/${p(l.domain)}`,
     // An imported listing is worth indexing only once it says something: a real description and a category.
-    noindex: !l.claimed && !l.seeded && !(l.imported && l.description && l.category),
-    ...(hasOpenProfile(l) ? { head: `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n<script type="application/ld+json">${organizationJsonLd(l)}</script>\n` } : {}),
-    body: `<p class="kicker">${l.sponsoredUntil ? 'Featured · Paid placement · ' : ''}Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : l.imported ? ' · unclaimed listing' : ' · unclaimed'}</p>
+    noindex: !indexable,
+    head: `${hasOpenProfile(l) ? `<link rel="openprofile" type="text/markdown" href="${esc(openProfilePath(l.domain))}">\n` : ''}${indexable ? `<script type="application/ld+json">${listingJsonLd(l, faq)}</script>\n` : ''}`,
+    body: `${crumbs}
+<p class="kicker">${l.sponsoredUntil ? 'Featured · Paid placement · ' : ''}Business listing${l.claimed ? ' · <span class="verified">✓ verified owner</span>' : l.seeded ? ' · listed by pit.world · unclaimed' : l.imported ? ' · unclaimed listing' : ' · unclaimed'}</p>
 <h1>${esc(title)}</h1>
-${l.category ? `<p class="row"><a class="chip" href="/pros/${p(l.category)}">${esc(categoryOf(l.category)?.label ?? l.category)}</a></p>` : ''}
-<p class="small"><a href="/pros">Business directory</a> · <a href="/b/${p(l.domain)}/featured">Feature or manage this business · $19/month</a></p>
-<p class="row"><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a> ${voteBox('listing', l.domain, options.votes, title)}</p>
-${l.description ? `<p class="lede">${esc(l.description)}</p>` : l.claimed ? '' : '<p class="small">Nothing here yet beyond the name.</p>'}
+<p class="row"><a href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">${esc(l.domain)}</a>${cat ? ` <a class="chip" href="/pros/${p(cat.slug)}">${esc(cat.label)}</a>` : ''}${place(l) ? ` <span class="small">${esc(place(l))}</span>` : ''} ${voteBox('listing', l.domain, options.votes, title)}</p>
+${topClaim}
+${about}
 ${details(l, { domain: l.domain, via })}
 ${services(l)}
 ${l.claimed ? quoteForm(l, options.quote) : ''}
+<p class="row"><a class="btn" href="${esc(websiteHref(l, via))}" rel="noreferrer noopener nofollow">Visit ${esc(l.domain)} ↗</a></p>
+${similarBlock(l, options.similar ?? [])}
+${faqBlock(l, faq)}
 ${l.claimed ? '' : l.imported ? importedNote(l) : l.seeded ? `<p class="small">Written by pit.world from public information, not by the business. Details can go out of date: check with ${esc(l.domain)} before you hire. Something wrong? The owner can claim this page to correct it, or take it down.</p>` : `<p class="small">Until it is claimed, this listing shows what ${esc(l.domain)}'s own homepage says about itself.</p>`}
 ${claim}
+<p class="small"><a href="/pros">Business directory</a> · <a href="/b/${p(l.domain)}/featured">Feature or manage this business · $19/month</a></p>
 ${l.listed && l.phone ? '<script src="/listing.js" defer></script>' : ''}`,
   })
 }
@@ -345,6 +578,22 @@ export function listingsIndexPage(): string {
   })
 }
 
+/** The deepest /pros page served; past it a category is reached by search or by its listings' neighbours. */
+export const MAX_PROS_PAGE = 2000
+/** Listings per /pros page. */
+export const PROS_PER_PAGE = 20
+
+/** Page numbers to link from page `page` of `pages`: the ends, the neighbours, and jumps of 10, 100 and 1000, so any page is a few clicks away. */
+export function pageJumps(page: number, pages: number): number[] {
+  const out = new Set<number>([1, pages])
+  for (let d = -2; d <= 2; d++) out.add(page + d)
+  for (const step of [10, 100, 1000]) {
+    const base = Math.floor(page / step) * step
+    for (let k = -2; k <= 3; k++) out.add(base + k * step)
+  }
+  return [...out].filter((n) => n >= 1 && n <= pages).sort((a, b) => a - b)
+}
+
 export function prosPage(options: { listings: Listing[]; total: number; category: string; near: string; q: string; page: number; perPage: number; counts: Record<string, number>; votes?: VoteView; tools?: RowTools }): string {
   const cat = categoryOf(options.category)
   const tools = options.tools ?? {}
@@ -374,14 +623,15 @@ export function prosPage(options: { listings: Listing[]; total: number; category
 </li>`
     })
     .join('')
-  const pages = Math.ceil(options.total / options.perPage)
-  const nav = pages > 1 ? `<p class="row">${options.page > 1 ? `<a href="${esc(qs(options.page - 1))}">← Newer</a>` : ''} <span class="small">Page ${options.page} of ${pages}</span> ${options.page < pages ? `<a href="${esc(qs(options.page + 1))}">More →</a>` : ''}</p>` : ''
+  const pages = Math.min(Math.ceil(options.total / options.perPage), MAX_PROS_PAGE)
+  const nav = pages > 1 ? `<nav class="row pager" aria-label="Pages">${options.page > 1 ? `<a href="${esc(qs(options.page - 1))}" rel="prev">← Previous</a>` : ''} ${pageJumps(options.page, pages).map((n) => (n === options.page ? `<span class="small" aria-current="page">${n}</span>` : `<a href="${esc(qs(n))}">${n}</a>`)).join(' ')} ${options.page < pages ? `<a href="${esc(qs(options.page + 1))}" rel="next">Next →</a>` : ''}</nav>` : ''
   const chips = CATEGORIES.map((c) => `<a class="chip${cat?.slug === c.slug ? ' on' : ''}" href="/pros/${p(c.slug)}" title="${esc(c.examples)}">${esc(c.label)}${options.counts[c.slug] ? ` <span>${options.counts[c.slug]}</span>` : ''}</a>`).join('')
   return docPage({
-    title: `${heading}${options.near ? ` near ${options.near}` : ''} · pit.world pros`,
+    title: `${heading}${options.near ? ` near ${options.near}` : ''}${options.page > 1 ? ` · page ${options.page}` : ''} · pit.world pros`,
     description: cat ? `${cat.label} (${cat.examples}) on pit.world. Clearly labeled paid placements, no fake reviews.` : 'A directory of businesses and pros: verified owners and licensed businesses waiting to claim. Clearly labeled paid placements, no fake reviews, no search tracking.',
-    path: cat ? `/pros/${p(cat.slug)}` : '/pros',
-    noindex: Boolean(options.q || options.near || options.page > 1),
+    // Later pages are indexable with their own canonical: they are how a crawler reaches every listing.
+    path: `${cat ? `/pros/${p(cat.slug)}` : '/pros'}${options.page > 1 ? `?page=${options.page}` : ''}`,
+    noindex: Boolean(options.q || options.near || !options.listings.length),
     body: `<p class="kicker">Pro directory</p>
 <h1>${esc(heading)}</h1>
 <p class="lede">Businesses and independent pros. A <span class="verified">✓</span> means the owner proved they run the site and wrote the listing; <i>unclaimed</i> listings were assembled by pit.world from public information, including licensing records where available, business websites and public company directories. Source links appear on each listing. Featured businesses pay $19/month and are labeled “Paid placement”. Other listings keep their editorial order, nudged at most three places by anonymous ▲ ▼ votes (<a href="/about#votes">how</a>). Payment does not buy a verified-owner badge, license verification or reviews. Get in touch with a person, not a lead broker.</p>

@@ -265,6 +265,15 @@ ol.books .url { font: 13px var(--mono); color: var(--muted); margin: 3px 0 4px; 
 .claim { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 16px 18px; margin-top: 24px; }
 .claim h2 { margin-top: 0; }
 .claim form, .listing-lookup { margin: 8px 0 0; }
+.claim-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; background: var(--panel); border: 1px solid var(--accent); border-radius: 14px; padding: 12px 16px; margin: 12px 0 20px; }
+.claim-cta p { flex: 1 1 260px; margin: 0; }
+.claim-cta form { margin: 0; }
+.crumbs ol { list-style: none; display: flex; flex-wrap: wrap; gap: 4px; padding: 0; margin: 0 0 10px; color: var(--muted); font-size: 13px; }
+.crumbs li + li::before { content: "›"; margin-right: 4px; }
+.similar ul { list-style: none; padding: 0; display: grid; gap: 10px; }
+.faq dt { font-weight: 700; margin-top: 12px; }
+.faq dd { margin: 4px 0 0; color: var(--muted); }
+.pager { flex-wrap: wrap; gap: 6px 10px; }
 .listing-lookup { display: flex; gap: 10px; flex-wrap: wrap; }
 .listing-lookup input { flex: 1; min-width: 200px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--text); font: 16px var(--sans); padding: 10px 16px; }
 .listing-form { display: grid; gap: 6px; }

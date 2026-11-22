@@ -17,6 +17,7 @@ import { dnsMx, normalizeEmail, type Mailer, type MxLookup } from './newsletter.
 import { PRICES, categoryOf, cleanServices, normalizeOperator, normalizeWebUrl, ringEligible } from './pros.js'
 import type { CompanySiteFacts, CompanySiteMetadata } from './company-metadata.js'
 import { ensurePromotionSchema } from './promotion-schema.js'
+import { classifyBusiness, type ClassifyInput } from './classify.js'
 
 export type Listing = {
   domain: string
@@ -160,6 +161,33 @@ export function cleanLinks(value: unknown): string[] {
 }
 
 /** Title and description from a homepage's HTML. Regexes, not a parser: it only needs a few tags. */
+const NAMED: Record<string, string> = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', szlig: 'ß', auml: 'ä', ouml: 'ö', uuml: 'ü', Auml: 'Ä', Ouml: 'Ö', Uuml: 'Ü', eacute: 'é', egrave: 'è', aacute: 'á', iacute: 'í', oacute: 'ó', uacute: 'ú', ntilde: 'ñ', ccedil: 'ç', aring: 'å', oslash: 'ø', aelig: 'æ', ndash: '–', mdash: '—', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“', hellip: '…', copy: '©', reg: '®', trade: '™' }
+
+/** HTML character references in text read from a page: `&#229;`, `&#xE5;`, `&aring;`. Unknown names stay as written. */
+export function decodeEntities(text: string): string {
+  return text.replace(/&(#x[0-9a-f]{1,6}|#\d{1,7}|[a-z]{2,8});/gi, (whole, ref: string) => {
+    if (ref[0] === '#') {
+      const code = ref[1] === 'x' || ref[1] === 'X' ? parseInt(ref.slice(2), 16) : parseInt(ref.slice(1), 10)
+      return code > 0 && code <= 0x10ffff && !(code >= 0xd800 && code <= 0xdfff) ? String.fromCodePoint(code) : whole
+    }
+    return NAMED[ref] ?? whole
+  })
+}
+
+/** Worth a search engine's time: claimed or written by pit.world, or imported with a real description and a category. */
+export function isIndexable(l: Pick<Listing, 'claimed' | 'seeded' | 'imported' | 'description' | 'category'>): boolean {
+  return l.claimed || l.seeded || (l.imported && Boolean(l.description) && Boolean(l.category))
+}
+
+/** A row's facts, for the classifier. */
+function classifyRow(row: { name?: string; description?: string; domain?: string; research_topics?: string }): ClassifyInput {
+  let topics: string[] = []
+  try {
+    topics = (JSON.parse(row.research_topics ?? '[]') as unknown[]).filter((t): t is string => typeof t === 'string')
+  } catch {}
+  return { name: row.name ?? '', description: row.description ?? '', domain: row.domain ?? '', topics }
+}
+
 export function readMeta(html: string): { name: string; description: string } {
   const attr = (tag: string, name: string) => new RegExp(`${name}\\s*=\\s*["']([^"']*)["']`, 'i').exec(tag)?.[1] ?? ''
   const metas = html.match(/<meta\b[^>]*>/gi) ?? []
@@ -167,8 +195,7 @@ export function readMeta(html: string): { name: string; description: string } {
     for (const tag of metas) if ([attr(tag, 'name'), attr(tag, 'property')].some((v) => v.toLowerCase() === key)) return attr(tag, 'content')
     return ''
   }
-  const decode = (s: string) =>
-    s.replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&#39;|&#x27;/g, "'").replace(/\s+/g, ' ').trim()
+  const decode = (s: string) => decodeEntities(s).replace(/\s+/g, ' ').trim()
   const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(html)?.[1] ?? ''
   return {
     name: clean(decode(meta('og:site_name') || title), LIMITS.name),
@@ -395,8 +422,21 @@ export class Listings {
     // Imported listings are read a page at a time in SQL (there can be hundreds of thousands): best first, then by domain.
     this.db.run(`CREATE INDEX IF NOT EXISTS listings_imported ON listings (quality DESC, domain) WHERE ${IMPORTED}`)
     this.db.run(`CREATE INDEX IF NOT EXISTS listings_imported_category ON listings (category, quality DESC, domain) WHERE ${IMPORTED}`)
+    // "Similar businesses" on a listing page walks its category by domain.
+    this.db.run('CREATE INDEX IF NOT EXISTS listings_category_domain ON listings (category, domain)')
     this.db.run('CREATE TABLE IF NOT EXISTS import_state (source TEXT PRIMARY KEY, cursor TEXT, updated_at INTEGER NOT NULL)')
     ensurePromotionSchema(this.db)
+  }
+
+  /** Told when a listing is claimed, edited, written by pit.world or becomes worth indexing (IndexNow, src/indexnow.ts). */
+  private changed: ((domain: string) => void) | null = null
+  onChange(fn: ((domain: string) => void) | null): void {
+    this.changed = fn
+  }
+  private notify(domain: string): void {
+    try {
+      this.changed?.(domain)
+    } catch {}
   }
 
   /** Bounded places each listing moves on its anonymous votes (src/votes.ts); unset means editorial order only. */
@@ -468,15 +508,111 @@ export class Listings {
     const stale = !row || (!row.claimed_at && !row.seeded_at && (row.meta_at ?? 0) < this.now() - ttl)
     if (stale && options.fetchMeta !== false) {
       const html = await this.verifier.homepage(domain)
-      if (html) {
+      if (html && row?.imported_at) {
+        this.describeImported(row, readMeta(html))
+        row = this.row(domain)
+      } else if (html) {
         const meta = readMeta(html)
-        if (row?.imported_at) this.db.run("UPDATE listings SET name = CASE WHEN name = '' THEN ? ELSE name END, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL", [meta.name, meta.description, this.now(), domain])
-        else if (row) this.db.run('UPDATE listings SET name = ?, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL', [meta.name, meta.description, this.now(), domain])
+        if (row) this.db.run('UPDATE listings SET name = ?, description = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL', [meta.name, meta.description, this.now(), domain])
         else this.db.run('INSERT INTO listings (domain, name, description, meta_at) VALUES (?, ?, ?, ?)', [domain, meta.name, meta.description, this.now()])
         row = this.row(domain)
       }
     }
     return this.toListing(row, domain)
+  }
+
+  /**
+   * Write what an imported listing's homepage says about itself, then file it again from those words.
+   * The name stays as imported unless it is empty or is a podcast's title rather than the business's
+   * (NicheDB found many companies through their shows). Tells the change hook when the listing has
+   * just become worth indexing.
+   */
+  private describeImported(row: any, meta: { name: string; description: string }): void {
+    const before = Boolean(row.description) && Boolean(row.category)
+    const topics = classifyRow(row).topics ?? []
+    const podcastName = /podcast/i.test(topics[0] ?? '') || /\bpodcast\b/i.test(row.name ?? '')
+    const name = meta.name && (!row.name || podcastName) ? meta.name : row.name || meta.name
+    const description = meta.description
+    const category = classifyBusiness({ name, description, domain: row.domain, topics }) || row.category || ''
+    this.db.run('UPDATE listings SET name = ?, description = ?, category = ?, meta_at = ? WHERE domain = ? AND claimed_at IS NULL AND seeded_at IS NULL',
+      [name, description, category, this.now(), row.domain])
+    this.counts = null
+    if (!before && description && category) this.notify(row.domain)
+  }
+
+  /**
+   * Read the homepages of imported listings that have never been read (most have only a name until
+   * someone opens the page), a batch at a time, so they get a description and a category from their
+   * own words. A site that does not answer is marked read too, and tried again on its next page view
+   * after the monthly refresh. Returns how many were read and how many answered.
+   */
+  async describeBacklog(limit = 100, concurrency = 4): Promise<{ checked: number; described: number }> {
+    const rows = this.db.query(`SELECT * FROM listings WHERE ${IMPORTED} AND meta_at IS NULL ORDER BY (category <> '') DESC, domain LIMIT ?`).all(limit) as any[]
+    let described = 0
+    let next = 0
+    await Promise.all(Array.from({ length: Math.max(1, Math.min(16, concurrency)) }, async () => {
+      while (next < rows.length) {
+        const row = rows[next++]!
+        const html = await this.verifier.homepage(row.domain).catch(() => null)
+        if (html) {
+          this.describeImported(row, readMeta(html))
+          described++
+        } else this.db.run('UPDATE listings SET meta_at = ? WHERE domain = ? AND meta_at IS NULL', [this.now(), row.domain])
+      }
+    }))
+    return { checked: rows.length, described }
+  }
+
+  /** How many imported listings have never had their homepage read. */
+  describeRemaining(): number {
+    return (this.db.query(`SELECT COUNT(*) AS n FROM listings WHERE ${IMPORTED} AND meta_at IS NULL`).get() as { n: number }).n
+  }
+
+  /**
+   * Once per version: imported listings named after a podcast are read again (their homepage gives the
+   * business's own name), and stored descriptions still holding character references are decoded.
+   */
+  repairImported(version: string): { requeued: number; decoded: number } {
+    const key = 'repair'
+    if (this.importCursor(key) === version) return { requeued: 0, decoded: 0 }
+    const requeued = this.db.run(`UPDATE listings SET meta_at = NULL WHERE ${IMPORTED} AND meta_at IS NOT NULL AND (json_extract(research_topics, '$[0]') LIKE '%podcast%' OR lower(name) LIKE '%podcast%')`).changes
+    const rows = this.db.query(`SELECT domain, name, description FROM listings WHERE ${IMPORTED} AND (description LIKE '%&%;%' OR name LIKE '%&%;%')`).all() as Array<{ domain: string; name: string; description: string }>
+    const update = this.db.prepare(`UPDATE listings SET name = ?, description = ? WHERE domain = ? AND ${IMPORTED}`)
+    let decoded = 0
+    this.db.transaction(() => {
+      for (const r of rows) {
+        const name = clean(decodeEntities(r.name), LIMITS.name)
+        const description = clean(decodeEntities(r.description), LIMITS.description)
+        if (name !== r.name || description !== r.description) decoded += update.run(name, description, r.domain).changes
+      }
+    })()
+    this.setImportCursor(key, version)
+    return { requeued, decoded }
+  }
+
+  /**
+   * Other listings in the same category for a listing page's "similar businesses": the next ones by
+   * domain, wrapping around, so every indexable listing is linked from its neighbours. Same city first
+   * when the listing has one. Indexable listings only.
+   */
+  similar(input: unknown, n = 6): Listing[] {
+    const domain = normalizeDomain(input)
+    const row = domain ? this.row(domain) : null
+    if (!domain || !row?.category) return []
+    const where = `category = ? AND domain <> ? AND ((${CURATED}) OR (${INDEXABLE_IMPORT}))`
+    const out: any[] = []
+    const seen = new Set<string>()
+    const take = (rows: any[]) => {
+      for (const r of rows) {
+        if (out.length >= n || seen.has(r.domain)) continue
+        seen.add(r.domain)
+        out.push(r)
+      }
+    }
+    if (row.city) take(this.db.query(`SELECT * FROM listings WHERE ${where} AND city = ? ORDER BY domain > ? DESC, domain LIMIT ?`).all(row.category, domain, row.city, domain, n) as any[])
+    if (out.length < n) take(this.db.query(`SELECT * FROM listings WHERE ${where} AND domain > ? ORDER BY domain LIMIT ?`).all(row.category, domain, domain, n) as any[])
+    if (out.length < n) take(this.db.query(`SELECT * FROM listings WHERE ${where} AND domain < ? ORDER BY domain LIMIT ?`).all(row.category, domain, domain, n) as any[])
+    return out.map((r) => this.toListing(r, r.domain))
   }
 
   /** A listing that is in the directory, without touching the network; null otherwise. */
@@ -534,6 +670,7 @@ export class Listings {
     ])
     this.db.run('DELETE FROM claims WHERE domain = ?', [claim.domain])
     await this.checkSite(claim.domain, html).catch(() => {})
+    this.notify(claim.domain)
     return { ok: true, method, editKey }
   }
 
@@ -584,6 +721,7 @@ export class Listings {
         next.ring ? 0 : 1, next.listed ? 0 : 1, this.now(), domain,
       ],
     )
+    this.notify(domain)
     return this.toListing(this.row(domain), domain)
   }
 
@@ -819,6 +957,7 @@ export class Listings {
       'UPDATE listings SET name = ?, description = ?, phone = ?, address = ?, links = ?, category = ?, area = ?, city = ?, region = ?, country = ?, services = ?, license = ?, license_checked_at = ?, featured = ?, seeded_at = COALESCE(seeded_at, ?), updated_at = ? WHERE domain = ? AND claimed_at IS NULL',
       [...values, this.now(), this.now(), domain],
     )
+    this.notify(domain)
     return this.toListing(this.row(domain), domain)
   }
 
@@ -903,6 +1042,29 @@ export class Listings {
     return [...curated, ...imported].slice(0, max)
   }
 
+  /** How many listings the sitemap carries: every curated one and every indexable import. */
+  sitemapCount(): number {
+    return (this.db.query(`SELECT COUNT(*) AS n FROM listings WHERE (${CURATED}) OR (${INDEXABLE_IMPORT})`).get() as { n: number }).n
+  }
+
+  /**
+   * One page of sitemap entries with the time each last changed: curated listings first, then indexable
+   * imports, each by domain so a page holds the same listings from one day to the next.
+   */
+  sitemapPage(offset: number, limit: number): Array<{ domain: string; lastmod: number }> {
+    return this.db
+      .query(`SELECT domain, MAX(COALESCE(updated_at, 0), COALESCE(meta_at, 0), COALESCE(claimed_at, 0), COALESCE(imported_at, 0)) AS lastmod FROM listings
+        WHERE (${CURATED}) OR (${INDEXABLE_IMPORT})
+        ORDER BY (claimed_at IS NOT NULL OR seeded_at IS NOT NULL) DESC, domain LIMIT ? OFFSET ?`)
+      .all(limit, offset) as Array<{ domain: string; lastmod: number }>
+  }
+
+  /** Indexable listings per category (the /pros hub pages the sitemap lists). */
+  indexableCategoryCounts(): Record<string, number> {
+    const rows = this.db.query(`SELECT category, COUNT(*) AS n FROM listings WHERE ((${CURATED}) OR (${INDEXABLE_IMPORT})) AND category <> '' GROUP BY category`).all() as Array<{ category: string; n: number }>
+    return Object.fromEntries(rows.map((r) => [r.category, r.n]))
+  }
+
   /**
    * Add or refresh companies read from NicheDB's directory, in one transaction. Never touches a listing
    * that is claimed or that pit.world wrote itself; a bare page someone opened before becomes imported.
@@ -937,22 +1099,46 @@ export class Listings {
    * Recompute every imported listing's category from its stored topics when the rules change (only
    * import sets an imported listing's category: nobody can edit one until they claim it). Once per version.
    */
-  recategorizeImported(categoryFor: (topic: string) => string, version: string): number {
+  recategorizeImported(classify: (input: ClassifyInput) => string, version: string): number {
     const key = 'categories'
     if (this.importCursor(key) === version) return 0
-    const rows = this.db.query(`SELECT domain, research_topics, category FROM listings WHERE ${IMPORTED}`).all() as Array<{ domain: string; research_topics: string; category: string }>
+    const rows = this.db.query(`SELECT domain, name, description, research_topics, category FROM listings WHERE ${IMPORTED}`).all() as Array<{ domain: string; name: string; description: string; research_topics: string; category: string }>
     const update = this.db.prepare(`UPDATE listings SET category = ? WHERE domain = ? AND ${IMPORTED}`)
     let changed = 0
     this.db.transaction(() => {
       for (const r of rows) {
-        let first = ''
-        try {
-          first = String((JSON.parse(r.research_topics) as unknown[])[0] ?? '')
-        } catch {}
-        const next = categoryOf(categoryFor(first))?.slug ?? ''
+        const next = categoryOf(classify(classifyRow(r)))?.slug ?? ''
         if (next !== r.category) changed += update.run(next, r.domain).changes
       }
     })()
+    this.setImportCursor(key, version)
+    this.counts = null
+    return changed
+  }
+
+  /**
+   * recategorizeImported in batches by domain, yielding to the event loop between them, so a pass over
+   * hundreds of thousands of rows at boot never stalls requests. Once per version.
+   */
+  async recategorizeImportedInBatches(classify: (input: ClassifyInput) => string, version: string, batch = 5000): Promise<number> {
+    const key = 'categories'
+    if (this.importCursor(key) === version) return 0
+    const select = this.db.query(`SELECT domain, name, description, research_topics, category FROM listings WHERE ${IMPORTED} AND domain > ? ORDER BY domain LIMIT ?`)
+    const update = this.db.prepare(`UPDATE listings SET category = ? WHERE domain = ? AND ${IMPORTED}`)
+    let after = ''
+    let changed = 0
+    for (;;) {
+      const rows = select.all(after, batch) as Array<{ domain: string; name: string; description: string; research_topics: string; category: string }>
+      if (!rows.length) break
+      this.db.transaction(() => {
+        for (const r of rows) {
+          const next = categoryOf(classify(classifyRow(r)))?.slug ?? ''
+          if (next !== r.category) changed += update.run(next, r.domain).changes
+        }
+      })()
+      after = rows[rows.length - 1]!.domain
+      await new Promise((resolve) => setTimeout(resolve, 0))
+    }
     this.setImportCursor(key, version)
     this.counts = null
     return changed

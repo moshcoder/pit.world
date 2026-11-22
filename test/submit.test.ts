@@ -86,7 +86,7 @@ describe('pit.world/submit', () => {
   it('the footer and sitemap link it', async () => {
     const { app: a } = app()
     expect(await (await a.request('/about')).text()).toContain('href="/submit"')
-    expect(await (await a.request('/sitemap.xml')).text()).toContain('https://pit.world/submit')
+    expect(await (await a.request('/sitemaps/pages.xml')).text()).toContain('https://pit.world/submit')
   })
 
   it('kind and private-address checks', () => {

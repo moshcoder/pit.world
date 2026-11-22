@@ -9,6 +9,9 @@
 import { Resolver } from 'node:dns/promises'
 import type { ImportInput, Listings } from './listings.js'
 import { isPublicAddress, normalizeDomain } from './listings.js'
+import { classifyBusiness } from './classify.js'
+
+export { CATEGORY_RULES_VERSION, categoryFor } from './classify.js'
 
 export const NICHEDB_ITEMS = 'https://nichedb.dev/api/v1/items'
 export const IMPORT_SOURCE = 'nichedb-directory'
@@ -23,51 +26,8 @@ type Item = {
   data?: { row?: { kind?: unknown; name?: unknown; topics?: unknown; country?: unknown } } | null
 }
 
-/** Industries (OutreachGraph's first topic) to the /pros categories. First match wins; no match is no category. */
-const CATEGORY_RULES: Array<[RegExp, string]> = [
-  [/construction|remodel|roofing|contractor/, 'construction'],
-  [/real estate|property/, 'real-estate'],
-  [/news|media|podcast|publishing|journalism|film|music|phonograph|broadcast|anime|video game|entertainment/, 'media'],
-  [/retail|e-?commerce|deals|coupon|clothing|fashion|wholesale|shop|store|consumer goods/, 'retail'],
-  [/software|ai tooling|productivity|saas|developer tools|information technology|internet service|web development/, 'software'],
-  [/telecom|hosting|cloud|cyber|network|computer/, 'it'],
-  [/bank|financ|insurance|invest|fintech|crypto|payment/, 'finance'],
-  [/account|tax|bookkeep/, 'accounting'],
-  [/law|legal/, 'legal'],
-  [/pharma|biotech|health|medical|hospital|clinic|dental/, 'health'],
-  [/fitness|wellness|sport/, 'wellness'],
-  [/cosmetic|beauty/, 'beauty'],
-  [/education|school|universit|tutor|learning/, 'education'],
-  [/food|restaurant|brew|beverage|catering|hospitality|wine|coffee|bakery/, 'food'],
-  [/design|architect|creative|advertising|branding|photograph/, 'design'],
-  [/marketing|consult|staffing|recruit|human resources/, 'consulting'],
-  [/automotive|car |vehicle|tire/, 'auto'],
-  [/industr|manufactur|energy|petroleum|oil|chemical|mechanical|electronic|battery|shipbuild|mining|steel|utility|power/, 'industrial'],
-  [/logistic|moving|storage|freight/, 'moving'],
-  [/nonprofit|charity|church|religio|community/, 'community'],
-  [/pet|veterinar/, 'pets'],
-]
-
 /** Never listed: adult and gambling businesses, by industry or by the words in the domain. */
 const DENY = /porn|adult|escort|gambl|casino|betting|\bsex|xxx|hentai|camgirl|onlyfans/
-
-/**
- * A company with no industry leads its topics with the tech its site runs on ("google analytics",
- * "wordpress"), which says nothing about the business. A store platform is the one useful hint.
- */
-const TECH = /google|tag manager|wordpress|squarespace|wix|webflow|cloudflare|netlify|vercel|next\.js|nuxt|react|vue|angular|svelte|gatsby|hugo|jekyll|ghost|framer|hubspot|amplitude|calendly|stripe|jquery|bootstrap|nginx|apache|php|typescript|javascript|mailchimp|intercom|segment|hotjar|facebook|plausible|matomo|mixpanel|sentry|recaptcha|font|cdn|aws|heroku|github|gitlab|docusaurus|astro|tailwind|elementor|yoast|drupal|joomla|typekit|zendesk|klaviyo|tiktok|linkedin|twitter|youtube|vimeo|unpkg|jsdelivr/
-const STORE_TECH = /shopify|woocommerce|bigcommerce|magento|prestashop|squarespace commerce|ecwid/
-
-/** Bump when the rules change: imported listings are re-categorised once (Listings.recategorizeImported). */
-export const CATEGORY_RULES_VERSION = '2'
-
-export function categoryFor(topic: string): string {
-  const t = topic.toLowerCase()
-  if (STORE_TECH.test(t)) return 'retail'
-  if (TECH.test(t)) return ''
-  for (const [rule, slug] of CATEGORY_RULES) if (rule.test(t)) return slug
-  return ''
-}
 
 const str = (v: unknown) => (typeof v === 'string' ? v.trim() : '')
 
@@ -86,7 +46,8 @@ export function importCandidate(item: Item): ImportInput | null {
     if (url.protocol === 'https:' && url.hostname === 'nichedb.dev' && /^\/i\/\d+$/.test(url.pathname)) sourceUrl = url.href
   } catch {}
   if (!sourceUrl) return null
-  return { domain, name: str(row.name) || str(item.title) || domain, category: categoryFor(industry), country: str(row.country), topics, sourceUrl }
+  const name = str(row.name) || str(item.title) || domain
+  return { domain, name, category: classifyBusiness({ name, domain, topics }), country: str(row.country), topics, sourceUrl }
 }
 
 /** Does the domain resolve to a public address? c-ares with a short timeout, so a slow zone cannot stall the batch. */

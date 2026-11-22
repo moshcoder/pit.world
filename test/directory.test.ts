@@ -133,6 +133,6 @@ describe('routes', () => {
     expect(json.count).toBe(2)
     expect((await app.request('/directory/nope')).status).toBe(404)
     expect((await app.request('/directory/computers/nope')).status).toBe(404)
-    expect(await (await app.request('/sitemap.xml')).text()).toContain('/directory/computers/web-dev')
+    expect(await (await app.request('/sitemaps/pages.xml')).text()).toContain('/directory/computers/web-dev')
   })
 })

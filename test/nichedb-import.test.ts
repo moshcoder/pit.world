@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { Listings, type Verifier } from '../src/listings.ts'
 import { listingPage } from '../src/listings-html.ts'
 import { categoryFor, importCandidate, importNicheDb, IMPORT_SOURCE } from '../src/nichedb-import.ts'
+import { classifyBusiness } from '../src/classify.ts'
 import { createApp } from '../src/server.ts'
 
 const verifier: Verifier = { async txt() { return [] }, async homepage() { return null } }
@@ -134,7 +135,7 @@ describe('nichedb import: directory, pages and sitemap', () => {
     expect(pros).toContain('Unclaimed listing, data from')
     const api = (await (await app.request('/api/pros?source=pit&n=100', {}, { ip: '203.0.113.9' })).json()) as { total: number }
     expect(api.total).toBe(1)
-    const sitemap = await (await app.request('/sitemap.xml', {}, { ip: '203.0.113.9' })).text()
+    const sitemap = await (await app.request('/sitemaps/listings-1.xml', {}, { ip: '203.0.113.9' })).text()
     expect(sitemap).toContain('/b/shop01.example')
     expect(sitemap).not.toContain('/b/shop03.example')
   })
@@ -158,11 +159,11 @@ describe('nichedb import: directory, pages and sitemap', () => {
       { domain: 'church.example', name: 'Church', category: 'software', topics: ['google analytics'], sourceUrl: 'https://nichedb.dev/i/1' },
       { domain: 'store.example', name: 'Store', category: '', topics: ['shopify'], sourceUrl: 'https://nichedb.dev/i/2' },
     ])
-    expect(listings.recategorizeImported(categoryFor, '2')).toBe(2)
-    expect(listings.toPublic('church.example')!.category).toBe('')
+    expect(listings.recategorizeImported(classifyBusiness, '3')).toBe(2)
+    expect(listings.toPublic('church.example')!.category).toBe('community')
     expect(listings.toPublic('store.example')!.category).toBe('retail')
     expect(listings.toPublic('acme-builders.com')!.category).toBe('construction')
-    expect(listings.recategorizeImported(categoryFor, '2')).toBe(0)
+    expect(listings.recategorizeImported(classifyBusiness, '3')).toBe(0)
   })
 
   it('reopens an existing database without re-adding the generated quality column (0.23.0 crash loop)', () => {

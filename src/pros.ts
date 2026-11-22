@@ -26,6 +26,7 @@ export const CATEGORIES: Category[] = [
   { slug: 'writing', label: 'Writing & translation', examples: 'copywriting, editing, translation, transcription' },
   { slug: 'photo-video', label: 'Photo, video & events', examples: 'photographers, videographers, DJs, event planning' },
   { slug: 'consulting', label: 'Business consulting', examples: 'strategy, operations, HR, recruiting' },
+  { slug: 'marketing', label: 'Marketing & SEO', examples: 'SEO, digital marketing, advertising, lead generation, PR' },
   { slug: 'health', label: 'Health & medical', examples: 'clinics, dentists, therapists, chiropractors' },
   { slug: 'wellness', label: 'Fitness & wellness', examples: 'personal trainers, yoga, massage, nutrition' },
   { slug: 'beauty', label: 'Beauty & personal care', examples: 'salons, barbers, nails, skincare' },
