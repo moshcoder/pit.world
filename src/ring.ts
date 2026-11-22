@@ -63,6 +63,7 @@ export const RING: RingSite[] = [
   { name: 'auctions.pit.world', about: 'Art Auctions House: a public gallery for art and artists. Add a photo of your piece and the story behind it.', moshpit: false, keywords: ['auction', 'auctions', 'art auction', 'art auctions', 'art gallery', 'sell art'] },
   { name: 'mums.flower', about: "Flowers for moms: remember her birthday and Mother's Day, learn what flowers mean, send her a bouquet card. API, MCP, CLI.", moshpit: true, keywords: ["mother's day", 'mothers day', 'mothering sunday', 'flowers for mom', 'flower meanings', 'bouquet'] },
   { name: 'board.saas', about: 'Board as a Service: five AI advisors and a chair debate your decision brief and write the minutes. First meeting free. API, CLI, MCP, TUI.', moshpit: true, keywords: ['board of advisors', 'advisory board', 'board meeting', 'business decision', 'ai advisors', 'cfo advice'] },
+  { name: 'influencer.marketing.pit.world', about: 'autoinfluencer: your social media manager in your own voice. Native posts for every network, repurposing, value-adding replies, a posting calendar. Sign in with CoinPay; MCP, CLI and desktop too.', moshpit: false, keywords: ['social media manager', 'ai influencer', 'social media posts', 'content calendar', 'ghostwriter', 'linkedin posts', 'bluesky'] },
 ]
 
 let source: (() => ListingMember[]) | null = null
