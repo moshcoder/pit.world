@@ -85,7 +85,7 @@ const PROFULLSTACK_PROPERTIES = new Set([
   'coinpayportal.com', 'crawlproof.com', 'd0rz.com', 'logicsrc.com', 'marksyncr.com',
   'bittorrented.com', 'naallo.com', 'pairux.com', 'phonenumbers.bot', 'postammo.com',
   'profullstack.com', 'qaaas.dev', 'qrypt.chat', 'recipepdfs.com', 'saasrow.com', 'sh1pt.com',
-  'smshub.dev', 'threatcrush.com', 'ugig.net', 'vu1nz.com', 'weedforcrypto.com', 'tronbrowser.dev',
+  'smshub.dev', 'threatcrush.com', 'ugig.net', 'weedforcrypto.com', 'tronbrowser.dev',
   'goingbroke.now', 'infernetprotocol.com', 'moshcode.sh', 'moshcoding.com', 'aiornot.vote',
   'advis0r.com', 'spl00f.com', 'bbs.profullstack.com', 'outreachgraph.com', 'reeleel.com',
   'rssamplifier.com', 'bufferoverride.com', 'tipoffwatch.com', 'genrewatch.com', 'p0dcasters.com',
