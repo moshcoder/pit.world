@@ -338,6 +338,8 @@ export const INDEXABLE_IMPORT = "imported_at IS NOT NULL AND claimed_at IS NULL 
 const IMPORTED = 'imported_at IS NOT NULL AND claimed_at IS NULL AND seeded_at IS NULL AND directory_opt_out = 0'
 /** Curated: claimed by the owner or written by pit.world. */
 const CURATED = '(claimed_at IS NOT NULL OR seeded_at IS NOT NULL) AND directory_opt_out = 0'
+/** Indexable listings in one category other than one domain: "similar businesses" (category, domain bound). */
+const SIMILAR = `category = ? AND domain <> ? AND ((${CURATED}) OR (${INDEXABLE_IMPORT}))`
 
 /**
  * Columns added after the first release. Each statement is written out whole, never assembled, so the
@@ -599,7 +601,6 @@ export class Listings {
     const domain = normalizeDomain(input)
     const row = domain ? this.row(domain) : null
     if (!domain || !row?.category) return []
-    const where = `category = ? AND domain <> ? AND ((${CURATED}) OR (${INDEXABLE_IMPORT}))`
     const out: any[] = []
     const seen = new Set<string>()
     const take = (rows: any[]) => {
@@ -609,9 +610,16 @@ export class Listings {
         out.push(r)
       }
     }
-    if (row.city) take(this.db.query(`SELECT * FROM listings WHERE ${where} AND city = ? ORDER BY domain > ? DESC, domain LIMIT ?`).all(row.category, domain, row.city, domain, n) as any[])
-    if (out.length < n) take(this.db.query(`SELECT * FROM listings WHERE ${where} AND domain > ? ORDER BY domain LIMIT ?`).all(row.category, domain, domain, n) as any[])
-    if (out.length < n) take(this.db.query(`SELECT * FROM listings WHERE ${where} AND domain < ? ORDER BY domain LIMIT ?`).all(row.category, domain, domain, n) as any[])
+    // SIMILAR is a fixed module constant; every value is a bound parameter.
+    // threatcrush-disable-next-line sql-template-interpolation  fixed constant, values bound
+    const byCity = this.db.query(`SELECT * FROM listings WHERE ${SIMILAR} AND city = ? ORDER BY domain > ? DESC, domain LIMIT ?`)
+    // threatcrush-disable-next-line sql-template-interpolation  fixed constant, values bound
+    const after = this.db.query(`SELECT * FROM listings WHERE ${SIMILAR} AND domain > ? ORDER BY domain LIMIT ?`)
+    // threatcrush-disable-next-line sql-template-interpolation  fixed constant, values bound
+    const before = this.db.query(`SELECT * FROM listings WHERE ${SIMILAR} AND domain < ? ORDER BY domain LIMIT ?`)
+    if (row.city) take(byCity.all(row.category, domain, row.city, domain, n) as any[])
+    if (out.length < n) take(after.all(row.category, domain, domain, n) as any[])
+    if (out.length < n) take(before.all(row.category, domain, domain, n) as any[])
     return out.map((r) => this.toListing(r, r.domain))
   }
 
