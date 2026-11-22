@@ -32,7 +32,7 @@ const cat = (slug: string, name: string, subs: Record<string, string>): Category
 /** The top of the tree, in Yahoo's order. Empty categories and subcategories are never shown. */
 export const CATEGORIES: Category[] = [
   cat('arts', 'Arts & Humanities', { 'fine-art': 'Fine Art', photography: 'Photography', crafts: 'Crafts', collectibles: 'Collectibles', 'body-art': 'Body Art' }),
-  cat('business', 'Business & Economy', { payments: 'Crypto & Payments', shopping: 'Shopping & Auctions', advertising: 'Advertising', investing: 'Investing', jobs: 'Jobs', travel: 'Business Travel' }),
+  cat('business', 'Business & Economy', { payments: 'Crypto & Payments', shopping: 'Shopping & Auctions', advertising: 'Advertising', investing: 'Investing', jobs: 'Jobs', advice: 'Advice & Strategy', travel: 'Business Travel' }),
   cat('computers', 'Computers & Internet', {
     ai: 'Artificial Intelligence',
     security: 'Security',
@@ -63,6 +63,7 @@ export const FILED: Record<string, string[]> = {
   'art.auctions.pit.world': ['arts/fine-art', 'business/shopping'],
   'auctions.pit.world': ['business/shopping', 'arts/fine-art'],
   'auto.hacker.pit.world': ['computers/security'],
+  'board.saas.pit.world': ['business/advice', 'computers/ai'],
   'built.indie.pit.world': ['computers/software', 'computers/web-dev'],
   'chovy.hacker.pit.world': ['society/people', 'computers/security'],
   'chuck.duh.pit.world': ['society/people'],
