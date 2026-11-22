@@ -30,7 +30,10 @@ describe('crawl gateway', () => {
   })
   test('lets a browser, a member and the health check through', async () => {
     expect((await get('/', CHROME)).status).toBe(200)
-    expect((await get('/', { 'user-agent': GPT, cookie: 'pw_session=x' })).status).not.toBe(402)
+    expect((await get('/', { ...CHROME, cookie: 'pw_session=x' })).status).toBe(200)
     expect((await get('/health', { 'user-agent': GPT })).status).toBe(200)
+  })
+  test('a forged session cookie does not exempt GPTBot (x402-gateway 0.18.3 sessionCookie)', async () => {
+    expect((await get('/', { 'user-agent': GPT, cookie: 'pw_session=forged' })).status).toBe(402)
   })
 })
