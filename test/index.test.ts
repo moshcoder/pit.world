@@ -84,6 +84,9 @@ describe('crawler status', () => {
     const open = describeCrawl(report({ settings, queues: { site: { delayed: 40 }, page: { prioritized: 500 } } }))
     expect(open.jobs[0]).toMatchObject({ state: 'stalled' })
     expect(open.jobs[0]!.note).toBeUndefined()
+    // The gate's published cap wins over the settings of whichever worker answered.
+    const other = describeCrawl(report({ settings: { ...settings, maxPageBacklog: 50 }, queues, stats: { sites: 900, page_backlog_cap: 600 } }))
+    expect(other.jobs[0]!.note).toBe('Held while more than 600 page reads are queued; starts again under 540.')
   })
 
   it('/status draws it, escaped, refreshing; /api/status is the same as JSON', async () => {

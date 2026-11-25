@@ -114,7 +114,9 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
 
   // Site starts stop on purpose while the page queue is over its cap and resume under 90% of
   // it (the gate in services/crawler/src/queues.ts). That read as "stalled", which it is not.
-  const cap = report.settings.maxPageBacklog ?? 0
+  // The cap is the gate's own (a Redis gauge it publishes): this report's settings belong to
+  // whichever worker answered, and the publish worker said 50,000 while the gate held at 600,000.
+  const cap = n(stats, 'page_backlog_cap') || (report.settings.maxPageBacklog ?? 0)
   const starts = jobs[0]!
   if (cap && starts.state === 'stalled' && depth(queues.page) >= cap * 0.9) {
     starts.state = 'waiting'

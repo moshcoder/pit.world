@@ -268,7 +268,12 @@ export async function startWorkers(config: Config, log: (line: string) => void =
     gate = setInterval(async () => {
       try {
         await feedParked(runtime, config)
-        if (++ticks % 6 === 1) await publishSiteCounts(runtime)
+        if (++ticks % 6 === 1) {
+          await publishSiteCounts(runtime)
+          // The cap this gate holds site starts at, for /status: the report is often
+          // answered by another worker (publish, on another box) with its own settings.
+          await runtime.frontier.setGauges({ page_backlog_cap: config.maxPageBacklog })
+        }
         const backlog = await pageBacklog()
         if (!paused && backlog > config.maxPageBacklog) {
           paused = true
