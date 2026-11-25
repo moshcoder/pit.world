@@ -185,8 +185,14 @@
       if (b.track !== track || bar !== b) return
       const root = document.createElement('div')
       stage.append(root)
-      b.player = createPlayer(root, { src: track.src, kind: 'audio', audio: true, autoplay: true, unplayableSubject: 'this track' })
-      b.audio = b.player.media
+      // Not the player's own autoplay: it mutes whatever it starts by itself (right for a video nobody asked
+      // for), and this is sound someone pressed a button to hear. Muted, Listen "played" in silence. So the
+      // player is made the ordinary way (its saved volume and mute apply) and started here once it can play.
+      b.player = createPlayer(root, { src: track.src, kind: 'audio', audio: true, unplayableSubject: 'this track' })
+      const audio = (b.audio = b.player.media)
+      const start = () => b.audio === audio && audio.paused && audio.play().catch(() => {})
+      if (audio.readyState >= 1) start()
+      else audio.addEventListener('loadedmetadata', start, { once: true })
     } catch {
       // The player bundle did not load: the browser's own controls still play it.
       if (b.track !== track || bar !== b) return
