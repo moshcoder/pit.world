@@ -5,7 +5,7 @@
  * the query attached.
  */
 import { VotePhrases } from './vote-phrases'
-import { mountSubmit } from './submit-routes.js'
+import { handleSubmission, mountSubmit } from './submit-routes.js'
 import { featureNetwork, networkPagesFromIndex, W3bsNetwork } from './w3bs-network.js'
 import { type CrawlStatus, createCrawlStatus } from './crawl-status.js'
 import { FOOTER_SCRIPT_SRC, ringFooterCss, startRingFooterRefresh } from './ring-footer.js'
@@ -22,7 +22,9 @@ import { RateLimiter } from './ratelimit.js'
 import { snippetFor } from './footer.js'
 import { neighbors, randomSite, ringJson, ringSites, siteHref, useListings } from './ring.js'
 import { RingSync } from './ring-sync.js'
-import { Directory, directoryCategory, directoryHome, directoryJson, directoryNew, directoryPaths, directorySubcategory, view as directoryView } from './directory.js'
+import { Directory, directoryAdult, directoryAdultJson, directoryCategory, directoryHome, directoryJson, directoryNew, directoryPaths, directorySubcategory, seedDirectory, view as directoryView } from './directory.js'
+import { ADULT_SIGN_IN, DirectorySites } from './directory-sites.js'
+import { describeRun, importSisters, type SisterResult } from './sister-import.js'
 import { liveCerts, proxiedName, proxyRequest, registrySweep, Targets } from './proxy.js'
 import { backfillFor, featuredFor } from './featured.js'
 import { Promoted } from './promoted.js'
@@ -113,6 +115,10 @@ export type Deps = {
   ringSync?: RingSync
   /** The *.pit.world directory (/directory), read from the live certs and edge config; unset means off. */
   directory?: Directory
+  /** The filed directory entries (sister imports, Adult), for the staff seeding route; unset means that route is off. */
+  directorySites?: DirectorySites
+  /** The last sister-directory import run, for /api/directory; unset means not reported. */
+  sisterImport?: () => { ran_at: string; sources: Array<SisterResult | { source: string; error: string }> } | null
   /** pit.world accounts (sign in with CoinPay, sign-in for *.pit.world sites); unset means off. */
   accounts?: AccountDeps
   /** Promotion campaigns over the listings (needs listings); unset means off. */
@@ -280,6 +286,16 @@ export function createApp(deps: Deps) {
     })
   }
 
+  /** Is this address on a site filed under Adult (18+)? Those are shown in /directory/adult to signed-in members and nowhere else. */
+  const adultSite = (hostOrUrl: string | null | undefined): boolean => Boolean(hostOrUrl && deps.directory?.isAdult(hostOrUrl))
+  /** The signed-in account behind a request: a session cookie, or an account token as a Bearer. Null for an anonymous caller. */
+  const member = (c: Context<Env>) => {
+    const a = deps.accounts?.accounts
+    if (!a) return null
+    const bearer = (c.req.header('authorization') ?? '').replace(/^Bearer\s+/i, '')
+    return (bearer ? a.tokenAccount(bearer) : null) ?? a.sessionAccount(parseCookies(c.req.header('cookie'))[SESSION_COOKIE])
+  }
+
   async function runSearch(query: string, limit = 20, lang = ALL_LANGUAGES): Promise<{ result: (SearchResult & { hidden?: number; allLanguages?: boolean }) | null; error: string | null }> {
     try {
       // Our index's network pages are asked alongside the engines (loopback, capped at 1.5 s).
@@ -294,9 +310,10 @@ export function createApp(deps: Deps) {
       logFailures(result.failures)
       const preferred = featuredFor(query, 1)[0]
       // Read before our own network pages go in: those are featured whatever language they are in.
-      const shown = inLanguage(result.hits, lang, (h) => `${h.title} ${h.description}`)
+      // Sites filed under Adult (18+) live in /directory/adult only: never a search result, for anyone (the cache is shared).
+      const shown = inLanguage(result.hits.filter((h) => !adultSite(h.url)), lang, (h) => `${h.title} ${h.description}`)
       return {
-        result: { ...featureNetwork({ ...result, hits: shown.rows }, network, await fromIndex, preferred), ...(shown.hidden ? { hidden: shown.hidden } : {}), ...(shown.fellBack ? { allLanguages: true } : {}) },
+        result: { ...featureNetwork({ ...result, hits: shown.rows }, network, (await fromIndex).filter((h) => !adultSite(h.url)), preferred), ...(shown.hidden ? { hidden: shown.hidden } : {}), ...(shown.fellBack ? { allLanguages: true } : {}) },
         error: null,
       }
     } catch (error) {
@@ -318,7 +335,8 @@ export function createApp(deps: Deps) {
 
   async function runMedia(vertical: Exclude<Vertical, 'web'>, query: string, limit?: number, lang = ALL_LANGUAGES): Promise<{ result: MediaResult | null; error: string | null }> {
     try {
-      const result = await searchMedia(vertical, query, deps.keys, { cache, lang, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      const found = await searchMedia(vertical, query, deps.keys, { cache, lang, ...(limit ? { limit } : {}), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+      const result = { ...found, hits: found.hits.filter((h) => !adultSite(h.url) && !adultSite(h.host)) }
       // Every tab's rows can be summarized and read aloud, so each is a "recent result" (on a cached search too).
       deps.summarizer?.remember(result.hits.map((h) => ({ url: h.url, title: h.title, host: h.host, description: h.description ?? '' })))
       // A shop's or a newsroom's own picture comes from any host, so it needs our signature to pass /img.
@@ -472,7 +490,7 @@ export function createApp(deps: Deps) {
     return c.html(mcpsPage({ query, items: found?.items ?? [], total: found?.total ?? 0, error: found ? null : 'The list is unavailable for a moment. Try again shortly.' }), found ? 200 : 503)
   })
   // Sites, pages, feeds, sitemaps and OPML into our own index (src/submit-routes.ts).
-  mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', limited, writeLimited: (c, body) => writeLimited(c, 'submit', body), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
+  mountSubmit(app, { crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807', blocked: adultSite, limited, writeLimited: (c, body) => writeLimited(c, 'submit', body), ...(deps.fetch ? { fetch: deps.fetch } : {}) })
   // pitbot's live status: the crawler is its own service, read over loopback.
   app.get('/status', async (c) => {
     c.header('cache-control', 'no-store')
@@ -617,21 +635,86 @@ export function createApp(deps: Deps) {
   app.get('/ring', (c) => c.html(ringPage({ mirror: deps.ringSync?.last ?? null })))
   if (deps.directory) {
     const dir = deps.directory
-    const current = () => {
+    // Without `c` the view is an anonymous visitor's: no Adult category in it at all.
+    const current = (c?: Context<Env>) => {
       dir.touch()
-      return directoryView(dir)
+      return directoryView(dir, Date.now(), { member: c ? Boolean(member(c)) : false })
     }
-    app.get('/directory', (c) => c.html(directoryHome(current(), c.req.query('q') ?? '')))
+    const ADULT_PATH = '/directory/adult'
+    const signIn = `/signin?next=${encodeURIComponent(ADULT_PATH)}`
+    /** Every adult response: never indexed, never cached for someone else. */
+    const adultHeaders = (c: Context<Env>) => {
+      c.header('x-robots-tag', 'noindex, nofollow')
+      c.header('cache-control', 'private, no-store')
+    }
+    app.get('/directory', (c) => {
+      const v = current(c)
+      // A member's front page carries the Adult (18+) entry, so it is theirs alone.
+      if (v.adult) c.header('cache-control', 'private, no-store')
+      return c.html(directoryHome(v, c.req.query('q') ?? ''))
+    })
     app.get('/directory/new', (c) => c.html(directoryNew(current())))
+    // The Adult (18+) category: signed-in members only. Anyone else is sent to sign in and comes back here.
+    const adultPage = (c: Context<Env>) => {
+      adultHeaders(c)
+      const html = directoryAdult(current(c), c.req.query('q') ?? '', Number(c.req.query('page')) || 1)
+      return html ? c.html(html) : c.redirect(signIn, 302)
+    }
+    app.get(ADULT_PATH, adultPage)
+    app.get(`${ADULT_PATH}/*`, adultPage)
     app.get('/directory/:cat', (c) => {
       const html = directoryCategory(current(), c.req.param('cat'))
       return html ? c.html(html) : c.notFound()
     })
     app.get('/directory/:cat/:sub', (c) => {
-      const html = directorySubcategory(current(), c.req.param('cat'), c.req.param('sub'))
+      const html = directorySubcategory(current(), c.req.param('cat'), c.req.param('sub'), Number(c.req.query('page')) || 1)
       return html ? c.html(html) : c.notFound()
     })
-    app.get('/api/directory', (c) => c.json(directoryJson(current()), 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' }))
+    app.get('/api/directory', (c) => {
+      // Adult entries are listed only on an explicit category=adult from a signed-in account (session or account token).
+      if ((c.req.query('category') ?? '').trim().toLowerCase() === 'adult') {
+        adultHeaders(c)
+        const v = current(c)
+        if (!v.adult) return c.json({ error: 'sign-in-required', message: ADULT_SIGN_IN, signin: `https://pit.world${signIn}` }, 401)
+        return c.json(directoryAdultJson(v))
+      }
+      const run = deps.sisterImport?.() ?? null
+      // The import report without its adult tally: that count is nobody's business but a member's.
+      const imported = run ? { ran_at: run.ran_at, sources: run.sources.map((r) => ('error' in r ? r : (({ adult: _adult, ...rest }) => rest)(r))) } : null
+      return c.json({ ...directoryJson(current()), ...(imported ? { import: imported } : {}) }, 200, { 'access-control-allow-origin': '*', 'cache-control': 'public, max-age=300' })
+    })
+    // A site filed under Adult has no business listing page: /b/<host> and the listing API send a
+    // visitor to sign in, and a member to the category, the one place it is shown.
+    const listingGate = async (c: Context<Env>, next: () => Promise<void>) => {
+      let domain = c.req.param('domain') ?? c.req.query('domain') ?? ''
+      if (!domain && c.req.method === 'POST' && /json/i.test(c.req.header('content-type') ?? '')) {
+        const body = (await c.req.json().catch(() => null)) as { domain?: unknown } | null
+        if (typeof body?.domain === 'string') domain = body.domain
+      }
+      if (!domain || !dir.isAdult(domain)) return next()
+      adultHeaders(c)
+      const signedIn = Boolean(member(c))
+      if (c.req.path.startsWith('/api/')) return signedIn ? c.json({ error: 'adult-category', message: 'Adult (18+) sites are listed only in the Adult category.', url: `https://pit.world${ADULT_PATH}` }, 403) : c.json({ error: 'sign-in-required', message: ADULT_SIGN_IN, signin: `https://pit.world${signIn}` }, 401)
+      return c.redirect(signedIn ? ADULT_PATH : signIn, 302)
+    }
+    app.use('/b/:domain', listingGate)
+    app.use('/b/:domain/*', listingGate)
+    app.use('/api/listing', listingGate)
+    app.use('/api/listing/*', listingGate)
+    // Staff: file sites in bulk. POST a JSON array of {name, url, description, tags}; ?category=adult files them under Adult (18+).
+    if (deps.directorySites) {
+      const sites = deps.directorySites
+      app.post('/api/admin/directory/seed', async (c) => {
+        c.header('cache-control', 'no-store')
+        if (!subscriberAdmin(c)) return c.json({ error: 'unauthorized' }, 401)
+        const body = await c.req.json().catch(() => null)
+        const rows = Array.isArray(body) ? body : Array.isArray(body?.entries) ? body.entries : null
+        const category = c.req.query('category') ?? (Array.isArray(body) ? '' : String(body?.category ?? ''))
+        if (!rows || rows.length > 2000) return c.json({ error: 'send a JSON array of {name, url, description, tags} (at most 2000)' }, 400)
+        const report = seedDirectory(sites, rows, category)
+        return report ? c.json(report) : c.json({ error: 'category must be adult or a directory path like computers/software' }, 400)
+      })
+    }
   }
   app.get('/api/ring', (c) =>
     // Member sites fetch this server-side; the CORS header lets a browser-only site use it too.
@@ -651,7 +734,7 @@ export function createApp(deps: Deps) {
   // pwamart.com store listing: ownership proof for https://pit.world
   app.get('/.well-known/pwamart.txt', (c) => c.body('19278327af99806655813c4a\n', 200, { 'content-type': 'text/plain; charset=utf-8' }))
   app.get('/robots.txt', (c) =>
-    c.body('User-agent: *\nDisallow: /search\nDisallow: /share\nDisallow: /api/\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
+    c.body('User-agent: *\nDisallow: /search\nDisallow: /share\nDisallow: /api/\nDisallow: /directory/adult\nAllow: /\nSitemap: https://pit.world/sitemap.xml\n', 200, { 'content-type': 'text/plain; charset=utf-8' }),
   )
   // /sitemap.xml is an index; the listings get as many child sitemaps as they need (src/sitemap.ts).
   const sitemaps = new SitemapCache()
@@ -891,6 +974,7 @@ export function createApp(deps: Deps) {
     crawlerUrl: deps.crawlerUrl ?? process.env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807',
     accounts: deps.accounts?.accounts ?? null,
     site: deps.accounts?.site ?? process.env.PIT_SITE ?? 'https://pit.world',
+    hidden: adultSite,
     ...(deps.fetch ? { fetch: deps.fetch } : {}),
   })
 
@@ -1538,13 +1622,17 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
   })
   const fpSecret = fingerprintSecret(dataDir)
   // The directory reads the relay certs and the edge config itself, so new domains list themselves.
-  const directory = env.PIT_DIRECTORY === 'off' ? undefined : new Directory({ file: `${dataDir}/directory.json` })
+  // Filed entries (sister-directory imports, the Adult category) live beside the listings; a site filed under Adult gets no business listing.
+  const directorySites = new DirectorySites(listings.db)
+  listings.setBlocked((domain) => directorySites.isAdult(domain))
+  const directory = env.PIT_DIRECTORY === 'off' ? undefined : new Directory({ file: `${dataDir}/directory.json`, sites: directorySites })
+  let sisterRun: { ran_at: string; sources: Array<SisterResult | { source: string; error: string }> } | null = null
   if (directory && import.meta.main) {
     const run = () => directory.refresh().catch((e) => console.error(`directory refresh: ${(e as Error).message}`))
     setTimeout(run, 30_000).unref()
     setInterval(run, 15 * 60_000).unref()
   }
-  const app = createApp({ ...(directory ? { directory } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(process.env, ['/sitemap.xml', '/sitemaps/', ...(indexNow ? [indexNow.keyPath] : [])]), ...(indexNow ? { indexNow } : {}), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, buildAb, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
+  const app = createApp({ ...(directory ? { directory, directorySites, sisterImport: () => sisterRun } : {}), keys: keysFromEnv(), summarizer, summaryPasses, corpus, speech, auctions, auctionShop, auctionAccounts, crawlGate: createCrawlGate(process.env, ['/sitemap.xml', '/sitemaps/', ...(indexNow ? [indexNow.keyPath] : [])]), ...(indexNow ? { indexNow } : {}), fingerprintSecret: fpSecret, votes: new Votes(listings.db, fpSecret), voteRewards: new VoteRewards(listings.db, { usdPerPoint: Number(env.PIT_VOTE_POINT_USD) || null }), newsletter, listings, accounts, promotion, promoters, rewards, internalIps, buildAb, ...(buildInvoicing ? { buildInvoicing, featuredBusinesses } : {}), ...(ringSync ? { ringSync } : {}), ...(env.PIT_ADMIN_TOKEN ? { adminToken: env.PIT_ADMIN_TOKEN } : {}) })
   // Every hour: start measurement windows that are ready, mark ended ones due and write their reports and drafts. Sends nothing.
   const hourly = () => {
     try {
@@ -1603,6 +1691,37 @@ export function serve(options: { port?: number; hostname?: string } = {}) {
       .then((n) => n && console.log(`NicheDB directory import: re-categorised ${n} imported listings`))
       .catch((err) => console.error(`NicheDB directory re-categorise failed: ${(err as Error).message}`))
     setTimeout(importDirectory, 90_000).unref()
+  }
+  // New listings from the sister directories (SaaSRow, pwamart, built.indie): each one's own site goes to the
+  // crawler through /submit's path and is filed in /directory. Hourly, at most 50 new per source per run (src/sister-import.ts).
+  if (directory && env.PIT_SISTER_IMPORT !== 'off') {
+    const crawlerUrl = env.CRAWLER_STATUS_URL ?? 'http://127.0.0.1:8807'
+    let importing = false
+    const importSisterDirectories = async () => {
+      if (importing) return
+      importing = true
+      try {
+        const sources = await importSisters({
+          sites: directorySites,
+          cursors: listings,
+          known: (host) => directory.knows(host),
+          cap: Number(env.PIT_SISTER_IMPORT_CAP ?? 50) || 50,
+          submit: async (urls) => {
+            const outcome = await handleSubmission({ urls }, { crawlerUrl, blocked: (url) => directorySites.isAdult(url) })
+            if (outcome.error) throw new Error('the crawler is not taking submissions')
+            return outcome.queued
+          },
+        })
+        sisterRun = { ran_at: new Date().toISOString(), sources }
+        for (const r of sources) console.log(`Sister directory import: ${describeRun(r)}`)
+      } catch (err) {
+        console.error(`Sister directory import failed: ${(err as Error).message}`)
+      } finally {
+        importing = false
+      }
+    }
+    setTimeout(importSisterDirectories, 120_000).unref()
+    setInterval(importSisterDirectories, 3600_000).unref()
   }
   // Imported listings whose homepage was never read get a description and a category from their own
   // words, a batch every few minutes, so they can be indexed (src/listings.ts describeBacklog).

@@ -496,6 +496,8 @@ body.has-mini-player { padding-bottom: 72px; }
 .dir-sites li > a:first-child { font-weight: 700; }
 .dir-host { display: block; font-family: var(--mono); font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 .dir-also { display: block; font-size: .8rem; color: var(--muted); }
+.dir-via { font-size: .8rem; color: var(--muted); }
+.dir-pager { margin-top: 16px; color: var(--muted); }
 .dir-new { display: inline-block; padding: 0 4px; background: #ffd400; color: #b00000; font: italic 700 .7rem/1.4 var(--sans); border-radius: 2px; vertical-align: 1px; }
 .dir-cool { color: var(--accent); }
 .dir-legend { font-size: .85rem; color: var(--muted); margin-top: 24px; }

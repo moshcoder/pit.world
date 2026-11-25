@@ -26,6 +26,8 @@ export type CorpusDeps = {
   accounts?: Accounts | null
   site: string
   fetch?: typeof fetch
+  /** Hosts or URLs whose pages are left out: sites filed under Adult (18+) in the directory. */
+  hidden?: (hostOrUrl: string) => boolean
   /** Requests a minute per address, and for everyone together (the internal key is exempt). */
   limits?: { perIp: number; global: number }
 }
@@ -108,6 +110,8 @@ export function mountCorpus(app: Hono<Env>, d: CorpusDeps) {
       const body = (await r.json().catch(() => ({}))) as any
       if (r.status === 400) return c.json({ error: body?.error ?? 'bad request', docs }, 400)
       if (!r.ok || !Array.isArray(body?.items)) return c.json({ error: 'The corpus is unavailable for a moment. Try again shortly.' }, 503)
+      // Pages of sites filed under Adult (18+) are never served (or charged for); the cursors are the crawler's and still advance.
+      if (d.hidden) body.items = (body.items as Upstream['items']).filter((i) => !d.hidden!(i.url) && !d.hidden!(i.site))
       return body as Upstream
     } catch {
       return c.json({ error: 'The corpus is unavailable for a moment. Try again shortly.' }, 503)

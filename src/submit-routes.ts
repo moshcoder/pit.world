@@ -24,15 +24,17 @@ export type SubmitDeps = {
   /** Per-browser limit when the request carries a fingerprint (src/visitor.ts); `limited` otherwise. */
   writeLimited?: (c: Context<any>, body: Record<string, unknown> | null) => Promise<boolean>
   fetch?: Fetch
+  /** Addresses pit.world does not read into its index (sites filed under Adult: a crawled page is published onward). */
+  blocked?: (url: string) => boolean
 }
 
 /** Read whatever came in (JSON, a form with a pasted list, an uploaded file) into the outcome. */
-export async function handleSubmission(body: unknown, deps: Pick<SubmitDeps, 'crawlerUrl' | 'fetch'>): Promise<SubmitOutcome> {
+export async function handleSubmission(body: unknown, deps: Pick<SubmitDeps, 'crawlerUrl' | 'fetch' | 'blocked'>): Promise<SubmitOutcome> {
   const parsed = await parseSubmission(body as any, { maxEntries: SUBMIT_MAX })
   const accepted: SubmitOutcome['accepted'] = []
   const rejected: SubmitOutcome['rejected'] = parsed.invalid.slice(0, 200).map((url: string) => ({ url, error: 'invalid-url' }))
   for (const url of parsed.urls as string[]) {
-    if (privateBySpelling(url)) rejected.push({ url, error: 'blocked-host' })
+    if (privateBySpelling(url) || deps.blocked?.(url)) rejected.push({ url, error: 'blocked-host' })
     else accepted.push({ url, kind: guessKind(url) })
   }
   let queued = 0

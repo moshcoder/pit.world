@@ -441,6 +441,12 @@ export class Listings {
     } catch {}
   }
 
+  /** Domains that never get a business listing: sites filed under Adult (18+) in the directory (src/directory-sites.ts). */
+  private blocked: ((domain: string) => boolean) | null = null
+  setBlocked(fn: ((domain: string) => boolean) | null): void {
+    this.blocked = fn
+  }
+
   /** Bounded places each listing moves on its anonymous votes (src/votes.ts); unset means editorial order only. */
   private voteMoves: ((domains: string[]) => Map<string, number>) | null = null
   setVoteMoves(fn: ((domains: string[]) => Map<string, number>) | null): void {
@@ -501,7 +507,7 @@ export class Listings {
   /** A claimed listing as its owner wrote it; otherwise what the homepage says, refreshed once a day. */
   async get(input: unknown, options: { fetchMeta?: boolean } = {}): Promise<Listing | null> {
     const domain = normalizeDomain(input)
-    if (!domain) return null
+    if (!domain || this.blocked?.(domain)) return null
     let row = this.row(domain)
     // A listing pit.world wrote itself keeps what it wrote; only bare unclaimed ones follow the homepage.
     // An imported one reads its homepage once (then monthly) for a description: hundreds of thousands
@@ -641,7 +647,7 @@ export class Listings {
   /** Start a claim: the token goes in a TXT record at _pit-verify.<domain>, or in a meta tag on the homepage. */
   startClaim(input: unknown): ClaimStart | null {
     const domain = normalizeDomain(input)
-    if (!domain) return null
+    if (!domain || this.blocked?.(domain)) return null
     this.db.run('DELETE FROM claims WHERE created_at < ?', [this.now() - CLAIM_TTL_MS])
     const claimId = randomBytes(12).toString('base64url')
     const token = `pit-verify=${randomBytes(16).toString('hex')}`
@@ -941,7 +947,7 @@ export class Listings {
     this.counts = null
     const domain = normalizeDomain(input.domain)
     const name = clean(input.name, LIMITS.name)
-    if (!domain || !name) return null
+    if (!domain || !name || this.blocked?.(domain)) return null
     const row = this.row(domain)
     if (row?.claimed_at) return null
     const values = [
@@ -1095,7 +1101,7 @@ export class Listings {
       for (const r of rows) {
         const domain = normalizeDomain(r.domain)
         const name = clean(r.name, LIMITS.name) || domain
-        if (!domain || !name || !/^https:\/\/nichedb\.dev\/i\/\d+$/.test(r.sourceUrl)) continue
+        if (!domain || !name || this.blocked?.(domain) || !/^https:\/\/nichedb\.dev\/i\/\d+$/.test(r.sourceUrl)) continue
         const topics = [...new Set((r.topics ?? []).map((t) => clean(t, 80)).filter(Boolean))].slice(0, 20)
         changed += upsert.run(domain, name, categoryOf(r.category)?.slug ?? '', clean(r.country, LIMITS.place), JSON.stringify(topics), r.sourceUrl, now, now, now).changes
       }

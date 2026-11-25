@@ -19,6 +19,16 @@ import { existsSync, readdirSync, readFileSync, renameSync, writeFileSync } from
 import { docPage, esc } from './html.js'
 import { RING } from './ring.js'
 import { CATEGORIES as PRO_CATEGORIES } from './pros.js'
+import { ADULT, ADULT_NOTICE, siteHost, type DirectorySite, type DirectorySites } from './directory-sites.js'
+
+export { ADULT } from './directory-sites.js'
+
+/** The sister directories whose new listings are filed here too (src/sister-import.ts). */
+export const SOURCES: Record<string, { label: string; home: string }> = {
+  saasrow: { label: 'SaaSRow', home: 'https://saasrow.pwa.pit.world/' },
+  pwamart: { label: 'pwamart', home: 'https://pwamart.com/' },
+  'built.indie': { label: 'built.indie', home: 'https://built.indie.pit.world/' },
+}
 
 export type Subcategory = { slug: string; name: string }
 export type Category = { slug: string; name: string; subs: Subcategory[] }
@@ -205,6 +215,10 @@ export type Entry = {
   added: number
   /** In the pit.world ring's core: Yahoo's sunglasses. */
   cool: boolean
+  /** Set when the entry is not a *.pit.world host: the sister directory it came from, or staff. */
+  source?: string
+  sourceUrl?: string
+  tags?: string[]
 }
 
 type State = { seen: Record<string, number>; meta: Record<string, SiteMeta> }
@@ -244,7 +258,22 @@ export type DirectoryOptions = {
   now?: () => number
   /** How long a site's title and status are trusted. */
   metaTtl?: number
+  /** Entries that are not *.pit.world hosts: sister-directory imports and the Adult category. */
+  sites?: DirectorySites
 }
+
+const fromSite = (s: DirectorySite): Entry => ({
+  host: s.host,
+  url: s.url,
+  name: s.name,
+  about: s.about,
+  paths: [s.path],
+  added: s.added,
+  cool: false,
+  source: s.source,
+  ...(s.sourceUrl ? { sourceUrl: s.sourceUrl } : {}),
+  ...(s.tags.length ? { tags: s.tags } : {}),
+})
 
 export class Directory {
   private state: State = { seen: {}, meta: {} }
@@ -326,8 +355,29 @@ export class Directory {
     }
   }
 
-  /** The sites to list: every live host that answered its last check (or has not been checked yet). */
+  /** Is this host already in the directory, as a *.pit.world site or a filed entry (Adult included)? */
+  knows(host: string): boolean {
+    return this.hosts.includes(host) || (this.options.sites?.has(host) ?? false)
+  }
+
+  /** Is this host (or URL) filed under Adult? Such a site is shown nowhere outside /directory/adult. */
+  isAdult(hostOrUrl: string): boolean {
+    return this.options.sites?.isAdult(hostOrUrl) ?? false
+  }
+
+  /** The Adult category's entries. Only ever handed to a page built for a signed-in member. */
+  adultEntries(): Entry[] {
+    return (this.options.sites?.adult() ?? []).map(fromSite)
+  }
+
+  /** The sites to list: every live host that answered its last check (or has not been checked yet), then the filed entries. Never an adult one. */
   entries(): Entry[] {
+    const own = new Set(this.hosts)
+    const filed = (this.options.sites?.all() ?? []).filter((s) => !own.has(s.host)).map(fromSite)
+    return [...this.networkEntries(), ...filed].sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  private networkEntries(): Entry[] {
     return this.hosts
       .filter((h) => this.state.meta[h]?.ok !== false)
       .map((host) => {
@@ -348,7 +398,6 @@ export class Directory {
           cool: !!ring,
         }
       })
-      .sort((a, b) => a.name.localeCompare(b.name))
   }
 
   /** Hosts left out because they did not answer. */
@@ -361,7 +410,12 @@ export class Directory {
 
 const NEW_FOR = 14 * 86_400_000
 
-type View = { entries: Entry[]; down: number; now: number }
+/** `adult` is null for an anonymous visitor: the page builders below cannot leak what they were never given. */
+export type View = { entries: Entry[]; adult: Entry[] | null; down: number; now: number }
+
+export const PER_PAGE = 100
+/** How many of a subcategory's sites its parent category page shows before linking to the rest. */
+const PREVIEW = 30
 
 const inPath = (e: Entry, path: string) => e.paths.some((p) => p === path || p.startsWith(`${path}/`))
 const count = (v: View, path: string) => v.entries.filter((e) => inPath(e, path)).length
@@ -385,12 +439,18 @@ function crossList(e: Entry, here: string): string {
     .join(', ')}</span>`
 }
 
+/** Which sister directory an entry came from, linked to its page there. */
+function via(e: Entry): string {
+  const from = e.source ? SOURCES[e.source] : undefined
+  return from ? ` <span class="dir-via">via <a href="${esc(e.sourceUrl || from.home)}">${esc(from.label)}</a></span>` : ''
+}
+
 function siteList(v: View, list: Entry[], here = ''): string {
   if (!list.length) return '<p class="muted">No sites here yet.</p>'
   return `<ul class="dir-sites">${list
     .map(
       (e) =>
-        `<li><a href="${esc(e.url)}">${esc(e.name)}</a>${badges(e, v.now)}${e.about ? ` - ${esc(e.about)}` : ''} <span class="dir-host">${esc(e.host)}</span>${here ? crossList(e, here) : ''}</li>`,
+        `<li><a href="${esc(e.url)}"${e.source ? ' rel="nofollow noopener"' : ''}>${esc(e.name)}</a>${badges(e, v.now)}${e.about ? ` - ${esc(e.about)}` : ''} <span class="dir-host">${esc(e.host)}</span>${via(e)}${here ? crossList(e, here) : ''}</li>`,
     )
     .join('')}</ul>`
 }
@@ -399,24 +459,28 @@ const searchBox = (q = '') =>
   `<form class="dir-search" action="/directory" method="get" role="search"><input type="search" name="q" value="${esc(q)}" placeholder="Search the directory" aria-label="Search the directory"><button type="submit">Search</button> <a href="/directory/new">What's New</a> · <a href="/ring/random">Random Link</a></form>`
 
 const legend = (v: View) =>
-  `<p class="dir-legend"><span class="dir-new">NEW!</span> added in the last two weeks · <span class="dir-cool">&#9733;</span> in the <a href="/ring">pit.world ring</a>${v.down ? ` · ${v.down} site${v.down === 1 ? '' : 's'} not answering right now, listed again when they are back` : ''}</p>`
+  `<p class="dir-legend"><span class="dir-new">NEW!</span> added in the last two weeks · <span class="dir-cool">&#9733;</span> in the <a href="/ring">pit.world ring</a> · <span class="dir-via">via</span> first listed on a sister directory${v.down ? ` · ${v.down} site${v.down === 1 ? '' : 's'} not answering right now, listed again when they are back` : ''}</p>`
 
 const footer = `<h2>Add your site</h2>
-<p>Every <code>*.pit.world</code> site is listed on its own: register a Moshpit name and it is relayed at <code>&lt;name&gt;.pit.world</code> and shows up here within the hour, filed by what its homepage says it is. A good <code>&lt;title&gt;</code> and meta description get you filed in the right place. <a href="/connect">Get on Moshpit</a> · <a href="/b">claim your listing</a> · <a href="/api/directory">this directory as JSON</a>.</p>`
+<p>Every <code>*.pit.world</code> site is listed on its own: register a Moshpit name and it is relayed at <code>&lt;name&gt;.pit.world</code> and shows up here within the hour, filed by what its homepage says it is. A good <code>&lt;title&gt;</code> and meta description get you filed in the right place. <a href="/connect">Get on Moshpit</a> · <a href="/b">claim your listing</a> · <a href="/api/directory">this directory as JSON</a>.</p>
+<p>Any other site: launch it on ${Object.values(SOURCES)
+  .map((s) => `<a href="${esc(s.home)}">${esc(s.label)}</a>`)
+  .join(', ')} and it is filed here within the hour and read into <a href="/status">pit.world's own index</a>.</p>`
 
 export function directoryHome(v: View, q = ''): string {
   if (q.trim()) return directorySearch(v, q.trim())
   const cats = CATEGORIES.filter((c) => count(v, c.slug))
+  // What's New on the front page is the network's own news; sister-directory launches have their own list on /directory/new.
   const fresh = v.entries
-    .filter((e) => e.added)
+    .filter((e) => e.added && !e.source)
     .sort((a, b) => b.added - a.added)
     .slice(0, 5)
   return docPage({
     title: 'The pit.world Directory: every *.pit.world site by category',
-    description: `A Yahoo-style directory of all ${v.entries.length} *.pit.world sites and Moshpit names, filed by subject and updated on its own as new ones go live.`,
+    description: `A Yahoo-style directory of ${v.entries.length} sites: every *.pit.world site and Moshpit name, plus new launches from SaaSRow, pwamart and built.indie, filed by subject and updated on its own.`,
     path: '/directory',
     body: `<h1>The pit.world Directory</h1>
-<p class="lede">Every site on <code>*.pit.world</code>, filed by subject. ${v.entries.length} sites in ${cats.length} categories, kept up to date by itself: a new Moshpit name or pit.world site shows up here on its own.</p>
+<p class="lede">Every site on <code>*.pit.world</code>, and new launches from our sister directories, filed by subject. ${v.entries.length} sites in ${cats.length} categories, kept up to date by itself: a new Moshpit name or pit.world site shows up here on its own.</p>
 ${searchBox()}
 <div class="dir-cats">${cats
       .map((c) => {
@@ -425,7 +489,7 @@ ${searchBox()}
           .map((s) => `<a href="${href(`${c.slug}/${s.slug}`)}">${esc(s.name)}</a>`)
           .join(', ')}...</p></section>`
       })
-      .join('')}</div>
+      .join('')}${v.adult ? `<section><h2><a href="${href(ADULT.slug)}" rel="nofollow">${esc(ADULT.name)}</a> <small>(${v.adult.length})</small></h2><p>Signed-in members only.</p></section>` : ''}</div>
 ${fresh.length ? `<h2>What's New</h2>${siteList(v, fresh)}<p><a href="/directory/new">All new sites</a></p>` : ''}
 <h2><a href="/pros">Business Directory</a></h2>
 <p>Businesses anywhere on the web, by category. Owners claim their listing free. ${PRO_CATEGORIES.map((c) => `<a href="/pros/${encodeURIComponent(c.slug)}">${esc(c.label)}</a>`).join(', ')}.</p>
@@ -449,36 +513,49 @@ ${searchBox()}
 ${subs
   .map((s) => {
     const path = `${c.slug}/${s.slug}`
-    return `<h2><a href="${href(path)}">${esc(s.name)}</a></h2>${siteList(v, v.entries.filter((e) => e.paths.includes(path)), path)}`
+    const list = v.entries.filter((e) => e.paths.includes(path))
+    return `<h2><a href="${href(path)}">${esc(s.name)}</a></h2>${siteList(v, list.slice(0, PREVIEW), path)}${list.length > PREVIEW ? `<p><a href="${href(path)}">All ${list.length} sites in ${esc(s.name)}</a></p>` : ''}`
   })
   .join('')}
 ${legend(v)}`,
   })
 }
 
-export function directorySubcategory(v: View, slug: string, subSlug: string): string | null {
+const pager = (base: string, page: number, pages: number) =>
+  pages > 1
+    ? `<p class="dir-pager">${page > 1 ? `<a href="${base}${page > 2 ? `?page=${page - 1}` : ''}" rel="prev">Previous</a> · ` : ''}Page ${page} of ${pages}${page < pages ? ` · <a href="${base}?page=${page + 1}" rel="next">Next</a>` : ''}</p>`
+    : ''
+
+export function directorySubcategory(v: View, slug: string, subSlug: string, pageNo = 1): string | null {
   const c = CATEGORIES.find((x) => x.slug === slug)
   const s = c?.subs.find((x) => x.slug === subSlug)
   if (!c || !s) return null
   const path = `${c.slug}/${s.slug}`
   const list = v.entries.filter((e) => e.paths.includes(path))
+  const pages = Math.max(1, Math.ceil(list.length / PER_PAGE))
+  const page = Math.min(pages, Math.max(1, Math.trunc(pageNo) || 1))
   const siblings = c.subs.filter((x) => x.slug !== s.slug && count(v, `${c.slug}/${x.slug}`))
   return docPage({
-    title: `${s.name} · ${c.name} · The pit.world Directory`,
-    description: `${list.length} *.pit.world site${list.length === 1 ? '' : 's'} in ${c.name} > ${s.name}.`,
-    path: href(path),
+    title: `${s.name}${page > 1 ? ` (page ${page})` : ''} · ${c.name} · The pit.world Directory`,
+    description: `${list.length} site${list.length === 1 ? '' : 's'} in ${c.name} > ${s.name}.`,
+    path: `${href(path)}${page > 1 ? `?page=${page}` : ''}`,
     body: `<p class="dir-crumbs"><a href="/directory">Top</a> &gt; <a href="${href(c.slug)}">${esc(c.name)}</a> &gt; ${esc(s.name)}</p>
 <h1>${esc(s.name)}</h1>
 ${searchBox()}
 <h2>Site Listings</h2>
-${siteList(v, list, path)}
+${siteList(v, list.slice((page - 1) * PER_PAGE, page * PER_PAGE), path)}
+${pager(href(path), page, pages)}
 ${siblings.length ? `<p class="dir-related">More in ${esc(c.name)}: ${siblings.map((x) => `<a href="${href(`${c.slug}/${x.slug}`)}">${esc(x.name)}</a>`).join(' · ')}</p>` : ''}
 ${legend(v)}`,
   })
 }
 
 export function directoryNew(v: View): string {
-  const list = v.entries.filter((e) => e.added).sort((a, b) => b.added - a.added)
+  const list = v.entries.filter((e) => e.added && !e.source).sort((a, b) => b.added - a.added)
+  const launched = v.entries
+    .filter((e) => e.added && e.source)
+    .sort((a, b) => b.added - a.added)
+    .slice(0, 60)
   const day = (t: number) => new Date(t).toISOString().slice(0, 10)
   const days = [...new Set(list.map((e) => day(e.added)))]
   return docPage({
@@ -489,6 +566,7 @@ export function directoryNew(v: View): string {
 <h1>What's New</h1>
 ${searchBox()}
 ${days.length ? days.map((d) => `<h2>${d}</h2>${siteList(v, list.filter((e) => day(e.added) === d), '')}`).join('') : '<p>Nothing new since the directory opened. New Moshpit names and pit.world sites land here the day they go live.</p>'}
+${launched.length ? `<h2>New from our sister directories</h2>${siteList(v, launched, '')}` : ''}
 ${legend(v)}`,
   })
 }
@@ -510,7 +588,7 @@ ${searchBox(q)}
 <h2>Category Matches (${cats.length})</h2>
 ${cats.length ? `<ul class="dir-subs">${cats.map(({ c, s }) => `<li><a href="${href(`${c.slug}/${s.slug}`)}">${esc(c.name)} &gt; <b>${esc(s.name)}</b></a></li>`).join('')}</ul>` : '<p class="muted">None.</p>'}
 <h2>Site Matches (${sites.length})</h2>
-${siteList(v, sites, '')}
+${siteList(v, sites.slice(0, 200), '')}${sites.length > 200 ? '<p class="muted">Showing the first 200. Add a word to narrow it down.</p>' : ''}
 <p>Not here? <a href="/search?q=${encodeURIComponent(q)}">Search the whole web for ${esc(q)}</a>.</p>`,
   })
 }
@@ -534,7 +612,56 @@ export function directoryJson(v: View) {
       about: e.about,
       categories: e.paths,
       added: e.added ? new Date(e.added).toISOString() : null,
+      ...(e.source ? { source: e.source, ...(e.sourceUrl ? { source_url: e.sourceUrl } : {}) } : {}),
     })),
+  }
+}
+
+/**
+ * The Adult (18+) category, for a signed-in member. Its entries appear nowhere else: not on the
+ * front page, in a category, in What's New, in a directory search or in the JSON without
+ * category=adult. `q` searches inside the category only.
+ */
+export function directoryAdult(v: View, q = '', pageNo = 1): string | null {
+  if (!v.adult) return null
+  const needle = q.trim().toLowerCase()
+  const list = needle ? v.adult.filter((e) => `${e.host} ${e.name} ${e.about} ${(e.tags ?? []).join(' ')}`.toLowerCase().includes(needle)) : v.adult
+  const pages = Math.max(1, Math.ceil(list.length / PER_PAGE))
+  const page = Math.min(pages, Math.max(1, Math.trunc(pageNo) || 1))
+  const rows = list.slice((page - 1) * PER_PAGE, page * PER_PAGE)
+  const html = docPage({
+    title: `${ADULT.name} · The pit.world Directory`,
+    description: `${ADULT.name}: for signed-in members.`,
+    path: href(ADULT.slug),
+    noindex: true,
+    body: `<p class="dir-crumbs"><a href="/directory">Top</a> &gt; ${esc(ADULT.name)}</p>
+<h1>${esc(ADULT.name)}</h1>
+<p class="notice dir-adult-notice">${esc(ADULT_NOTICE)}</p>
+<form class="dir-search" action="${href(ADULT.slug)}" method="get" role="search"><input type="search" name="q" value="${esc(q.trim())}" placeholder="Search this category" aria-label="Search the Adult category"><button type="submit">Search</button></form>
+<h2>Site Listings (${list.length})</h2>
+${
+  rows.length
+    ? `<ul class="dir-sites">${rows
+        .map(
+          (e) =>
+            `<li><a href="${esc(e.url)}" rel="nofollow noopener noreferrer">${esc(e.name)}</a>${e.about ? ` - ${esc(e.about)}` : ''} <span class="dir-host">${esc(e.host)}</span>${e.tags?.length ? ` <span class="dir-also">${e.tags.map(esc).join(', ')}</span>` : ''}</li>`,
+        )
+        .join('')}</ul>`
+    : '<p class="muted">No sites here yet.</p>'
+}
+${pager(href(ADULT.slug), page, pages)}
+<p class="muted">Legal adult sites for adults. These listings are shown here only, to signed-in members, and are kept out of search engines.</p>`,
+  })
+  // Every adult page is noindex, nofollow.
+  return html.replace('<meta name="robots" content="noindex">', '<meta name="robots" content="noindex, nofollow">')
+}
+
+export function directoryAdultJson(v: View) {
+  return {
+    updated: new Date(v.now).toISOString(),
+    category: { slug: ADULT.slug, name: ADULT.name, url: `https://pit.world${href(ADULT.slug)}`, notice: ADULT_NOTICE },
+    count: v.adult?.length ?? 0,
+    sites: (v.adult ?? []).map((e) => ({ host: e.host, url: e.url, name: e.name, about: e.about, tags: e.tags ?? [], categories: e.paths, added: e.added ? new Date(e.added).toISOString() : null })),
   }
 }
 
@@ -547,6 +674,30 @@ export function directoryPaths(v: View): string[] {
   ]
 }
 
-export function view(d: Directory, now = Date.now()): View {
-  return { entries: d.entries(), down: d.down().length, now }
+export type SeedReport = { category: string; added: number; moved: number; exists: number; invalid: number; results: Array<{ url: string; host: string | null; result: 'added' | 'moved' | 'exists' | 'invalid' }> }
+
+/**
+ * Staff seeding: file a JSON array of {name, url, description, tags} under one category. `adult`
+ * files them under Adult (18+) and moves a host that is already filed elsewhere into it; any other
+ * category is a "category/sub" path from CATEGORIES. Null when the category is neither. Nothing
+ * seeded here is handed to the crawler.
+ */
+export function seedDirectory(sites: DirectorySites, rows: unknown[], category: string): SeedReport | null {
+  const wanted = category.trim().toLowerCase()
+  const [c, s] = wanted.split('/')
+  const path = wanted === ADULT.slug ? ADULT.slug : CATEGORIES.find((x) => x.slug === c)?.subs.some((x) => x.slug === s) ? `${c}/${s}` : null
+  if (!path) return null
+  const report: SeedReport = { category: path, added: 0, moved: 0, exists: 0, invalid: 0, results: [] }
+  for (const raw of rows) {
+    const row = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>
+    const result = sites.add({ name: row.name, url: row.url, description: row.description, tags: row.tags, path, source: 'staff' })
+    report[result]++
+    report.results.push({ url: typeof row.url === 'string' ? row.url : '', host: siteHost(row.url), result })
+  }
+  return report
+}
+
+/** What a visitor may see. `member` is a signed-in account or a valid account token; only then is the Adult category in the view. */
+export function view(d: Directory, now = Date.now(), options: { member?: boolean } = {}): View {
+  return { entries: d.entries(), adult: options.member ? d.adultEntries() : null, down: d.down().length, now }
 }
