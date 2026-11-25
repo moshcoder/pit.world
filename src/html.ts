@@ -774,7 +774,7 @@ export function statusPage(st: CrawlStatus): string {
     ? `<table class="crawl-jobs"><thead><tr><th>Job</th><th>State</th><th>Waiting</th><th>Last hour</th><th>Errors (1h)</th><th>Clears in</th></tr></thead><tbody>${st.jobs
         .map(
           (j) =>
-            `<tr><td><b>${esc(j.label)}</b><br><small>${esc(j.what)}</small></td><td><span class="state state-${j.state}">${esc(j.state)}</span></td><td>${fmt(j.backlog)}</td><td>${fmt(j.ratePerHour)}</td><td>${fmt(j.errorsLastHour)}</td><td>${esc(eta(j.clearsInHours))}</td></tr>`,
+            `<tr><td><b>${esc(j.label)}</b><br><small>${esc(j.what)}${j.note ? `<br>${esc(j.note)}` : ''}</small></td><td><span class="state state-${j.state}">${esc(j.state)}</span></td><td>${fmt(j.backlog)}</td><td>${fmt(j.ratePerHour)}</td><td>${fmt(j.errorsLastHour)}</td><td>${esc(eta(j.clearsInHours))}</td></tr>`,
         )
         .join('')}</tbody></table>`
     : ''

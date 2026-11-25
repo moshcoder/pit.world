@@ -338,6 +338,7 @@ form .btn { border: 0; cursor: pointer; }
 .state { padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); font-size: 12px; }
 .state-working { color: var(--accent); border-color: var(--accent); }
 .state-stalled { color: var(--danger); border-color: var(--danger); }
+.state-waiting { color: var(--muted); }
 .crawl-log { list-style: none; padding: 0; margin: 0; font-family: var(--mono); font-size: 13px; }
 .crawl-log li { padding: 4px 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
 .crawl-log time, .crawl-log small, .crawl-log .site { color: var(--muted); }

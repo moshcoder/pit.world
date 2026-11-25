@@ -421,6 +421,7 @@ export async function report(runtime: Runtime, config: Config) {
       renderers: config.obscuraUrls.length,
       discover: config.discover,
       maxSites: config.maxSites,
+      maxPageBacklog: config.maxPageBacklog,
       publishing: Boolean(config.nichedbKey) && config.publishPages,
     },
     generatedAt: new Date().toISOString(),
