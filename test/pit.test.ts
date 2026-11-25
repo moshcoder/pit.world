@@ -176,6 +176,22 @@ describe('search core', () => {
     expect(parseSerper({ organic: [{ link: 'data:text/html,hi' }] })).toEqual([])
   })
 
+  it('drops a link whose host was lost (Brave cloaked /go/v1 redirects through SearXNG)', () => {
+    const real = { url: 'https://hqterm.sh/', title: 'hqterm', content: 'terminal sessions' }
+    expect(
+      parseSearxng({
+        results: [
+          { url: 'http:///go/v1/AX4_3TsQkmZ-awYp7AHX', title: 'cloaked, no host' },
+          { url: 'http://go/v1/AZtUHVCQSdmsav73gAFA', title: 'cloaked, path taken for the host' },
+          { url: 'https:///search?q=x', title: 'no host' },
+          { url: 'http://', title: 'nothing' },
+          real,
+          { url: 'http://[2001:db8::1]/x', title: 'v6' },
+        ],
+      }).map((h) => h.url),
+    ).toEqual(['https://hqterm.sh/', 'http://[2001:db8::1]/x'])
+  })
+
   it('sends the provider the words and the key, nothing about the visitor', async () => {
     const { calls, fetchImpl } = upstream()
     await search('moshpit network', { serper: 'K' }, { fetch: fetchImpl })
