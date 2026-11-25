@@ -19,7 +19,7 @@ export type CrawlerReport = {
   queues: Record<string, Record<string, number>>
   activity: { lastHour: Record<string, number>; lastDay: Record<string, number>; hours: Array<{ at: string; counts: Record<string, number> }> }
   log: CrawlEvent[]
-  settings: { maxPages: number; maxDepth: number; concurrency: number; hostDelayMs: number; recrawlDays: number; renderers: number; discover: boolean; publishing: boolean; maxSites?: number }
+  settings: { maxPages: number; maxDepth: number; concurrency: number; hostDelayMs: number; recrawlDays: number; renderers: number; discover: boolean; publishing: boolean; maxSites?: number; maxPageBacklog?: number }
   generatedAt: string
 }
 
@@ -29,7 +29,10 @@ export type Job = {
   key: string
   label: string
   what: string
-  state: 'working' | 'idle' | 'stalled' | 'off'
+  /** waiting: held on purpose (site starts while the page queue is over its cap), not broken. */
+  state: 'working' | 'idle' | 'stalled' | 'waiting' | 'off'
+  /** Why it is waiting, in a sentence. */
+  note?: string
   backlog: number
   ratePerHour: number
   errorsLastHour: number
@@ -108,6 +111,15 @@ export function describe(report: CrawlerReport | null, now = new Date()): CrawlS
     job('submit', 'Submissions', 'addresses sent to pit.world/submit: read, sorted (site, page, feed, sitemap, OPML) and queued', depth(queues.submit), n(h, 'submitted_site', 'submitted_page', 'submitted_feed', 'submitted_sitemap', 'submitted_opml'), n(h, 'submitted_refused', 'submitted_unreadable')),
     job('publish', 'Publishing', 'records sent to nichedb.dev/c/sites, two hundred a call', n(stats, 'outbox'), n(h, 'published'), n(h, 'publish_errored'), report.settings.publishing),
   ]
+
+  // Site starts stop on purpose while the page queue is over its cap and resume under 90% of
+  // it (the gate in services/crawler/src/queues.ts). That read as "stalled", which it is not.
+  const cap = report.settings.maxPageBacklog ?? 0
+  const starts = jobs[0]!
+  if (cap && starts.state === 'stalled' && depth(queues.page) >= cap * 0.9) {
+    starts.state = 'waiting'
+    starts.note = `Held while more than ${fmt(cap)} page reads are queued; starts again under ${fmt(Math.round(cap * 0.9))}.`
+  }
 
   const waiting = jobs.reduce((sum, j) => sum + (j.state === 'off' ? 0 : j.backlog), 0)
   const stalled = jobs.filter((j) => j.state === 'stalled' && j.key !== 'publish')

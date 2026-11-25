@@ -74,6 +74,18 @@ describe('crawler status', () => {
     expect(describeCrawl(null).health).toBe('offline')
   })
 
+  it('site starts held for the page backlog read as waiting, not stalled', () => {
+    const settings = { ...report().settings, maxPageBacklog: 600 }
+    const queues = { site: { delayed: 40 }, page: { prioritized: 500, delayed: 300 } }
+    const held = describeCrawl(report({ settings, queues, stats: { sites: 900, sites_parked: 100 } }))
+    expect(held.health).toBe('healthy')
+    expect(held.jobs[0]).toMatchObject({ key: 'sites', state: 'waiting', backlog: 140, note: 'Held while more than 600 page reads are queued; starts again under 540.' })
+    // Under 90% of the cap the gate is open: nothing started in an hour is a real stall.
+    const open = describeCrawl(report({ settings, queues: { site: { delayed: 40 }, page: { prioritized: 500 } } }))
+    expect(open.jobs[0]).toMatchObject({ state: 'stalled' })
+    expect(open.jobs[0]!.note).toBeUndefined()
+  })
+
   it('/status draws it, escaped, refreshing; /api/status is the same as JSON', async () => {
     const app = createApp({ keys: {}, crawlStatus: async () => describeCrawl(report()) })
     const page = await (await app.request('/status')).text()

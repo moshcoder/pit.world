@@ -121,6 +121,45 @@ export const resolvesPublic: Resolver = async (host) => {
   }
 }
 
+/** Names that always resolve. When none of them does, it is the resolver that is broken. */
+const CANARIES = ['example.com', 'cloudflare.com', 'wikipedia.org']
+
+/**
+ * Is DNS itself answering? `resolvesPublic` says false for a name with no address AND for a
+ * resolver that is down, and the crawler parks a site with no address for 30 days: on
+ * 2026-11-16, after a reboot left the container without DNS, 5.5 million sites were parked
+ * in five hours, 91% of which resolved fine afterwards. Asked before anything is parked for
+ * DNS. The answer is kept for `ttlMs`, and one check serves every caller waiting on it.
+ */
+export function resolverCheck(
+  lookupImpl: (host: string) => Promise<unknown> = (host) => lookup(host),
+  options: { names?: string[]; ttlMs?: number; timeoutMs?: number } = {},
+): () => Promise<boolean> {
+  const { names = CANARIES, ttlMs = 5_000, timeoutMs = 5_000 } = options
+  let at = 0
+  let up = true
+  let pending: Promise<boolean> | null = null
+  return () => {
+    if (Date.now() - at < ttlMs) return Promise.resolve(up)
+    let timer: ReturnType<typeof setTimeout> | undefined
+    pending ??= Promise.race([
+      Promise.any(names.map((name) => lookupImpl(name))).then(
+        () => true,
+        () => false,
+      ),
+      // A resolver that is down often does not refuse, it just never answers.
+      new Promise<boolean>((resolve) => (timer = setTimeout(() => resolve(false), timeoutMs))),
+    ]).then((answer) => {
+      clearTimeout(timer)
+      up = answer
+      at = Date.now()
+      pending = null
+      return answer
+    })
+    return pending
+  }
+}
+
 /** Addresses that look like a product (or a product sitemap) on common shop software. */
 export const PRODUCTISH = /product|\/p\/|\/dp\/|\/item[s]?\/|\/buy\//i
 

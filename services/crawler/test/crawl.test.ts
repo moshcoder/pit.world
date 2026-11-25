@@ -137,6 +137,47 @@ describe('a site, start to finish', () => {
     expect((await crawler.crawlSite({ site: 'shop.example', source: 'opml' })).outcome).toBe('started')
   })
 
+  test('a resolver that is down delays the start, a name with no address parks the site', async () => {
+    const { config, frontier } = setup()
+    let dns = false
+    let known = false
+    const crawler = createCrawler({
+      config,
+      frontier,
+      fetch: fakeFetch,
+      resolver: async () => known,
+      dnsUp: async () => dns,
+      enqueue: { sites: async () => {}, pages: async () => {}, render: async () => {} },
+    })
+    // DNS itself is down: nothing is parked or claimed, the job comes back in a minute.
+    expect(await crawler.crawlSite({ site: 'shop.example', source: 'opml' })).toEqual({ admitted: 0, outcome: 'waiting for DNS', delayMs: 60_000 })
+    expect((await frontier.siteState('shop.example')).downMs).toBe(0)
+    expect(frontier.events[0]!.note).toContain('DNS is not answering')
+    // A page read that fails on the name waits the same way.
+    const failing = createCrawler({
+      config,
+      frontier,
+      fetch: (async () => {
+        throw Object.assign(new Error('getaddrinfo ENOTFOUND shop.example'), { code: 'ENOTFOUND' })
+      }) as unknown as typeof fetch,
+      resolver: async () => true,
+      dnsUp: async () => dns,
+      enqueue: { sites: async () => {}, pages: async () => {}, render: async () => {} },
+    })
+    // robots.txt already read, so the first lookup is the page's own.
+    await frontier.setRobots('shop.example', (await import('../src/robots.ts')).EMPTY)
+    expect(await failing.crawlPage({ url: 'https://shop.example/', site: 'shop.example', depth: 0 })).toEqual({ delayMs: 60_000, outcome: 'waiting for DNS' })
+    expect((await frontier.siteState('shop.example')).downMs).toBe(0)
+    // DNS back and the site answers: the same job starts it (the claim was not spent).
+    dns = true
+    known = true
+    expect((await crawler.crawlSite({ site: 'shop.example', source: 'opml' })).outcome).toBe('started')
+    // DNS up and the name has no address: parked for the 30 days, as before.
+    known = false
+    expect((await crawler.crawlSite({ site: 'gone.example', source: 'opml' })).outcome).toBe('not public')
+    expect((await frontier.siteState('gone.example')).downMs).toBeGreaterThan(29 * 86_400_000)
+  })
+
   test('the page cap is exact', async () => {
     const { crawler, queued } = setup({ CRAWL_MAX_PAGES: '2' })
     await crawler.crawlSite({ site: 'shop.example', source: 'cli' })
@@ -150,6 +191,24 @@ describe('a site, start to finish', () => {
     const second = await crawler.crawlPage({ url: 'https://shop.example/a', site: 'shop.example', depth: 1 })
     expect(second.outcome).toBe('waiting for the site')
     expect(second.delayMs).toBeGreaterThan(4000)
+  })
+})
+
+describe('is DNS itself answering', () => {
+  test('up when any canary resolves, down when none does or they hang; one check per ttl', async () => {
+    const { resolverCheck } = await import('../src/url.ts')
+    let calls = 0
+    const some = resolverCheck(async (host) => {
+      calls++
+      if (host !== 'b.example') throw new Error('EAI_AGAIN')
+    }, { names: ['a.example', 'b.example'], ttlMs: 60_000 })
+    expect(await Promise.all([some(), some()])).toEqual([true, true])
+    expect(await some()).toBe(true)
+    expect(calls).toBe(2)
+    const none = resolverCheck(async () => Promise.reject(new Error('EAI_AGAIN')), { names: ['a.example'], ttlMs: 0 })
+    expect(await none()).toBe(false)
+    const hung = resolverCheck(() => new Promise(() => {}), { names: ['a.example'], timeoutMs: 20 })
+    expect(await hung()).toBe(false)
   })
 })
 

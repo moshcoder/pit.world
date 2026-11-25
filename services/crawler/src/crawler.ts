@@ -16,7 +16,7 @@ import type { Rendered } from './obscura.ts'
 import { aiDisallowed, allows, EMPTY, parseRobots, parseTdmrep, pathOf, tdmReserved, type Robots } from './robots.ts'
 import { sitesFromOpml } from './seed.ts'
 import { feedLinks, guessKind, sniff, type SubmitKind } from './submit.ts'
-import { crawlable, normalizeUrl, productFirst, resolvesPublic, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
+import { crawlable, normalizeUrl, productFirst, resolvesPublic, resolverCheck, sameSite, siteFromInput, siteOf, type Resolver } from './url.ts'
 
 /** `first`: ahead of everything already waiting (seed --first). */
 export type SiteJob = { site: string; source: string; first?: boolean }
@@ -72,6 +72,8 @@ export type Deps = {
   sites?: SiteStore
   fetch?: typeof fetch
   resolver?: Resolver
+  /** Is DNS itself answering? Asked before a host is parked for DNS. Default: canary lookups, or yes with a custom resolver. */
+  dnsUp?: () => Promise<boolean>
   renderer?: { size: number; render(url: string): Promise<Rendered> } | null
   log?: (line: string) => void
   /** Page jobs queued now; a site start waits while it is over config.maxPageBacklog. */
@@ -109,6 +111,21 @@ export function createCrawler(deps: Deps) {
   const { config, frontier, enqueue } = deps
   const siteStore = deps.sites ?? new MemorySiteStore()
   const resolver = deps.resolver ?? resolvesPublic
+  const dnsUp = deps.dnsUp ?? (deps.resolver ? async () => true : resolverCheck())
+  /** What a job is told while DNS is down: come back in a minute, nothing is parked. */
+  const DNS_WAIT = { delayMs: 60_000, outcome: 'waiting for DNS' } as const
+  let dnsNoted = 0
+  /** True (and said on /status, once a minute) when a name failed because the resolver is down. */
+  async function dnsDown(): Promise<boolean> {
+    if (await dnsUp()) return false
+    await frontier.bump('dns_waits')
+    if (Date.now() - dnsNoted > 60_000) {
+      dnsNoted = Date.now()
+      log('DNS is not answering: jobs wait, no host is parked for it')
+      await frontier.log({ kind: 'fail', site: 'pitbot', note: 'DNS is not answering here: site starts and page reads wait, no host is parked for it' })
+    }
+    return true
+  }
   const log = deps.log ?? (() => {})
   const get = (url: string, site: string, accept?: string) =>
     politeGet(url, { userAgent: config.userAgent, resolver, site, ...(deps.fetch ? { fetch: deps.fetch } : {}), ...(accept ? { accept } : {}) })
@@ -146,12 +163,17 @@ export function createCrawler(deps: Deps) {
    * Park a host: nothing reads from it until `ms` from now (Redis, which every worker asks
    * before a fetch), and the site row carries the flag, so the recrawl skips it until then
    * and gives it exactly one recheck after (Postgres).
+   *
+   * False, and nothing parked, when the failure is DNS and the resolver itself is down:
+   * that is our outage, not the host's (see resolverCheck in url.ts).
    */
-  async function flagHost(site: string, kind: FailureKind, detail: string, ms = CRAWL_RECHECK_MS): Promise<void> {
+  async function flagHost(site: string, kind: FailureKind, detail: string, ms = CRAWL_RECHECK_MS): Promise<boolean> {
+    if (kind === 'dns' && (await dnsDown())) return false
     await frontier.markDown(site, ms)
     await siteStore.flag(site, `${kind}: ${detail}`, Date.now() + ms).catch((error) => log(`flag ${site}: ${errorText(error)}`))
     await frontier.bump('sites_flagged')
     await frontier.log({ kind: 'fail', site, note: `parked ${ms >= 86_400_000 ? `${Math.round(ms / 86_400_000)} d` : `${Math.round(ms / 60_000)} min`}: ${kind}, ${detail}`.slice(0, 200) })
+    return true
   }
 
   /**
@@ -159,17 +181,17 @@ export function createCrawler(deps: Deps) {
    * from one site inside the hour and the host is parked too: a dead host is not read page
    * by page for a thousand pages.
    */
-  async function flagPage(job: PageJob, kind: FailureKind, detail: string, retryAfter?: string): Promise<string> {
+  async function flagPage(job: PageJob, kind: FailureKind, detail: string, retryAfter?: string): Promise<PageOutcome> {
     if (HOST_KINDS.has(kind)) {
-      await flagHost(job.site, kind, `${detail} (${job.url})`, parkFor(kind, retryAfter))
-      return `host parked: ${kind}`
+      if (!(await flagHost(job.site, kind, `${detail} (${job.url})`, parkFor(kind, retryAfter)))) return DNS_WAIT
+      return { outcome: `host parked: ${kind}` }
     }
     await frontier.markPageDown(job.url, CRAWL_RECHECK_MS)
     await frontier.bump('pages_flagged')
     await frontier.log({ kind: 'fail', site: job.site, url: job.url, note: `parked 30 d: ${kind}, ${detail}`.slice(0, 200) })
     const n = await frontier.noteFailure(job.site, HOST_PAGE_FAILURE_WINDOW_MS)
     if (n === HOST_PAGE_FAILURES) await flagHost(job.site, kind, `${n} pages failed within the hour, last ${detail}`)
-    return `page parked: ${kind}`
+    return { outcome: `page parked: ${kind}` }
   }
 
   /** `state`: a siteState() the caller already has, saving the round trip. */
@@ -383,9 +405,12 @@ export function createCrawler(deps: Deps) {
     if (deps.pageBacklog && (await deps.pageBacklog()) > config.maxPageBacklog * 1.2) {
       return { admitted: 0, outcome: 'waiting for the page backlog', delayMs: 60_000 }
     }
+    // Before the claim: a start that has to wait for DNS must be able to come back for it.
+    const reachable = await resolver(site)
+    if (!reachable && (await dnsDown())) return { admitted: 0, ...DNS_WAIT }
     // Once per cycle per site, however many jobs for it are queued.
     if (!(await frontier.claimStart(site, config.recrawlDays * 86_400_000))) return { admitted: 0, outcome: 'already started this cycle' }
-    if (!(await resolver(site))) {
+    if (!reachable) {
       // No public address (often no address at all): parked and asked again in 30 days.
       await frontier.bump('sites_refused')
       await flagHost(site, 'dns', 'no public address')
@@ -491,7 +516,7 @@ export function createCrawler(deps: Deps) {
       // broken read the rule is about. Anything else (a bug, Redis) still throws and retries.
       const kind = failureKind(error)
       if (!kind) throw error
-      return { outcome: await flagPage(job, kind, errorText(error)) }
+      return await flagPage(job, kind, errorText(error))
     }
     if (r.offsite) {
       if (config.discover) await scheduleSites([r.offsite], 'redirect')
@@ -500,7 +525,7 @@ export function createCrawler(deps: Deps) {
     const failed = statusKind(r.status)
     if (failed) {
       await frontier.bump('pages_failed')
-      return { outcome: await flagPage(job, failed, `HTTP ${r.status}`, r.retryAfter) }
+      return await flagPage(job, failed, `HTTP ${r.status}`, r.retryAfter)
     }
     if (r.status >= 400) {
       await frontier.bump('pages_failed')
@@ -549,7 +574,7 @@ export function createCrawler(deps: Deps) {
       const kind = failureKind(error)
       if (!kind) throw error
       await frontier.bump('renders_failed')
-      return { outcome: await flagPage(job, kind, `render: ${errorText(error)}`) }
+      return await flagPage(job, kind, `render: ${errorText(error)}`)
     }
     const landed = normalizeUrl(rendered.url) ?? job.url
     if (!sameSite(landed, job.site)) return { outcome: `rendered onto ${siteOf(landed)}` }
