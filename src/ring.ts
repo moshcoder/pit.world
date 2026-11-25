@@ -64,6 +64,7 @@ export const RING: RingSite[] = [
   { name: 'mums.flower', about: "Flowers for moms: remember her birthday and Mother's Day, learn what flowers mean, send her a bouquet card. API, MCP, CLI.", moshpit: true, keywords: ["mother's day", 'mothers day', 'mothering sunday', 'flowers for mom', 'flower meanings', 'bouquet'] },
   { name: 'board.saas', about: 'Board as a Service: five AI advisors and a chair debate your decision brief and write the minutes. First meeting free. API, CLI, MCP, TUI.', moshpit: true, keywords: ['board of advisors', 'advisory board', 'board meeting', 'business decision', 'ai advisors', 'cfo advice'] },
   { name: 'influencer.marketing.pit.world', about: 'autoinfluencer: your social media manager in your own voice. Native posts for every network, repurposing, value-adding replies, a posting calendar. Sign in with CoinPay; MCP, CLI and desktop too.', moshpit: false, keywords: ['social media manager', 'ai influencer', 'social media posts', 'content calendar', 'ghostwriter', 'linkedin posts', 'bluesky'] },
+  { name: 'security.agent', keywords: ['ai agent security', 'ip reputation', 'malware hash', 'threatcrush', 'mcp security'], about: 'A security team for your AI agent. Sign in with ThreatCrush; check IPs, domains and files, read findings, and give your agent your own desktop.', moshpit: true },
 ]
 
 let source: (() => ListingMember[]) | null = null
