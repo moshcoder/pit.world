@@ -20,10 +20,22 @@ services:
   redis:
     image: redis:8-alpine
     # 4 GB: remote page workers (deploy/crawler-remote) raise the page backlog toward 600k jobs.
-    command: ['redis-server', '--appendonly', 'yes', '--maxmemory', '4gb', '--maxmemory-policy', 'noeviction']
+    # 2026-11-25: this Redis was OOM-killed mid-save 316 times and filled dev2's disk. Each
+    # kill left the half-written temp-<pid>.rdb / temp-rewriteaof-<pid>.aof behind (71
+    # files, 66 GB); Redis never reuses or removes them. So:
+    #   - sweep those orphans at start, when no save can be running;
+    #   - no RDB snapshots (--save ""): the AOF already persists the queue, and every
+    #     snapshot is one more fork that can be killed;
+    #   - 8 GB limit: a rewrite fork under heavy writes copies pages on top of the 4 GB.
+    command:
+      - sh
+      - -c
+      - >-
+        rm -f /data/temp-*.rdb /data/temp-rewriteaof-*.aof;
+        exec redis-server --appendonly yes --save "" --maxmemory 4gb --maxmemory-policy noeviction
     volumes: ['redis:/data']
     ports: ['127.0.0.1:6396:6379']
-    mem_limit: 5g
+    mem_limit: 8g
     # dev2 is shared and was pegged on 2026-11-08 (115 runnable, 0% idle): with default
     # weight the crawler starved, failed its 5 s health check and was restarted in a loop.
     cpu_shares: 4096
