@@ -95,14 +95,30 @@ function host(url: string): string {
   }
 }
 
-/** Only http(s) links reach a page: a `javascript:` URL from a provider must never become an href. */
+/**
+ * A link somebody can follow: http(s) and a real host name. A provider that scrapes an engine
+ * can hand back that engine's own relative redirect with the host lost: Brave's cloaked
+ * `/go/v1/<token>` links arrive from SearXNG as `http:///go/v1/...` (or `http://go/v1/...`),
+ * which pass a scheme check and open nothing (searxng/searxng#6967).
+ */
+function followable(url: string): boolean {
+  if (!/^https?:\/\/[^/?#]/i.test(url)) return false
+  try {
+    const name = new URL(url).hostname
+    return name.includes('.') || name.startsWith('[')
+  } catch {
+    return false
+  }
+}
+
+/** Only followable http(s) links reach a page: a `javascript:` URL from a provider must never become an href. */
 export function cleanHits(raw: Array<{ url?: unknown; title?: unknown; description?: unknown }>): Hit[] {
   const seen = new Set<string>()
   const out: Hit[] = []
   for (const item of raw) {
     if (typeof item.url !== 'string') continue
     const url = item.url.trim()
-    if (!/^https?:\/\//i.test(url) || seen.has(url)) continue
+    if (!followable(url) || seen.has(url)) continue
     seen.add(url)
     out.push({
       url,
