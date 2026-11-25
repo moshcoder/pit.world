@@ -48,7 +48,6 @@ export const RING: RingSite[] = [
   { name: 'seo.rank', keywords: ['seo audit', 'seo checker', 'on-page seo'], about: 'Free, open-source on-page SEO audit. API, CLI and MCP.', moshpit: true },
   { name: 'family.ancestry', keywords: ['family tree', 'genealogy', 'gedcom', 'ancestry'], about: 'Your family tree, on your own name. Import GEDCOM, share by link.', moshpit: true },
   { name: 'pay.agent', keywords: ['crypto payments', 'payment link', 'get paid', 'venmo'], about: 'Get paid in crypto with one link. Sign in with CoinPay; people and agents pay you by name.', moshpit: true },
-  { name: 'security.agent', keywords: ['ai agent security', 'ip reputation', 'malware hash', 'threatcrush', 'mcp security'], about: 'A security team for your AI agent. Sign in with ThreatCrush; check IPs, domains and files, read findings, and give your agent your own desktop.', moshpit: true },
   { name: 'built.indie', keywords: ['launch', 'indie hackers', 'product hunt', 'upvote'], about: 'Launch your indie product with one URL. We fetch the rest; people upvote; you get a badge.', moshpit: true, feed: 'https://built.indie.pit.world/feed.xml' },
   { name: 'deadman.switch', keywords: ["dead man's switch", 'dead mans switch', 'crypto inheritance'], about: "A dead man's switch for your crypto. Seal where the keys are; if you stop checking in, your people get it.", moshpit: true },
   { name: 'watch.wallet', keywords: ['wallet alerts', 'wallet tracker', 'whale alert', 'price alert'], about: 'Know the second your wallet moves: any address on Bitcoin, Ethereum, Base, Polygon or Solana, or a price.', moshpit: true },
@@ -65,6 +64,7 @@ export const RING: RingSite[] = [
   { name: 'mums.flower', about: "Flowers for moms: remember her birthday and Mother's Day, learn what flowers mean, send her a bouquet card. API, MCP, CLI.", moshpit: true, keywords: ["mother's day", 'mothers day', 'mothering sunday', 'flowers for mom', 'flower meanings', 'bouquet'] },
   { name: 'board.saas', about: 'Board as a Service: five AI advisors and a chair debate your decision brief and write the minutes. First meeting free. API, CLI, MCP, TUI.', moshpit: true, keywords: ['board of advisors', 'advisory board', 'board meeting', 'business decision', 'ai advisors', 'cfo advice'] },
   { name: 'influencer.marketing.pit.world', about: 'autoinfluencer: your social media manager in your own voice. Native posts for every network, repurposing, value-adding replies, a posting calendar. Sign in with CoinPay; MCP, CLI and desktop too.', moshpit: false, keywords: ['social media manager', 'ai influencer', 'social media posts', 'content calendar', 'ghostwriter', 'linkedin posts', 'bluesky'] },
+  { name: 'security.agent', keywords: ['ai agent security', 'ip reputation', 'malware hash', 'threatcrush', 'mcp security'], about: 'A security team for your AI agent. Sign in with ThreatCrush; check IPs, domains and files, read findings, and give your agent your own desktop.', moshpit: true },
 ]
 
 let source: (() => ListingMember[]) | null = null
