@@ -23,6 +23,7 @@
  *    see trim().
  */
 import { SQL } from 'bun'
+import { statfsSync } from 'node:fs'
 import { pgArray } from './site-store.ts'
 import {
   IndexStore,
@@ -182,6 +183,14 @@ export class PgIndexStore implements SearchIndex {
   private searchesInFlight = 0
   private ready: Promise<void> | null = null
   readonly maxBytes: number
+  /**
+   * Free bytes the disk under the database must keep. 0: no floor. Not a budget: the index
+   * keeps every page until the disk itself runs short, then holds its files where they are
+   * (new pages reuse the room the oldest leave). Postgres PANICs on a full disk and takes the
+   * box with it (dev2, 2026-11-08), so an unbudgeted index on a shared disk wants this.
+   */
+  readonly minFreeBytes: number
+  private readonly freeBytes: () => number
   /** Freed space is reused, never returned: trim() bounds the live pages, see there. */
   readonly reclaims = true
   lastAddAt: string | null = null
@@ -191,8 +200,20 @@ export class PgIndexStore implements SearchIndex {
   private statsCache: { at: number; value: Record<string, unknown> } | null = null
   private refreshing: Promise<unknown> | null = null
 
-  constructor(url: string, maxBytes = 0, options: { max?: number; corpusLagMs?: number; searchMax?: number; searchDeadlineMs?: number } = {}) {
+  constructor(
+    url: string,
+    maxBytes = 0,
+    options: { max?: number; corpusLagMs?: number; searchMax?: number; searchDeadlineMs?: number; minFreeBytes?: number; diskPath?: string; freeBytes?: () => number } = {},
+  ) {
     this.maxBytes = maxBytes > 0 ? maxBytes : 0
+    this.minFreeBytes = Math.max(0, options.minFreeBytes ?? 0)
+    const diskPath = options.diskPath ?? '/'
+    this.freeBytes =
+      options.freeBytes ??
+      (() => {
+        const st = statfsSync(diskPath)
+        return Number(st.bavail) * Number(st.bsize)
+      })
     this.corpusLagMs = Math.max(0, options.corpusLagMs ?? 60_000)
     // prepare: false, so every query is planned with its own values: a generic plan for
     // `fts @@ $1` cannot tell a rare word from a common one.
@@ -499,7 +520,15 @@ export class PgIndexStore implements SearchIndex {
     const idle = options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)))
     const bytesBefore = await this.sizeBytes(0)
     const live = await this.count(0)
-    if (!this.maxBytes) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: true }
+    // The budget for this sweep: the byte budget if one is set, and when the disk is under its
+    // free floor, the files as they stand less the shortfall (so they stop growing and give the
+    // missing room back to new pages). Neither: nothing to keep inside, nothing goes.
+    let budget = this.maxBytes || Infinity
+    if (this.minFreeBytes) {
+      const free = this.freeBytes()
+      if (free < this.minFreeBytes) budget = Math.min(budget, Math.max(0, bytesBefore - (this.minFreeBytes - free)))
+    }
+    if (budget === Infinity) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: true }
     const lastSize = await this.meta('trim_size')
     let perPage = await this.meta('trim_bytes_per_page')
     // Re-measure whenever the files changed size, either way. Grown: no free space was left.
@@ -514,8 +543,8 @@ export class PgIndexStore implements SearchIndex {
       await this.setMeta('trim_bytes_per_page', perPage)
       await this.setMeta('trim_size', bytesBefore)
     }
-    if (!perPage || live * perPage <= this.maxBytes) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: true, liveBytes: live * (perPage ?? 0) }
-    const target = Math.max(keepMin, Math.floor(this.maxBytes / perPage))
+    if (!perPage || live * perPage <= budget) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: true, liveBytes: live * (perPage ?? 0) }
+    const target = Math.max(keepMin, Math.floor(budget / perPage))
     let deleted = 0
     for (let round = 0; round < maxBatches; round++) {
       const gone = await this.write(WRITE_TIMEOUT_MS, async (tx) => {
@@ -546,7 +575,7 @@ export class PgIndexStore implements SearchIndex {
     this.statsCache = null
     const left = await this.count(0)
     const bytesAfter = await this.sizeBytes(0)
-    return { deleted, bytesBefore, bytesAfter, done: left * perPage <= this.maxBytes, reclaims: true, liveBytes: left * perPage }
+    return { deleted, bytesBefore, bytesAfter, done: left * perPage <= budget, reclaims: true, liveBytes: left * perPage }
   }
 
   // ---- the training corpus (/api/corpus) ---------------------------------------------------
@@ -876,6 +905,8 @@ export class PgIndexStore implements SearchIndex {
 }
 
 /** CRAWL_INDEX_DATABASE_URL set: Postgres, many writers. Unset: the SQLite file at indexPath. */
-export function openIndex(config: { indexPath: string; indexMaxBytes: number; indexDatabaseUrl: string }): SearchIndex {
-  return config.indexDatabaseUrl ? new PgIndexStore(config.indexDatabaseUrl, config.indexMaxBytes) : new IndexStore(config.indexPath, config.indexMaxBytes)
+export function openIndex(config: { indexPath: string; indexMaxBytes: number; indexDatabaseUrl: string; indexMinFreeBytes?: number; indexDiskPath?: string }): SearchIndex {
+  return config.indexDatabaseUrl
+    ? new PgIndexStore(config.indexDatabaseUrl, config.indexMaxBytes, { minFreeBytes: config.indexMinFreeBytes ?? 0, diskPath: config.indexDiskPath ?? '/' })
+    : new IndexStore(config.indexPath, config.indexMaxBytes)
 }

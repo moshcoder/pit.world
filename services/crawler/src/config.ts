@@ -103,6 +103,13 @@ export type Config = {
    * it; 0 turns the budget off, which only a box with its own disk for this should do.
    */
   indexMaxBytes: number
+  /**
+   * Postgres index only: free bytes the disk under the database must keep (CRAWL_INDEX_MIN_FREE_BYTES,
+   * 0 = no floor), measured at CRAWL_INDEX_DISK_PATH (default /, the database must be on the
+   * same host). With CRAWL_INDEX_MAX_BYTES=0 the index keeps every page until the disk runs short.
+   */
+  indexMinFreeBytes: number
+  indexDiskPath: string
   /** How often the publish role checks the mirror against its budget. */
   indexTrimMs: number
   userAgent: string
@@ -159,6 +166,8 @@ export function configFromEnv(env: Record<string, string | undefined> = process.
     indexPath: env.CRAWL_INDEX_PATH ?? './data/index.db',
     indexDatabaseUrl: env.CRAWL_INDEX_DATABASE_URL ?? '',
     indexMaxBytes: num(env.CRAWL_INDEX_MAX_BYTES, 60 * 1024 ** 3, 0),
+    indexMinFreeBytes: num(env.CRAWL_INDEX_MIN_FREE_BYTES, 0, 0),
+    indexDiskPath: env.CRAWL_INDEX_DISK_PATH ?? '/',
     indexTrimMs: num(env.CRAWL_INDEX_TRIM_MS, 300_000, 1_000),
     userAgent: env.CRAWL_USER_AGENT ?? USER_AGENT,
   }

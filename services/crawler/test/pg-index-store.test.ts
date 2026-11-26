@@ -292,6 +292,38 @@ describe.skipIf(!PG)('the search mirror on a real Postgres', () => {
     expect(await store.count(0)).toBe(500)
   }, 60_000)
 
+  test('no budget, a disk floor: every page stays until the disk runs short, then the oldest make room', async () => {
+    const url = await fresh()
+    const fill = await open(0, {}, url)
+    const fat = 'lorem ipsum dolor sit amet '.repeat(200)
+    await fill.add(
+      Array.from({ length: 400 }, (_, i) =>
+        entry(`https://c.example/${i}`, `Page ${i}`, `${fat}${i === 0 ? ' oldestpage' : ''}${i === 399 ? ' newestpage' : ''}`, {
+          fetched_at: new Date(Date.UTC(2026, 10, 1) + i * 60_000).toISOString(),
+        }),
+      ),
+    )
+    const size = await fill.sizeBytes(0)
+    const floor = 10 * 1024 ** 3
+    let free = floor * 4
+    const store = new PgIndexStore(url, 0, { corpusLagMs: 0, max: 3, minFreeBytes: floor, freeBytes: () => free })
+    stores.push(store)
+    // Plenty of disk: no budget means nothing goes.
+    expect(await store.trim({ batch: 50, keepMin: 10 })).toMatchObject({ deleted: 0, done: true })
+    expect(await store.count(0)).toBe(400)
+    // Short by a quarter of the files: about a quarter of the pages go, the oldest first.
+    free = floor - Math.floor(size / 4)
+    const result = await store.trim({ batch: 50, keepMin: 10 })
+    expect(result.deleted).toBeGreaterThanOrEqual(80)
+    expect(result.deleted).toBeLessThanOrEqual(120)
+    expect(await store.search('oldestpage')).toHaveLength(0)
+    expect(await store.search('newestpage')).toHaveLength(1)
+    // No floor and no budget: trim never deletes, however full the disk.
+    const bare = new PgIndexStore(url, 0, { corpusLagMs: 0, max: 3, freeBytes: () => 0 })
+    stores.push(bare)
+    expect((await bare.trim()).deleted).toBe(0)
+  }, 60_000)
+
   test('/stats figures are cached and refreshed behind the cache', async () => {
     const store = await open(1024 ** 3)
     await store.add([entry('https://a.example/', 'First', 'words')])

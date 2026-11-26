@@ -137,6 +137,8 @@ curl 127.0.0.1:8807/api/v1/corpus/stats
 | `NICHEDB_URL` / `NICHEDB_API_KEY` | nichedb.dev / none | an admin key; without one records wait in the outbox |
 | `CRAWL_HEALTH_PORT` | 8797 | `/healthz` with queue depths and counters |
 | `CRAWL_INDEX_MAX_BYTES` | 64424509440 (60 GB) | the mirror's byte budget; over it the oldest pages go. 0 turns it off, which only a box with its own disk for the index should do |
+| `CRAWL_INDEX_MIN_FREE_BYTES` | 0 (off) | Postgres index only: free bytes the disk under the database must keep. With `CRAWL_INDEX_MAX_BYTES=0` the index keeps every page until the disk runs short, then the oldest pages make room |
+| `CRAWL_INDEX_DISK_PATH` | `/` | where that free space is measured (the database must be on the same host) |
 | `CRAWL_INDEX_TRIM_MS` | 300000 | how often the publish role checks the budget |
 | `CRAWL_INDEX_DATABASE_URL` | (none) | Postgres for the search mirror instead of the SQLite file at `CRAWL_INDEX_PATH`; tables in the role's default schema. Many publish processes may write it |
 
