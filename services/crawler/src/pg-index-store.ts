@@ -440,6 +440,12 @@ export class PgIndexStore implements SearchIndex {
     return value
   }
 
+  /** Deleted page rows vacuum has not freed yet: the statistics collector's estimate, no scan. */
+  private async deadPages(): Promise<number> {
+    const out = (await this.sql`select coalesce(sum(n_dead_tup), 0)::bigint as n from pg_stat_user_tables where relid = 'pages'::regclass`) as { n: string | number }[]
+    return Math.max(0, Number(out[0]?.n ?? 0))
+  }
+
   /** Pages kept, from the counter add() and trim() keep: cached like sizeBytes. */
   async count(maxAgeMs = 2_000): Promise<number> {
     const now = Date.now()
@@ -496,8 +502,15 @@ export class PgIndexStore implements SearchIndex {
     if (!this.maxBytes) return { deleted: 0, bytesBefore, bytesAfter: bytesBefore, done: true, reclaims: true }
     const lastSize = await this.meta('trim_size')
     let perPage = await this.meta('trim_bytes_per_page')
-    if (live > 0 && (perPage === null || lastSize === null || bytesBefore > lastSize)) {
-      perPage = Math.max(1, Math.ceil(bytesBefore / live))
+    // Re-measure whenever the files changed size, either way. Grown: no free space was left.
+    // Shrunk: a VACUUM FULL / pg_repack rewrote them with none. Measuring only on growth froze a
+    // ratio taken at a 141.6 GB high-water mark after a rewrite cut the files to 76 GB, and the
+    // index sat at 2.2M pages (2026-11-26). Rows deleted but not yet vacuumed still fill the
+    // files, so they count too: dividing by the live pages alone inflated the ratio after every
+    // trim, each growth re-measure lowered the target, and the index ratcheted 7.7M -> 2.2M.
+    if (live > 0 && (perPage === null || lastSize === null || bytesBefore !== lastSize)) {
+      const dead = await this.deadPages()
+      perPage = Math.max(1, Math.ceil(bytesBefore / (live + dead)))
       await this.setMeta('trim_bytes_per_page', perPage)
       await this.setMeta('trim_size', bytesBefore)
     }
