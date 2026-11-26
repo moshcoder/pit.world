@@ -142,7 +142,7 @@ async function worker() {
   // The mirror inside its byte budget. The publish role is the only writer, so it is the
   // only one that may delete; a page dropped here is still on nichedb, and comes back on
   // its next recrawl.
-  const trimmer = config.roles.includes('publish') && config.indexMaxBytes ? startIndexTrim(runtime, log, config) : null
+  const trimmer = config.roles.includes('publish') && (config.indexMaxBytes || (config.indexDatabaseUrl && config.indexMinFreeBytes)) ? startIndexTrim(runtime, log, config) : null
 
   const stop = async () => {
     log('stopping')
@@ -168,7 +168,7 @@ function startIndexTrim(runtime: Runtime, log: (line: string) => void, config: C
     running = true
     try {
       const result = await runtime.index.trim()
-      if (!result.reclaims && result.bytesBefore > config.indexMaxBytes && !warned) {
+      if (!result.reclaims && config.indexMaxBytes && result.bytesBefore > config.indexMaxBytes && !warned) {
         warned = true
         log(
           `index trim: ${gb(result.bytesBefore)} is over the ${gb(config.indexMaxBytes)} budget, but this index was made with auto_vacuum = NONE, ` +
@@ -177,7 +177,7 @@ function startIndexTrim(runtime: Runtime, log: (line: string) => void, config: C
       }
       // Postgres keeps its files and reuses the space, so it reports what the live pages take.
       const after = result.liveBytes !== undefined ? `${gb(result.liveBytes)} live in ${gb(result.bytesAfter)} of files` : gb(result.bytesAfter)
-      if (result.deleted) log(`index trim: dropped ${result.deleted} pages, ${gb(result.bytesBefore)} -> ${after} (budget ${gb(config.indexMaxBytes)})${result.done ? '' : ', more next sweep'}`)
+      if (result.deleted) log(`index trim: dropped ${result.deleted} pages, ${gb(result.bytesBefore)} -> ${after} (${config.indexMaxBytes ? `budget ${gb(config.indexMaxBytes)}` : `disk under its ${gb(config.indexMinFreeBytes)} free floor`})${result.done ? '' : ', more next sweep'}`)
     } catch (error) {
       log(`index trim: ${(error as Error).message}`)
     } finally {
