@@ -274,6 +274,24 @@ describe.skipIf(!PG)('the search mirror on a real Postgres', () => {
     expect(await tiny.search('zebraomega')).toHaveLength(1)
   }, 60_000)
 
+  test('the byte budget re-measures a stale ratio: a rewrite that shrank the files does not freeze the cap (2026-11-26)', async () => {
+    const url = await fresh()
+    const fill = await open(0, {}, url)
+    const fat = 'lorem ipsum dolor sit amet '.repeat(200)
+    await fill.add(Array.from({ length: 500 }, (_, i) => entry(`https://b.example/${i}`, `Page ${i}`, fat)))
+    const size = await fill.sizeBytes(0)
+    // Production's state: a ratio measured at an old, higher high-water mark, ten times what a
+    // page takes now. Measuring only on growth kept it forever and the index sat at a tenth.
+    const role = new SQL({ url, max: 1 })
+    await role`insert into index_meta (k, n) values ('trim_bytes_per_page', ${Math.ceil((size * 10) / 500)}) on conflict (k) do update set n = excluded.n`
+    await role`insert into index_meta (k, n) values ('trim_size', ${size * 2}) on conflict (k) do update set n = excluded.n`
+    await role.close()
+    const store = await open(size * 2, {}, url)
+    const result = await store.trim({ batch: 100, keepMin: 10 })
+    expect(result.deleted).toBe(0)
+    expect(await store.count(0)).toBe(500)
+  }, 60_000)
+
   test('/stats figures are cached and refreshed behind the cache', async () => {
     const store = await open(1024 ** 3)
     await store.add([entry('https://a.example/', 'First', 'words')])
