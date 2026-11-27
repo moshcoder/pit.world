@@ -8,6 +8,7 @@
 import { createHash } from 'node:crypto'
 import { lookup } from 'node:dns/promises'
 import { isIP } from 'node:net'
+import { listedAddress, listedDomain, threatFeeds } from './reputation.ts'
 
 /** Query parameters that only say where a click came from. */
 const TRACKING = /^(utm_[a-z]+|fbclid|gclid|dclid|msclkid|mc_[a-z]+|igshid|yclid|_hs[a-z]+|ref_src|spm)$/i
@@ -97,14 +98,14 @@ export function isMiningHost(host: string): boolean {
   return MINING_POOL_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`))
 }
 
-/** Names that are private by their spelling, before any DNS (or a mining pool: never fetched either). */
+/** Names that are private by their spelling, before any DNS (or a mining pool, or on ThreatCrush's list: never fetched either). */
 export function isPublicHostname(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|\]$/g, '')
   if (!h || !h.includes('.') && !isIP(h)) return false
   if (/(^|\.)(localhost|local|internal|intranet|lan|home|corp|localdomain|test|invalid|onion)$/.test(h)) return false
   if (isMiningHost(h)) return false
-  if (isIP(h)) return isPublicAddress(h)
-  return true
+  if (isIP(h)) return isPublicAddress(h) && !listedAddress(h, threatFeeds())
+  return !listedDomain(h, threatFeeds())
 }
 
 export function isPublicAddress(ip: string): boolean {
@@ -131,13 +132,17 @@ export function isPublicAddress(ip: string): boolean {
 
 export type Resolver = (host: string) => Promise<boolean>
 
-/** Every address the name resolves to must be public; a name that resolves to none is not fetched. */
+/**
+ * Every address the name resolves to must be public and not a known C2 or malware host on
+ * ThreatCrush's list; a name that resolves to none is not fetched.
+ */
 export const resolvesPublic: Resolver = async (host) => {
   if (!isPublicHostname(host)) return false
-  if (isIP(host)) return isPublicAddress(host)
+  if (isIP(host)) return true
   try {
     const addresses = await lookup(host, { all: true })
-    return addresses.length > 0 && addresses.every((a) => isPublicAddress(a.address))
+    const feeds = threatFeeds()
+    return addresses.length > 0 && addresses.every((a) => isPublicAddress(a.address) && !listedAddress(a.address, feeds))
   } catch {
     return false
   }

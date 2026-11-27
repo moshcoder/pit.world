@@ -74,8 +74,10 @@ services:
       obscura-2: { condition: service_started }
     ports: ['127.0.0.1:8807:8797']
     networks: [default, frontier]
-    # The local search mirror pit.world reads (/api/v1/search on 8807).
-    volumes: ['index:/data']
+    # The local search mirror pit.world reads (/api/v1/search on 8807), and threatcrushd's
+    # known-bad host list (src/reputation.ts), read-only. The directory, not the file: the
+    # daemon replaces the file by rename, which a single-file bind mount would never see.
+    volumes: ['index:/data', '/var/lib/threatcrush:/var/lib/threatcrush:ro']
     mem_limit: 1536m
     cpu_shares: 4096
     restart: unless-stopped
@@ -91,6 +93,7 @@ services:
       CRAWL_ROLES: page
       CRAWL_HEALTH_HOST: 0.0.0.0
     networks: [default, frontier]
+    volumes: ['/var/lib/threatcrush:/var/lib/threatcrush:ro']
     depends_on:
       redis: { condition: service_healthy }
       crawler: { condition: service_started }
