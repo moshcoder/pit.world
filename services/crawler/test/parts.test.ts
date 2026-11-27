@@ -3,7 +3,7 @@ import { extract, keywordsOf, needsRender } from '../src/extract.ts'
 import { readSitemapXml } from '../src/fetcher.ts'
 import { documentFrom } from '../src/obscura.ts'
 import { allows, parseRobots } from '../src/robots.ts'
-import { crawlable, isPublicAddress, isPublicHostname, normalizeUrl, siteFromInput, siteOf, urlId } from '../src/url.ts'
+import { crawlable, isMiningHost, isPublicAddress, isPublicHostname, normalizeUrl, siteFromInput, siteOf, urlId } from '../src/url.ts'
 
 describe('addresses', () => {
   test('one page, however it is linked', () => {
@@ -23,6 +23,15 @@ describe('addresses', () => {
     expect(isPublicAddress('::ffff:127.0.0.1')).toBe(false)
     expect(isPublicAddress('23.95.228.174')).toBe(true)
     expect(siteFromInput('http://localhost:8787/')).toBeNull()
+  })
+
+  test('never a mining pool (a hosting provider reads that as a miner)', () => {
+    for (const h of ['sg-stratum.coinminerz.com', 'coinminerz.com', 'stratum.example.net', 'xmr-eu1.nanopool.org', 'gulf.moneroocean.stream'])
+      expect(isMiningHost(h)).toBe(true)
+    expect(isPublicHostname('sg-stratum.coinminerz.com')).toBe(false)
+    expect(siteFromInput('https://sg-stratum.coinminerz.com/')).toBeNull()
+    for (const h of ['pit.world', 'carpool.com', 'poolsupplies.com', 'notnanopool.org'])
+      expect(isMiningHost(h)).toBe(false)
   })
 
   test('media, documents and traps are not pages', () => {
