@@ -76,11 +76,33 @@ export function urlId(url: string): string {
   return createHash('sha1').update(url).digest('hex').slice(0, 20)
 }
 
-/** Names that are private by their spelling, before any DNS. */
+/**
+ * Crypto-mining pools. A crawler that opens :443 to a stratum host looks exactly like a miner
+ * to the hosting provider: on 2026-11-27 netcup opened an abuse case against the crawl box for
+ * "outbound sg-stratum.coinminerz.com:443", a host the crawler had found in a link. They hold
+ * no pages worth indexing, so they are never fetched.
+ */
+const MINING_POOL_DOMAINS = [
+  'coinminerz.com', 'nanopool.org', '2miners.com', 'f2pool.com', 'supportxmr.com', 'moneroocean.stream',
+  'hashvault.pro', 'herominers.com', 'unmineable.com', 'nicehash.com', 'minexmr.com', 'c3pool.com',
+  'xmrpool.eu', 'ethermine.org', 'antpool.com', 'poolin.com', 'viabtc.com', 'zpool.ca', 'zergpool.com',
+  'mining-dutch.nl', 'woolypooly.com', 'k1pool.com', 'flexpool.io', 'luckpool.net', 'rplant.xyz',
+  'kryptex.network', 'p2pool.io', 'minergate.com', 'xmrfast.com', 'gntl.uk', 'dxpool.com',
+]
+
+/** Whether a host name is a mining pool: a known pool domain, or any label naming a stratum endpoint. */
+export function isMiningHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/\.$/, '')
+  if (h.split('.').some((label) => label.includes('stratum'))) return true
+  return MINING_POOL_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`))
+}
+
+/** Names that are private by their spelling, before any DNS (or a mining pool: never fetched either). */
 export function isPublicHostname(host: string): boolean {
   const h = host.toLowerCase().replace(/^\[|\]$/g, '')
   if (!h || !h.includes('.') && !isIP(h)) return false
   if (/(^|\.)(localhost|local|internal|intranet|lan|home|corp|localdomain|test|invalid|onion)$/.test(h)) return false
+  if (isMiningHost(h)) return false
   if (isIP(h)) return isPublicAddress(h)
   return true
 }
