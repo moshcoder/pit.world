@@ -13,10 +13,20 @@ import { CATEGORIES, PRICES } from './pros.js'
 /** The open product graph pit.world's Shopping tab reads first (nichedb.dev docs/products.md). */
 const PRODUCT_GRAPH = 'https://nichedb.dev/api/v1/products'
 
-export function createMcpServer(client = new PitClient()): McpServer {
+/**
+ * Tools the remote endpoint (https://pit.world/mcp, anyone, no sign-in) never
+ * offers: they write. The promo tools are never registered there either.
+ */
+export const PUBLIC_MCP_DENY: ReadonlySet<string> = new Set(['submit_urls', 'edit_listing'])
+
+export function createMcpServer(client = new PitClient(), opts: { public?: boolean } = {}): McpServer {
   // Typed loosely: the SDK's generic tool() signature recurses past TypeScript's
   // instantiation depth with zod shapes. The shapes are still validated at runtime.
-  const server: any = new McpServer({ name: 'pit.world', version: '0.5.0' })
+  const server: any = new McpServer({ name: 'pit.world', version: '0.6.0' })
+  if (opts.public) {
+    const register = server.tool.bind(server)
+    server.tool = (name: string, ...rest: unknown[]) => (PUBLIC_MCP_DENY.has(name) ? undefined : register(name, ...rest))
+  }
 
   server.tool(
     'search',
@@ -183,7 +193,7 @@ export function createMcpServer(client = new PitClient()): McpServer {
 
   // Promotion campaigns, for operators: the same API (and so the same timing rules, budgets and
   // recipient checks) as the CLI and the dashboard. Only offered when PIT_ADMIN_TOKEN is in the environment.
-  if (process.env.PIT_ADMIN_TOKEN) registerPromoTools(server, client)
+  if (process.env.PIT_ADMIN_TOKEN && !opts.public) registerPromoTools(server, client)
   return server
 }
 

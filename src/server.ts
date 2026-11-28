@@ -729,6 +729,30 @@ export function createApp(deps: Deps) {
     c.header('cache-control', 'no-store')
     return c.redirect(siteHref(site, c.req.query('direct') === '1'), 302)
   })
+  // Remote MCP (Streamable HTTP, stateless, no sign-in): the read-only `pit mcp` tools
+  // (search, summarize, corpus, listings, Moshpit lookups) for chat apps such as
+  // c0mpute.com/chat, which turns it on by default. Writes and promo tools are not offered.
+  app.post('/mcp', async (c) => {
+    if (limited(c)) return c.json({ jsonrpc: '2.0', error: { code: -32000, message: 'rate limited, try again in a minute' }, id: null }, 429)
+    const [{ createMcpServer }, { WebStandardStreamableHTTPServerTransport }] = await Promise.all([
+      import('./mcp.js'),
+      import('@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'),
+    ])
+    const server = createMcpServer(undefined, { public: true })
+    const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true })
+    await server.connect(transport)
+    try {
+      const res = await transport.handleRequest(c.req.raw)
+      res.headers.set('access-control-allow-origin', '*')
+      return res
+    } finally {
+      void transport.close().catch(() => {})
+      void server.close().catch(() => {})
+    }
+  })
+  app.on(['GET', 'DELETE'], '/mcp', (c) =>
+    c.json({ jsonrpc: '2.0', error: { code: -32000, message: 'pit.world MCP is stateless: POST JSON-RPC to https://pit.world/mcp' }, id: null }, 405, { allow: 'POST' }),
+  )
   app.get('/offline', (c) => c.html(offlinePage()))
   app.get('/health', (c) => c.json({ ok: true, providers: Object.keys(deps.keys).filter((k) => deps.keys[k as keyof Keys]) }))
   // pwamart.com store listing: ownership proof for https://pit.world
@@ -786,6 +810,7 @@ export function createApp(deps: Deps) {
 - [Training opt-outs](https://pit.world/api#corpus-policy): pages with noai (X-Robots-Tag or meta robots), TDMRep reservations, or robots.txt rules against AI-training crawlers are never in the corpus.
 - [pitbot](https://pit.world/bot): the crawler, and how to keep it out.
 - MCP: \`claude mcp add pit -- pit mcp\` (tools: search, corpus, summarize, submit_urls, moshpit_resolve, ...)
+- Remote MCP (no sign-in, read-only tools): \`https://pit.world/mcp\` (Streamable HTTP), e.g. \`claude mcp add --transport http pit https://pit.world/mcp\`
 `,
       200,
       { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' },
